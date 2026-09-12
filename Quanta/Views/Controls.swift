@@ -1,0 +1,608 @@
+import AppKit
+import SwiftUI
+
+enum DS {
+    enum Space {
+        static let xxs: CGFloat = 2
+        static let xs: CGFloat = 4
+        static let s: CGFloat = 6
+        static let m: CGFloat = 8
+        static let l: CGFloat = 12
+        static let xl: CGFloat = 16
+        static let bar: CGFloat = 10
+    }
+
+    enum Radius {
+        static let small: CGFloat = 4
+        static let control: CGFloat = 5
+        static let card: CGFloat = 6
+        static let panel: CGFloat = 8
+    }
+
+    enum Bar {
+        static let primary: CGFloat = 32
+        static let secondary: CGFloat = 28
+        static let strip: CGFloat = 28
+    }
+
+    enum Motion {
+        static let quick = Animation.easeOut(duration: 0.15)
+        static let hover = Animation.easeOut(duration: 0.12)
+        static let activityDelay: TimeInterval = 0.4
+    }
+
+    enum Layout {
+        static let outputMaxWidth: CGFloat = 760
+        static let outputMaxHeight: CGFloat = 620
+        static let consoleMinHeight: CGFloat = 100
+        static let consoleDefaultHeight: CGFloat = 180
+        static let inspectorMin: CGFloat = 220
+        static let inspectorIdeal: CGFloat = 280
+        static let inspectorMax: CGFloat = 480
+        static let statusDot: CGFloat = 6
+        static let listRowMinHeight: CGFloat = 22
+        static let slot: CGFloat = 22
+        static let statusSlot: CGFloat = 14
+        static let kernelLabelWidth: CGFloat = 150
+        static let symbolGlyph: CGFloat = 10
+        static let tabDividerHeight: CGFloat = 16
+        static let cellGutterWidth: CGFloat = 42
+        static let hairline: CGFloat = 1
+        static let rowActionSlot: CGFloat = slot * 2
+        static let commitLines = 1...5
+        static let diffMarkerWidth: CGFloat = 16
+        static let diffLineInset: CGFloat = 1
+        static let diffContextLines = 3
+    }
+
+    enum Status {
+        case neutral, error, warning
+    }
+
+    enum Stream {
+        static let stderrRule = Color.orange
+    }
+
+    enum Git {
+        static let added = Color.green
+        static let modified = Color.orange
+        static let removed = Color.red
+        static let addedFill = Color.green.opacity(0.12)
+        static let removedFill = Color.red.opacity(0.12)
+
+        static func color(for status: GitChange.Status) -> Color {
+            switch status {
+            case .modified, .typeChanged: return modified
+            case .added, .untracked, .renamed, .copied: return added
+            case .deleted, .conflicted: return removed
+            }
+        }
+    }
+}
+
+struct FloatingToolbar<Content: View>: View {
+    var visible: Bool = true
+    @ViewBuilder var content: Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Group {
+            if #available(macOS 26.0, *) {
+                GlassEffectContainer(spacing: 0) {
+                    strip.glassEffect(visible ? .regular : .identity, in: .capsule)
+                }
+            } else {
+                strip
+                    .background(Capsule().fill(.regularMaterial))
+                    .overlay(Capsule().stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+            }
+        }
+        .background(ArrowCursorZone(active: visible))
+        .opacity(visible ? 1 : 0)
+        .allowsHitTesting(visible)
+        .animation(reduceMotion ? nil : DS.Motion.hover, value: visible)
+    }
+
+    private var strip: some View {
+        HStack(spacing: DS.Space.xxs) { content }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 3)
+            .frame(height: DS.Bar.strip)
+            .environment(\.iconButtonSize, .strip)
+    }
+}
+
+private struct MonoFontSizeKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 12
+}
+
+extension EnvironmentValues {
+    var monoFontSize: CGFloat {
+        get { self[MonoFontSizeKey.self] }
+        set { self[MonoFontSizeKey.self] = newValue }
+    }
+}
+
+private struct IconButtonSizeKey: EnvironmentKey {
+    static let defaultValue: IconButton.Size = .embedded
+}
+
+extension EnvironmentValues {
+    var iconButtonSize: IconButton.Size {
+        get { self[IconButtonSizeKey.self] }
+        set { self[IconButtonSizeKey.self] = newValue }
+    }
+}
+
+struct ToolbarDivider: View {
+    var body: some View {
+        Divider().frame(height: 12)
+    }
+}
+
+struct IconButton: View {
+    enum Size {
+        case embedded, strip
+
+        var glyph: CGFloat {
+            switch self {
+            case .embedded: return 11
+            case .strip: return 12
+            }
+        }
+
+        var extent: CGFloat { DS.Layout.slot }
+    }
+
+    let icon: String
+    let help: String
+    var isActive = false
+    var size: Size? = nil
+    var symbolWeight: Font.Weight = .regular
+    let action: () -> Void
+    @Environment(\.iconButtonSize) private var inheritedSize
+
+    init(_ icon: String, help: String, isActive: Bool = false, size: Size? = nil,
+         symbolWeight: Font.Weight = .regular, action: @escaping () -> Void) {
+        self.icon = icon
+        self.help = help
+        self.isActive = isActive
+        self.size = size
+        self.symbolWeight = symbolWeight
+        self.action = action
+    }
+
+    var body: some View {
+        let metrics = size ?? inheritedSize
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: metrics.glyph, weight: symbolWeight))
+                .frame(width: metrics.extent, height: metrics.extent)
+        }
+        .buttonStyle(IconButtonStyle(isActive: isActive, shape: Self.shape(for: metrics)))
+        .help(help)
+        .accessibilityLabel(Self.accessibilityName(help))
+    }
+
+    static func shape(for size: Size) -> AnyShape {
+        size == .strip ? AnyShape(Capsule())
+                       : AnyShape(RoundedRectangle(cornerRadius: DS.Radius.control))
+    }
+
+    static func accessibilityName(_ help: String) -> String {
+        guard let paren = help.firstIndex(of: "(") else { return help }
+        return help[..<paren].trimmingCharacters(in: .whitespaces)
+    }
+}
+
+struct IconButtonStyle: ButtonStyle {
+    var isActive = false
+    var shape: AnyShape = AnyShape(RoundedRectangle(cornerRadius: DS.Radius.control))
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isActive ? Color.accentColor : Color.primary)
+            .background {
+                ZStack {
+                    shape.fill(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.14))
+                                        : AnyShapeStyle(.clear))
+                    shape.fill(configuration.isPressed
+                               ? AnyShapeStyle(.tertiary)
+                               : hovering ? AnyShapeStyle(.quaternary)
+                               : AnyShapeStyle(.clear))
+                }
+            }
+            .contentShape(shape)
+            .scrollAwareHover($hovering)
+    }
+}
+
+struct IconMenu<Content: View>: View {
+    let icon: String
+    let help: String
+    @ViewBuilder var content: Content
+    @Environment(\.iconButtonSize) private var inheritedSize
+
+    init(_ icon: String, help: String, @ViewBuilder content: () -> Content) {
+        self.icon = icon
+        self.help = help
+        self.content = content()
+    }
+
+    var body: some View {
+        Menu {
+            content
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: inheritedSize.glyph))
+                .frame(width: inheritedSize.extent, height: inheritedSize.extent)
+        }
+        .menuStyle(.button)
+        .buttonStyle(IconButtonStyle(shape: IconButton.shape(for: inheritedSize)))
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(help)
+        .accessibilityLabel(IconButton.accessibilityName(help))
+    }
+}
+
+struct PanelBar<Content: View>: View {
+    enum Rule { case none, below, above }
+
+    var height: CGFloat = DS.Bar.secondary
+    var rule: Rule = .below
+    @ViewBuilder var content: Content
+
+    init(height: CGFloat = DS.Bar.secondary, rule: Rule = .below,
+         @ViewBuilder content: () -> Content) {
+        self.height = height
+        self.rule = rule
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if rule == .above { Divider() }
+            HStack(spacing: DS.Space.s) { content }
+                .padding(.horizontal, DS.Space.bar)
+                .frame(height: height)
+            if rule == .below { Divider() }
+        }
+    }
+}
+
+struct PanelHeader<Trailing: View>: View {
+    let title: String
+    let systemImage: String
+    var height: CGFloat = DS.Bar.secondary
+    @ViewBuilder var trailing: Trailing
+
+    init(_ title: String, systemImage: String, height: CGFloat = DS.Bar.secondary,
+         @ViewBuilder trailing: () -> Trailing) {
+        self.title = title
+        self.systemImage = systemImage
+        self.height = height
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        PanelBar(height: height) {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: DS.Space.s)
+            trailing
+        }
+    }
+}
+
+struct IconSegments<Value: Hashable>: View {
+    struct Segment: Identifiable {
+        let value: Value
+        let icon: String
+        let help: String
+        var id: Value { value }
+    }
+
+    let segments: [Segment]
+    @Binding var selection: Value
+
+    var body: some View {
+        HStack(spacing: DS.Space.xxs) {
+            ForEach(segments) { segment in
+                IconButton(segment.icon, help: segment.help,
+                           isActive: segment.value == selection) {
+                    selection = segment.value
+                }
+                .accessibilityAddTraits(segment.value == selection ? [.isSelected] : [])
+            }
+        }
+    }
+}
+
+struct ActivitySlot: View {
+    let active: Bool
+    @State private var visible = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            if visible {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Working")
+                    .transition(.opacity)
+            }
+        }
+            .frame(width: DS.Layout.slot, height: DS.Layout.slot)
+            .animation(reduceMotion ? nil : DS.Motion.quick, value: visible)
+            .task(id: active) {
+                guard active else {
+                    visible = false
+                    return
+                }
+                try? await Task.sleep(for: .seconds(DS.Motion.activityDelay))
+                guard !Task.isCancelled else { return }
+                visible = true
+            }
+    }
+}
+
+struct LabelMenu<Content: View, Label: View>: View {
+    let help: String
+    let accessibilityName: String?
+    @ViewBuilder var content: Content
+    @ViewBuilder var label: Label
+
+    init(help: String, accessibilityName: String? = nil,
+         @ViewBuilder content: () -> Content, @ViewBuilder label: () -> Label) {
+        self.help = help
+        self.accessibilityName = accessibilityName
+        self.content = content()
+        self.label = label()
+    }
+
+    var body: some View {
+        Menu {
+            content
+        } label: {
+            label
+                .padding(.horizontal, DS.Space.xs)
+                .frame(height: DS.Layout.slot)
+        }
+        .menuStyle(.button)
+        .buttonStyle(IconButtonStyle())
+        .menuIndicator(.hidden)
+        .fixedSize(horizontal: false, vertical: true)
+        .help(help)
+        .accessibilityLabel(accessibilityName ?? IconButton.accessibilityName(help))
+    }
+}
+
+struct Pill: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, DS.Space.xs)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(.quaternary))
+    }
+}
+
+struct HoverHighlight: ViewModifier {
+    var radius: CGFloat = DS.Radius.small
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: radius)
+                .fill(hovering ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)))
+            .scrollAwareHover($hovering)
+    }
+}
+
+extension View {
+    func hoverHighlight(radius: CGFloat = DS.Radius.small) -> some View {
+        modifier(HoverHighlight(radius: radius))
+    }
+
+    func outputCard(_ status: DS.Status = .neutral) -> some View {
+        modifier(OutputCard(status: status))
+    }
+
+    func inputCard(focused: Bool = false) -> some View {
+        modifier(InputCard(focused: focused))
+    }
+
+    func stderrRule(_ active: Bool) -> some View {
+        padding(.leading, active ? DS.Space.s : 0)
+            .overlay(alignment: .leading) {
+                if active {
+                    RoundedRectangle(cornerRadius: DS.Layout.hairline)
+                        .fill(DS.Stream.stderrRule)
+                        .frame(width: DS.Space.xxs)
+                }
+            }
+    }
+}
+
+struct InputCard: ViewModifier {
+    var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: DS.Radius.card)
+                .fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.card)
+                .stroke(focused ? Color.accentColor : Color(nsColor: .separatorColor),
+                        lineWidth: DS.Layout.hairline))
+            .animation(reduceMotion ? nil : DS.Motion.quick, value: focused)
+    }
+}
+
+struct SearchField: NSViewRepresentable {
+    @Binding var text: String
+    let prompt: String
+    var focusRequest: Int
+    @Binding var handledFocusRequest: Int
+    let onSubmit: () -> Void
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = prompt
+        field.controlSize = .regular
+        field.delegate = context.coordinator
+        field.target = context.coordinator
+        field.action = #selector(Coordinator.submit(_:))
+        field.sendsWholeSearchString = true
+        field.sendsSearchStringImmediately = false
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        context.coordinator.parent = self
+        if field.placeholderString != prompt { field.placeholderString = prompt }
+        if field.stringValue != text { field.stringValue = text }
+        guard handledFocusRequest != focusRequest else { return }
+        handledFocusRequest = focusRequest
+        DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var parent: SearchField
+
+        init(_ parent: SearchField) { self.parent = parent }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSSearchField else { return }
+            parent.text = field.stringValue
+        }
+
+        @objc func submit(_ sender: NSSearchField) {
+            parent.text = sender.stringValue
+            guard !sender.stringValue.isEmpty else { return }
+            parent.onSubmit()
+        }
+    }
+}
+
+struct OutputCard: ViewModifier {
+    var status: DS.Status
+
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: DS.Radius.card).fill(fill))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.card).stroke(stroke, lineWidth: 1))
+    }
+
+    private var fill: Color {
+        switch status {
+        case .neutral: return Color(nsColor: .textBackgroundColor)
+        case .error: return Color.red.opacity(0.10)
+        case .warning: return Color.yellow.opacity(0.10)
+        }
+    }
+
+    private var stroke: Color {
+        switch status {
+        case .neutral: return Color(nsColor: .separatorColor)
+        case .error: return Color.red.opacity(0.30)
+        case .warning: return Color.yellow.opacity(0.30)
+        }
+    }
+}
+
+struct ArrowCursorZone: NSViewRepresentable {
+    var active: Bool
+
+    func makeNSView(context: Context) -> CursorZoneView { CursorZoneView() }
+
+    func updateNSView(_ view: CursorZoneView, context: Context) {
+        view.isActive = active
+    }
+}
+
+final class CursorZoneView: NSView {
+    private static let all = NSHashTable<CursorZoneView>.weakObjects()
+    private var inside = false
+
+    var isActive = true {
+        didSet {
+            if !isActive, inside {
+                inside = false
+                restoreUnderlyingCursor()
+            }
+        }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        Self.all.add(self)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .mouseMoved, .cursorUpdate,
+                      .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil))
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard isActive else { return }
+        inside = true
+        NSCursor.arrow.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        if isActive { NSCursor.arrow.set() }
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if isActive { NSCursor.arrow.set() } else { super.cursorUpdate(with: event) }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        inside = false
+        restoreUnderlyingCursor()
+    }
+
+    private func restoreUnderlyingCursor() {
+        if let window, let content = window.contentView, let root = content.superview {
+            let point = root.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            var view = content.hitTest(point)
+            while let current = view {
+                if current is NSTextView { NSCursor.iBeam.set(); return }
+                view = current.superview
+            }
+        }
+        NSCursor.arrow.set()
+    }
+
+    static func contains(windowPoint: NSPoint, in window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        for zone in all.allObjects
+        where zone.isActive && zone.window === window && !zone.isHiddenOrHasHiddenAncestor {
+            if zone.convert(zone.bounds, to: nil).contains(windowPoint) { return true }
+        }
+        return false
+    }
+}

@@ -1,0 +1,10 @@
+.DS_Store
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+venv/
+.build/

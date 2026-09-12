@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT="$PROJECT_DIR/Quanta.xcodeproj"
+SCHEME="Quanta"
+APP_NAME="Quanta"
+CACHE_DIR="$PROJECT_DIR/.build"
+
+bold=$'\033[1m'; red=$'\033[31m'; green=$'\033[32m'; dim=$'\033[2m'; off=$'\033[0m'
+die() { printf '%s%s%s\n' "$red" "$*" "$off" >&2; exit 1; }
+info() { printf '%s%s%s\n' "$dim" "$*" "$off"; }
+
+products_dir() {
+  local config="$1"
+  local stamp cache
+  stamp="$(stat -f %m "$PROJECT/project.pbxproj")"
+  cache="$CACHE_DIR/products-$config-$stamp"
+  if [[ -s "$cache" ]]; then cat "$cache"; return; fi
+  mkdir -p "$CACHE_DIR"
+  rm -f "$CACHE_DIR/products-$config-"* 2>/dev/null || true
+  local dir
+  dir="$(xcodebuild -showBuildSettings -project "$PROJECT" -scheme "$SCHEME" \
+          -configuration "$config" 2>/dev/null \
+        | awk -F' = ' '/ BUILT_PRODUCTS_DIR = /{print $2; exit}')"
+  [[ -n "$dir" ]] || die "Could not resolve BUILT_PRODUCTS_DIR for $config."
+  printf '%s' "$dir" | tee "$cache"
+}
+
+app_path() { printf '%s/%s.app' "$(products_dir "$1")" "$APP_NAME"; }
+
+build() {
+  local config="$1"
+  printf '%s▸ building %s%s\n' "$bold" "$config" "$off"
+  local log="$CACHE_DIR/last-build.log"
+  mkdir -p "$CACHE_DIR"
+  set +e
+  xcodebuild build -project "$PROJECT" -scheme "$SCHEME" -configuration "$config" \
+    -destination 'platform=macOS' -quiet 2>&1 | tee "$log" | grep -E '(error|warning):'
+  local rc=${PIPESTATUS[0]}
+  set -e
+  if (( rc == 0 )); then
+    printf '%s✓ %s build ok%s\n' "$green" "$config" "$off"
+  elif grep -q "database is locked" "$log"; then
+    printf '%s✗ another build is already running%s (Xcode, or an agent) — retry when it finishes\n' \
+      "$red" "$off"
+    exit 1
+  else
+    printf '%s✗ %s build failed%s  %sfull log: %s%s\n' "$red" "$config" "$off" "$dim" "$log" "$off"
+    exit 1
+  fi
+}
+
+reap_orphan_kernels() {
+  pgrep -x "$APP_NAME" >/dev/null && return 0
+  pgrep -f "quanta_kernel.py" >/dev/null 2>&1 || return 0
+  info "reaping orphaned quanta_kernel.py"
+  pkill -f "quanta_kernel.py" || true
+}
+
+relaunch() {
+  local config="$1" app
+  app="$(app_path "$config")"
+  [[ -d "$app" ]] || die "No app at $app — did the build actually produce one?"
+  if pgrep -x "$APP_NAME" >/dev/null; then
+    info "quitting running $APP_NAME"
+    osascript -e "tell application \"$APP_NAME\" to quit" 2>/dev/null || pkill -x "$APP_NAME" || true
+    for _ in $(seq 1 40); do pgrep -x "$APP_NAME" >/dev/null || break; sleep 0.1; done
+    pgrep -x "$APP_NAME" >/dev/null && pkill -9 -x "$APP_NAME" || true
+  fi
+  reap_orphan_kernels
+  printf '%s▸ launching%s %s\n' "$bold" "$off" "$app"
+  open "$app"
+}
+
+usage() {
+  cat <<'USAGE'
+quanta — build, run and test Quanta without opening Xcode.
+
+  ./scripts/quanta              build Debug + relaunch
+  ./scripts/quanta build        build Debug only
+  ./scripts/quanta run          build Debug + relaunch (default)
+  ./scripts/quanta release      build Release + relaunch
+  ./scripts/quanta test         run the unit tests
+  ./scripts/quanta debug        build Debug + launch under lldb
+  ./scripts/quanta logs         tail the app's os_log output
+  ./scripts/quanta clean        wipe this project's DerivedData
+
+Add -r/--release to build, run, test or debug to use the Release configuration.
+Builds share Xcode's DerivedData, so incremental builds stay warm either way.
+USAGE
+}
+
+config="Debug"
+args=()
+for a in "$@"; do
+  case "$a" in
+    -r|--release) config="Release" ;;
+    -h|--help) usage; exit 0 ;;
+    *) args+=("$a") ;;
+  esac
+done
+cmd="${args[0]:-run}"
+
+case "$cmd" in
+  build)             build "$config" ;;
+  run)               build "$config"; relaunch "$config" ;;
+  release)           config="Release"; build "$config"; relaunch "$config" ;;
+  test)
+    printf '%s▸ testing (%s)%s\n' "$bold" "$config" "$off"
+    log="$CACHE_DIR/last-test.log"
+    mkdir -p "$CACHE_DIR"
+    set +e
+    xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -configuration "$config" \
+      -destination 'platform=macOS' -only-testing:QuantaTests 2>&1 \
+      | tee "$log" | grep -E "(failed|error:|XCTAssert|recorded an issue)"
+    rc=${PIPESTATUS[0]}
+    set -e
+    passed="$(grep -c "passed on" "$log" || true)"
+    if (( rc == 0 )); then
+      printf '%s✓ %s tests passed%s\n' "$green" "$passed" "$off"
+    else
+      printf '%s✗ tests failed%s  %sfull log: %s%s\n' "$red" "$off" "$dim" "$log" "$off"
+      exit 1
+    fi
+    ;;
+  debug)
+    build "$config"
+    app="$(app_path "$config")"
+    if pgrep -x "$APP_NAME" >/dev/null; then pkill -x "$APP_NAME" || true; sleep 0.4; fi
+    reap_orphan_kernels
+    info "lldb: 'run' to start, 'bt' after a crash, Ctrl-D to quit"
+    exec lldb "$app/Contents/MacOS/$APP_NAME"
+    ;;
+  logs)
+    info "streaming os_log for $APP_NAME (Ctrl-C to stop)"
+    exec /usr/bin/log stream --style compact --level debug \
+      --predicate "process == \"$APP_NAME\""
+    ;;
+  clean)
+    dir="$(dirname "$(dirname "$(products_dir Debug)")")"
+    printf '%s▸ removing%s %s\n' "$bold" "$off" "$dir"
+    rm -rf "$dir" "$CACHE_DIR"
+    ;;
+  *) usage; exit 1 ;;
+esac

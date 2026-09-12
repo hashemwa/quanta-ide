@@ -1,0 +1,2205 @@
+import AppKit
+import Combine
+import SwiftUI
+import UniformTypeIdentifiers
+
+final class AppState: ObservableObject {
+    static let shared = AppState()
+
+    @Published var workspace: Workspace?
+    @Published var openDocuments: [Document] = []
+    @Published var activeDocumentID: UUID? {
+        didSet {
+            guard activeDocumentID != oldValue else { return }
+            rebindCellSelection(from: oldValue)
+            persistSession()
+        }
+    }
+    @Published var variables: [VariableInfo] = []
+    let console = ConsoleModel()
+    @Published var kernelStatus: KernelStatus = .stopped
+    let selection = CellSelection()
+    var selectedCellID: UUID? {
+        get { selection.selectedCellID }
+        set { if selection.selectedCellID != newValue { selection.selectedCellID = newValue } }
+    }
+    var isCommandMode: Bool {
+        get { selection.isCommandMode }
+        set { if selection.isCommandMode != newValue { selection.isCommandMode = newValue } }
+    }
+    @Published var showVariables = QuantaDefaults.store.object(forKey: "QuantaShowVariables") as? Bool ?? true {
+        didSet { QuantaDefaults.store.set(showVariables, forKey: "QuantaShowVariables") }
+    }
+    @Published var showConsole = QuantaDefaults.store.object(forKey: "QuantaShowConsole") as? Bool ?? false {
+        didSet {
+            QuantaDefaults.store.set(showConsole, forKey: "QuantaShowConsole")
+            if showConsole { consoleRevealPending = false }
+        }
+    }
+    @Published var consoleHeight: CGFloat =
+        QuantaDefaults.store.object(forKey: "QuantaConsoleHeight") as? CGFloat ?? DS.Layout.consoleDefaultHeight {
+        didSet { QuantaDefaults.store.set(consoleHeight, forKey: "QuantaConsoleHeight") }
+    }
+    private lazy var consoleUserHidden = !showConsole
+    @Published var consoleRevealPending = false
+    @Published var pythonPath: String?
+    @Published var kernelBanner = "No kernel"
+    @Published var environments: [PythonEnvironment] = []
+    @Published var environmentVersions: [String: String] = [:]
+    let latex = LatexState()
+    let git = SourceControlState()
+    @Published var sidebarPane: SidebarPane =
+        SidebarPane(rawValue: QuantaDefaults.store.string(forKey: "QuantaSidebarPane") ?? "") ?? .files {
+        didSet { QuantaDefaults.store.set(sidebarPane.rawValue, forKey: "QuantaSidebarPane") }
+    }
+    @Published var sidebarRevealRequest = 0
+    @Published var fileSearchFocusRequest = 0
+    @Published private(set) var cellRevision = 0
+    var handledFileSearchFocusRequest = 0
+
+    let kernel = KernelSession()
+    private var bootstrapped = false
+    private var versionProbesInFlight = Set<String>()
+    private var latexCache: [String: LatexResult] = [:]
+    private var latexPending: [String: [(LatexResult) -> Void]] = [:]
+
+    var activeDocument: Document? {
+        openDocuments.first { $0.id == activeDocumentID }
+    }
+
+    init() {
+        kernel.onStatusChange = { [weak self] status in
+            self?.kernelStatusChanged(status)
+        }
+        kernel.onOrphanMessage = { [weak self] message in
+            self?.handleOrphan(message)
+        }
+        configureSourceControl()
+    }
+
+    func bootstrap() {
+        guard !bootstrapped, !QuantaDefaults.isRunningTests else { return }
+        bootstrapped = true
+        loadRecents()
+        EditorTheme.fontSize = editorFontSize
+        if let path = QuantaDefaults.store.string(forKey: "QuantaLastWorkspace") {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+                openWorkspace(URL(fileURLWithPath: path))
+            }
+        }
+        restoreSession()
+        restoreUntitledDrafts()
+        startAutosave()
+        startKernelIfNeeded()
+        let condaCount = environments.filter { $0.kind == .conda }.count
+        appendConsole(.system, "Discovered \(environments.count) Python environments"
+            + (condaCount > 0 ? " (\(condaCount) conda)" : ""))
+    }
+
+    func refreshEnvironments() {
+        environments = PythonLocator.discover(workspace: workspace?.rootURL)
+        probeVersions()
+    }
+
+    private func probeVersions() {
+        for env in environments
+        where environmentVersions[env.executable] == nil
+            && !versionProbesInFlight.contains(env.executable) {
+            versionProbesInFlight.insert(env.executable)
+            let executable = env.executable
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let version = PythonLocator.probeVersion(executable)
+                DispatchQueue.main.async {
+                    self?.versionProbesInFlight.remove(executable)
+                    self?.environmentVersions[executable] = version ?? ""
+                }
+            }
+        }
+    }
+
+    private func kernelScriptURL() -> URL? {
+        Bundle.main.url(forResource: "quanta_kernel", withExtension: "py")
+            ?? Bundle.main.url(forResource: "quanta_kernel", withExtension: "py",
+                               subdirectory: "Resources")
+    }
+
+    func startKernelIfNeeded() {
+        guard !kernel.isRunning else { return }
+        startKernel()
+    }
+
+    func startKernel() {
+        guard let script = kernelScriptURL() else {
+            appendConsole(.system, "Internal error: quanta_kernel.py missing from the app bundle.")
+            return
+        }
+        refreshEnvironments()
+        let chosen = pythonPath ?? PythonLocator.preferred(from: environments)?.executable
+        guard let python = chosen else {
+            kernelBanner = "No Python found"
+            appendConsole(.system, "No Python 3 interpreter found. Install one (python.org, Homebrew, or conda) and pick it from the kernel menu.")
+            return
+        }
+        pythonPath = python
+        appendConsole(.system, "Starting kernel: \(python)")
+        kernel.start(python: python, scriptURL: script,
+                     workingDirectory: workspace?.rootURL ?? FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    func setConsoleVisible(_ visible: Bool, animated: Bool = true) {
+        guard visible != showConsole else { return }
+        consoleUserHidden = !visible
+        if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            withAnimation(DS.Motion.quick) { showConsole = visible }
+        } else {
+            showConsole = visible
+        }
+    }
+
+    func toggleConsole() { setConsoleVisible(!showConsole) }
+
+    func focusConsoleInput() {
+        setConsoleVisible(true)
+        console.focusRequest += 1
+    }
+
+    func setVariablesVisible(_ visible: Bool) {
+        guard visible != showVariables else { return }
+        showVariables = visible
+    }
+
+    func toggleVariables() { setVariablesVisible(!showVariables) }
+
+    func revealConsole(force: Bool = false) {
+        if showConsole { return }
+        if force || !consoleUserHidden {
+            consoleUserHidden = false
+            setConsoleVisible(true)
+        } else {
+            consoleRevealPending = true
+        }
+    }
+
+    func restartKernel(confirm: Bool = true) {
+        if confirm, !variables.isEmpty,
+           !QuantaDefaults.store.bool(forKey: "QuantaSuppressRestartConfirm") {
+            let alert = NSAlert()
+            alert.messageText = "Restart the Python kernel?"
+            alert.informativeText = "All \(variables.count) variable\(variables.count == 1 ? "" : "s") in memory will be lost."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Restart")
+            alert.addButton(withTitle: "Cancel")
+            alert.showsSuppressionButton = true
+            alert.suppressionButton?.title = "Don't ask again"
+            let proceed = { [weak self] (response: NSApplication.ModalResponse) in
+                guard let self, response == .alertFirstButtonReturn else { return }
+                if alert.suppressionButton?.state == .on {
+                    QuantaDefaults.store.set(true, forKey: "QuantaSuppressRestartConfirm")
+                }
+                self.performKernelRestart()
+            }
+            if let window = NSApp.keyWindow {
+                alert.beginSheetModal(for: window, completionHandler: proceed)
+            } else {
+                proceed(alert.runModal())
+            }
+            return
+        }
+        performKernelRestart()
+    }
+
+    private func performKernelRestart() {
+        kernel.stop()
+        variables = []
+        clearRunningFlags()
+        appendConsole(.system, "Restarting kernel…")
+        startKernel()
+    }
+
+    func selectTab(offset: Int) {
+        guard !openDocuments.isEmpty else { return }
+        let current = openDocuments.firstIndex { $0.id == activeDocumentID } ?? 0
+        let count = openDocuments.count
+        let next = ((current + offset) % count + count) % count
+        activeDocumentID = openDocuments[next].id
+    }
+
+    func closeOtherDocuments(except document: Document) {
+        for other in openDocuments where other.id != document.id {
+            guard closeDocument(other, persist: false) else { break }
+        }
+        persistSession()
+    }
+
+    func interruptKernel() {
+        if let id = runningChainDocumentID,
+           let document = openDocuments.first(where: { $0.id == id }) {
+            endRunChain(in: document)
+        }
+        kernel.interrupt()
+    }
+
+    func selectPython(_ path: String) {
+        QuantaDefaults.store.set(path, forKey: PythonLocator.defaultsKey)
+        pythonPath = path
+        cancelPendingRunAll()
+        restartKernel(confirm: false)
+    }
+
+    func choosePythonManually() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.showsHiddenFiles = true
+        panel.message = "Select a Python 3 interpreter"
+        if panel.runModal() == .OK, let url = panel.url {
+            selectPython(url.path)
+        }
+    }
+
+    func pushAppearance() {
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        kernel.notify(["op": "config", "appearance": dark ? "dark" : "light"])
+    }
+
+    private func clearRunningFlags() {
+        runningChainDocumentID = nil
+        for document in openDocuments {
+            document.notebook?.cells.forEach {
+                $0.isRunning = false
+                $0.isQueued = false
+            }
+        }
+    }
+
+    private func kernelStatusChanged(_ status: KernelStatus) {
+        kernelStatus = status
+        if status == .dead {
+            clearRunningFlags()
+            cancelPendingRunAll()
+            variables = []
+            revealConsole()
+        }
+        if status == .idle { kernelBecameIdle() }
+        updateBanner()
+    }
+
+    private func updateBanner() {
+        if let info = kernel.readyInfo, let version = info["python_version"] as? String {
+            kernelBanner = "Python \(version) · \(kernelStatus.label)"
+        } else {
+            kernelBanner = kernelStatus.label
+        }
+    }
+
+    var environmentName: String {
+        guard let path = pythonPath else { return "No interpreter" }
+        if let env = environments.first(where: { $0.executable == path }) { return env.name }
+        let url = URL(fileURLWithPath: path)
+        let generic: Set<String> = ["", "/", "usr", "local", "opt", "bin", "Cellar",
+                                    "homebrew", "Library", "System", "Frameworks"]
+        if url.deletingLastPathComponent().lastPathComponent == "bin" {
+            let name = url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
+            if !generic.contains(name) { return name }
+        }
+        return url.lastPathComponent
+    }
+
+    var kernelPythonVersion: String? {
+        kernel.readyInfo?["python_version"] as? String
+    }
+
+    private func handleOrphan(_ message: [String: Any]) {
+        switch message["type"] as? String {
+        case "ready":
+            updateBanner()
+            latexCache = latexCache.filter {
+                if case .image = $0.value { return true }
+                return false
+            }
+            var features: [String] = []
+            if let f = message["features"] as? [String: Bool] {
+                features = f.filter { $0.value }.map { $0.key }.sorted()
+            }
+            if let version = message["python_version"] as? String {
+                let suffix = features.isEmpty ? "" : " (\(features.joined(separator: ", ")))"
+                appendConsole(.system, "Kernel ready — Python \(version)\(suffix)")
+            }
+            latex.generation += 1
+            pushAppearance()
+            refreshVariables()
+            if let jsPath = message["plotly_js"] as? String {
+                PlotlyWebView.preloadScript(at: jsPath)
+            }
+        case "stream":
+            if let text = message["text"] as? String {
+                let name = message["name"] as? String ?? "stdout"
+                appendConsole(name == "stderr" ? .stderr : .stdout, text)
+            }
+        case "fatal":
+            if let error = message["error"] as? String {
+                appendConsole(.stderr, error)
+            }
+        default:
+            break
+        }
+    }
+
+    func appendConsole(_ kind: ConsoleLine.Kind, _ text: String) {
+        console.append(kind, text)
+        if kind == .system, !showConsole { consoleRevealPending = true }
+    }
+
+    func openFolderPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Open"
+        if panel.runModal() == .OK, let url = panel.url {
+            openWorkspace(url)
+        }
+    }
+
+    private var workspaceWatcher: WorkspaceWatcher?
+
+    func openWorkspace(_ url: URL) {
+        for document in openDocuments where document.kind == .diff {
+            closeDocument(document, persist: false)
+        }
+        workspace = Workspace(rootURL: url, root: FileNode(url: url, name: url.lastPathComponent,
+                                                             isDirectory: true, children: []))
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let loaded = Workspace.load(url: url)
+            DispatchQueue.main.async {
+                guard let self, self.workspace?.rootURL == url else { return }
+                self.workspace = loaded
+            }
+        }
+        git.setWorkspace(url)
+        QuantaDefaults.store.set(url.path, forKey: "QuantaLastWorkspace")
+        recordRecent(url.path, isWorkspace: true)
+        workspaceWatcher = WorkspaceWatcher(url: url) { [weak self] in
+            self?.refreshWorkspace()
+        }
+        refreshEnvironments()
+        if let wsEnv = environments.first(where: { $0.kind == .workspace }),
+           pythonPath != wsEnv.executable {
+            appendConsole(.system, "Workspace environment detected (\(wsEnv.name)) — switching kernel.")
+            pythonPath = wsEnv.executable
+            restartKernel(confirm: false)
+        } else if !kernel.isRunning {
+            startKernel()
+        }
+    }
+
+    private var workspaceRefreshScheduled = false
+
+    var hasSelectedCell: Bool {
+        selectionContext != nil
+    }
+
+    var selectedCellHasPlot: Bool {
+        guard let ctx = selectionContext else { return false }
+        return ctx.cell.outputs.contains { output in
+            switch output.kind {
+            case .image, .plotlyFigure: return true
+            default: return false
+            }
+        }
+    }
+
+    var canMergeSelectedCellWithBelow: Bool {
+        guard let document = activeDocument, let notebook = document.notebook,
+              let index = notebook.cells.firstIndex(where: { $0.id == selectedCellID })
+        else { return false }
+        return index + 1 < notebook.cells.count
+    }
+
+    var canUndoCellDeletion: Bool {
+        !(activeDocument?.deletedCells.isEmpty ?? true)
+    }
+
+    var activeDocumentIsRunnable: Bool {
+        switch activeDocument?.kind {
+        case .script, .notebook: return true
+        default: return false
+        }
+    }
+
+    var activeDocumentIsEditable: Bool {
+        switch activeDocument?.kind {
+        case .script, .notebook: return true
+        default: return false
+        }
+    }
+
+    var focusedEditor: QuantaTextView? {
+        NSApp.keyWindow?.firstResponder as? QuantaTextView
+    }
+
+    func toggleCommentInFocusedEditor() {
+        focusedEditor?.toggleComment()
+    }
+
+    func deleteVariable(named name: String) {
+        confirmDestructive(
+            title: "Delete “\(name)”?",
+            message: "\(name) is removed from the kernel namespace. "
+                + "You will have to re-run the code that created it.",
+            button: "Delete") { [weak self] in
+            self?.runConsoleInput("del \(name)")
+            self?.refreshVariables()
+        }
+    }
+
+    func focusFileSearch() {
+        showSidebarPane(.files)
+        fileSearchFocusRequest += 1
+    }
+
+    func refreshWorkspace() {
+        guard let url = workspace?.rootURL, !workspaceRefreshScheduled else { return }
+        workspaceRefreshScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            self.workspaceRefreshScheduled = false
+            guard self.workspace?.rootURL == url else { return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let loaded = Workspace.load(url: url)
+                DispatchQueue.main.async {
+                    guard self.workspace?.rootURL == url else { return }
+                    self.workspace = loaded
+                    self.git.refresh()
+                    self.reloadExternallyChangedDocuments()
+                }
+            }
+        }
+    }
+
+    func openFilePanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            openFile(url)
+        }
+    }
+
+    func openFile(_ url: URL, recordSession: Bool = true) {
+        if let existing = openDocuments.first(where: { $0.url == url }) {
+            activeDocumentID = existing.id
+            return
+        }
+        do {
+            let source = restorableDraft(for: url) ?? url
+            if url.pathExtension.lowercased() == "ipynb" {
+                let data = try Data(contentsOf: source)
+                let notebook = try Notebook.load(from: data)
+                let document = Document(notebook: notebook, url: url)
+                document.fileModificationDate = fileModificationDate(of: url)
+                if source != url { document.isDirty = true }
+                openDocuments.append(document)
+                activeDocumentID = document.id
+                selectedCellID = notebook.cells.first?.id
+            } else {
+                let text = try String(contentsOf: source, encoding: .utf8)
+                let document = Document(script: url, text: text)
+                document.fileModificationDate = fileModificationDate(of: url)
+                if source != url { document.isDirty = true }
+                openDocuments.append(document)
+                activeDocumentID = document.id
+            }
+            if recordSession {
+                recordRecent(url.path, isWorkspace: false)
+                persistSession()
+            }
+            startKernelIfNeeded()
+        } catch {
+            appendConsole(.system, "Could not open \(url.lastPathComponent): \(error.localizedDescription)")
+            revealConsole()
+        }
+    }
+
+    private func restorableDraft(for url: URL) -> URL? {
+        let draft = draftURL(forPath: url)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: draft.path),
+              let draftDate = (try? fm.attributesOfItem(atPath: draft.path))?[.modificationDate] as? Date,
+              let fileDate = (try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date,
+              draftDate > fileDate else { return nil }
+        let alert = NSAlert()
+        alert.messageText = "Restore unsaved changes to \(url.lastPathComponent)?"
+        alert.informativeText = "Quanta kept a draft with edits newer than the file on disk."
+        alert.addButton(withTitle: "Restore Draft")
+        alert.addButton(withTitle: "Open Saved File")
+        if alert.runModal() == .alertFirstButtonReturn {
+            return draft
+        }
+        try? fm.removeItem(at: draft)
+        return nil
+    }
+
+    func newNotebook() {
+        let notebook = Notebook.empty()
+        let document = Document(notebook: notebook, url: nil)
+        document.isDirty = true
+        openDocuments.append(document)
+        activeDocumentID = document.id
+        selectedCellID = notebook.cells.first?.id
+        startKernelIfNeeded()
+        if let first = notebook.cells.first { focusCellEditor(first.id) }
+    }
+
+    func newScript() {
+        let document = Document(script: nil, text: "")
+        document.isDirty = true
+        openDocuments.append(document)
+        activeDocumentID = document.id
+        focusEditor(document.id)
+    }
+
+    @discardableResult
+    func closeDocument(_ document: Document, persist: Bool = true) -> Bool {
+        if document.isDirty, document.isFileBacked {
+            switch promptToSave(document) {
+            case .save:
+                guard save(document) else { return false }
+            case .discard:
+                break
+            case .cancel:
+                return false
+            }
+        }
+        endRunChain(in: document)
+        clearDraft(for: document)
+        let position = openDocuments.firstIndex { $0.id == document.id } ?? openDocuments.count
+        openDocuments.removeAll { $0.id == document.id }
+        if activeDocumentID == document.id {
+            activeDocumentID = openDocuments.isEmpty
+                ? nil
+                : openDocuments[min(position, openDocuments.count - 1)].id
+        }
+        if persist { persistSession() }
+        return true
+    }
+
+    @MainActor
+    func closeActiveTabOrWindow() {
+        if let window = NSApp.keyWindow, PlotWindow.owns(window) {
+            window.performClose(nil)
+            return
+        }
+        if let document = activeDocument { closeDocument(document) }
+    }
+
+    func saveActiveDocument() {
+        if let document = activeDocument {
+            _ = save(document)
+        }
+    }
+
+    @discardableResult
+    func save(_ document: Document, interactive: Bool = true) -> Bool {
+        guard document.isFileBacked else { return true }
+        var url = document.url
+        if url == nil {
+            let panel = NSSavePanel()
+            panel.directoryURL = workspace?.rootURL
+            panel.nameFieldStringValue = document.displayName
+            let ext = document.kind == .notebook ? "ipynb" : "py"
+            if let type = UTType(filenameExtension: ext) {
+                panel.allowedContentTypes = [type]
+            }
+            guard panel.runModal() == .OK, let chosen = panel.url else { return false }
+            url = chosen
+        }
+        guard let target = url else { return false }
+        if document.url != nil, let known = document.fileModificationDate,
+           let current = fileModificationDate(of: target), current > known {
+            guard interactive, confirmOverwritingChangedFile(document) else { return false }
+        }
+        do {
+            switch document.kind {
+            case .script:
+                try document.text.write(to: target, atomically: true, encoding: .utf8)
+            case .notebook:
+                guard let notebook = document.notebook else { return false }
+                try notebook.serializedData().write(to: target, options: .atomic)
+            case .dataFrame, .diff:
+                break
+            }
+            clearDraft(for: document)
+            document.url = target
+            document.isDirty = false
+            document.fileModificationDate = fileModificationDate(of: target)
+            clearDraft(for: document)
+            persistSession()
+            refreshWorkspace()
+            return true
+        } catch {
+            appendConsole(.system, "Save failed: \(error.localizedDescription)")
+            revealConsole()
+            return false
+        }
+    }
+
+    private func confirmOverwritingChangedFile(_ document: Document) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "\(document.displayName) has changed on disk."
+        alert.informativeText = "Saving will overwrite the version now on disk, for example after a branch switch or pull."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Overwrite").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    var runCommandTitle: String {
+        switch activeDocument?.kind {
+        case .notebook: return "Run All Cells"
+        case .dataFrame: return "Reload Table"
+        case .diff: return "Reload Changes"
+        default: return "Run File"
+        }
+    }
+
+    var runCommandIcon: String {
+        switch activeDocument?.kind {
+        case .dataFrame, .diff: return "arrow.clockwise"
+        default: return "play.fill"
+        }
+    }
+
+    var runCommandHelp: String {
+        switch activeDocument?.kind {
+        case .notebook: return "Run all cells (⌘R)"
+        case .dataFrame: return "Reload table (⌘R)"
+        case .diff: return "Reload changes (⌘R)"
+        default: return "Run file (⌘R)"
+        }
+    }
+
+    func runActiveDocument() {
+        if let document = activeDocument {
+            runDocument(document)
+        }
+    }
+
+    func runDocument(_ document: Document) {
+        switch document.kind {
+        case .script:
+            runScript(document)
+        case .notebook:
+            runAllCells(in: document)
+        case .dataFrame:
+            reloadDataFrame(document)
+        case .diff:
+            reloadDiff(document)
+        }
+    }
+
+    func runScript(_ document: Document) {
+        startKernelIfNeeded()
+        guard kernel.isRunning else {
+            revealConsole(force: true)
+            appendConsole(.system, "Kernel is not running — cannot execute.")
+            return
+        }
+        if document.url != nil && document.isDirty {
+            _ = save(document)
+        }
+        revealConsole(force: true)
+        appendConsole(.input, "run \(document.displayName)")
+        kernel.execute(code: document.text, filename: document.url?.path) { [weak self] message in
+            guard let self else { return true }
+            return self.handleConsoleExecution(message)
+        }
+    }
+
+    func runConsoleInput(_ code: String) {
+        startKernelIfNeeded()
+        guard kernel.isRunning else {
+            appendConsole(.system, "Kernel is not running — cannot execute.")
+            return
+        }
+        appendConsole(.input, code)
+        kernel.execute(code: code) { [weak self] message in
+            guard let self else { return true }
+            return self.handleConsoleExecution(message)
+        }
+    }
+
+    private func handleConsoleExecution(_ message: [String: Any]) -> Bool {
+        switch message["type"] as? String {
+        case "stream":
+            let name = message["name"] as? String ?? "stdout"
+            appendConsole(name == "stderr" ? .stderr : .stdout, message["text"] as? String ?? "")
+        case "result":
+            appendConsole(.result, message["text"] as? String ?? "")
+        case "dataframe":
+            if let dict = message["payload"] as? [String: Any],
+               let payload = DataFramePayload(dict: dict) {
+                appendConsole(.result, payload.text)
+            }
+        case "ndarray", "jsontree", "objectcard":
+            let text = (message["text"] as? String)
+                ?? ((message["payload"] as? [String: Any])?["text"] as? String)
+                ?? ""
+            appendConsole(.result, text)
+        case "plotlyhtml":
+            break
+        case "display":
+            if let b64 = message["data"] as? String,
+               let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) {
+                let dir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("QuantaPlots", isDirectory: true)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let file = dir.appendingPathComponent("plot-\(UUID().uuidString.prefix(8)).png")
+                if (try? data.write(to: file)) != nil {
+                    NSWorkspace.shared.open(file)
+                }
+            }
+        case "error":
+            let ename = message["ename"] as? String ?? "Error"
+            let evalue = message["evalue"] as? String ?? ""
+            let traceback = message["traceback"] as? String ?? ""
+            appendConsole(.stderr, traceback.isEmpty ? "\(ename): \(evalue)\n" : traceback)
+        case "done":
+            let ok = (message["status"] as? String) == "ok"
+            appendConsole(.system, ok ? "✓ done" : "✗ finished with errors")
+            refreshVariables()
+            return true
+        case "dead":
+            appendConsole(.system, "Kernel died during execution.")
+            return true
+        default:
+            break
+        }
+        return false
+    }
+
+    func runCell(_ cell: NotebookCell, in document: Document, advance: Bool,
+                 completion: ((Bool) -> Void)? = nil) {
+        guard cell.cellType == .code else {
+            cell.isEditingMarkdown = false
+            if advance { advanceSelection(after: cell, in: document) }
+            completion?(true)
+            return
+        }
+        startKernelIfNeeded()
+        guard kernel.isRunning else {
+            appendConsole(.system, "Kernel is not running — cannot execute.")
+            revealConsole()
+            completion?(false)
+            return
+        }
+        guard !cell.isRunning else {
+            completion?(false)
+            return
+        }
+        if document.id == activeDocumentID { selectedCellID = cell.id }
+        cell.outputs = []
+        cell.isRunning = true
+        cell.isQueued = false
+        cell.runStartedAt = Date()
+        document.isDirty = true
+        kernel.execute(code: cell.source) { [weak self, weak cell, weak document] message in
+            guard let self else { return true }
+            guard let cell else {
+                let type = message["type"] as? String
+                return type == "done" || type == "dead"
+            }
+            return self.handleCellExecution(message, cell: cell, document: document,
+                                            advance: advance, completion: completion)
+        }
+    }
+
+    private func handleCellExecution(_ message: [String: Any], cell: NotebookCell,
+                                     document: Document?, advance: Bool,
+                                     completion: ((Bool) -> Void)?) -> Bool {
+        switch message["type"] as? String {
+        case "stream":
+            let name = message["name"] as? String ?? "stdout"
+            let text = message["text"] as? String ?? ""
+            bufferStream(name: name, text: text, into: cell)
+        case "result":
+            flushStreams(into: cell)
+            cell.outputs.append(CellOutput(kind: .executeResult(text: message["text"] as? String ?? "")))
+        case "display":
+            flushStreams(into: cell)
+            if message["mime"] as? String == "image/png",
+               let b64 = message["data"] as? String,
+               let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) {
+                cell.outputs.append(CellOutput(kind: .image(data: data, image: NSImage(data: data))))
+            }
+        case "plotlyhtml":
+            flushStreams(into: cell)
+            if let html = message["html"] as? String,
+               let jsPath = message["js_path"] as? String {
+                let height = (message["height"] as? NSNumber)?.doubleValue ?? 450
+                let hasPNG = (message["has_png"] as? Bool) ?? true
+                if hasPNG, let last = cell.outputs.last,
+                   case .image(let data, let image) = last.kind {
+                    cell.outputs[cell.outputs.count - 1].kind = .plotlyFigure(
+                        html: html, jsPath: jsPath, data: data, image: image, height: height)
+                } else {
+                    cell.outputs.append(CellOutput(kind: .plotlyFigure(
+                        html: html, jsPath: jsPath, data: Data(), image: nil, height: height)))
+                }
+            }
+        case "dataframe":
+            flushStreams(into: cell)
+            if let dict = message["payload"] as? [String: Any],
+               let payload = DataFramePayload(dict: dict) {
+                cell.outputs.append(CellOutput(kind: .dataFrame(payload)))
+            }
+        case "ndarray":
+            flushStreams(into: cell)
+            if let dict = message["payload"] as? [String: Any],
+               let payload = NDArrayPayload(dict: dict) {
+                cell.outputs.append(CellOutput(kind: .ndarray(payload)))
+            }
+        case "jsontree":
+            flushStreams(into: cell)
+            if let data = message["data"] {
+                cell.outputs.append(CellOutput(kind: .jsonTree(JSONTreePayload(
+                    value: data,
+                    summary: message["summary"] as? String ?? "",
+                    text: message["text"] as? String ?? ""))))
+            }
+        case "objectcard":
+            flushStreams(into: cell)
+            if let payload = ObjectCardPayload(dict: message) {
+                cell.outputs.append(CellOutput(kind: .objectCard(payload)))
+            }
+        case "error":
+            let frames = (message["frames"] as? [[String: Any]] ?? [])
+                .compactMap(TraceFrame.init)
+            flushStreams(into: cell)
+            cell.outputs.append(CellOutput(kind: .error(
+                ename: message["ename"] as? String ?? "Error",
+                evalue: message["evalue"] as? String ?? "",
+                traceback: (message["traceback"] as? String ?? "").strippingANSI,
+                frames: frames)))
+        case "done":
+            flushStreams(into: cell)
+            cell.isRunning = false
+            document?.isDirty = true
+            if let started = cell.runStartedAt {
+                cell.lastDuration = -started.timeIntervalSinceNow
+            }
+            cell.executionCount = message["execution_count"] as? Int
+            refreshVariables()
+            if advance, let document { advanceSelection(after: cell, in: document) }
+            completion?((message["status"] as? String) == "ok")
+            return true
+        case "dead":
+            flushStreams(into: cell)
+            cell.isRunning = false
+            cell.outputs.append(CellOutput(kind: .error(
+                ename: "KernelError", evalue: "Kernel died during execution",
+                traceback: "", frames: [])))
+            completion?(false)
+            return true
+        default:
+            break
+        }
+        return false
+    }
+
+    private var pendingStreams: [UUID: (name: String, text: String)] = [:]
+    private var streamFlushScheduled: Set<UUID> = []
+
+    private func bufferStream(name: String, text: String, into cell: NotebookCell) {
+        if let pending = pendingStreams[cell.id], pending.name != name {
+            flushStreams(into: cell)
+        }
+        var pending = pendingStreams[cell.id] ?? (name: name, text: "")
+        pending.text += text
+        pendingStreams[cell.id] = pending
+        guard !streamFlushScheduled.contains(cell.id) else { return }
+        streamFlushScheduled.insert(cell.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.033) { [weak self, weak cell] in
+            guard let self, let cell else { return }
+            self.streamFlushScheduled.remove(cell.id)
+            self.flushStreams(into: cell)
+        }
+    }
+
+    private func flushStreams(into cell: NotebookCell) {
+        guard let pending = pendingStreams.removeValue(forKey: cell.id) else { return }
+        if case .stream(let lastName, let lastText)? = cell.outputs.last?.kind, lastName == pending.name {
+            cell.outputs[cell.outputs.count - 1].kind =
+                .stream(name: pending.name, text: lastText.appendingTerminalOutput(pending.text))
+        } else {
+            cell.outputs.append(CellOutput(kind: .stream(
+                name: pending.name, text: "".appendingTerminalOutput(pending.text))))
+        }
+    }
+
+    func handleCellCommand(_ command: EditorCommand, cell: NotebookCell, document: Document) {
+        switch command {
+        case .runCell:
+            runCell(cell, in: document, advance: false)
+        case .runCellAndAdvance:
+            runCell(cell, in: document, advance: true)
+        }
+    }
+
+    func runSelectedCell(advance: Bool = false) {
+        guard let document = activeDocument else { return }
+        if document.kind == .script {
+            runScript(document)
+            return
+        }
+        guard let notebook = document.notebook,
+              let cell = notebook.cells.first(where: { $0.id == selectedCellID }) else { return }
+        runCell(cell, in: document, advance: advance)
+    }
+
+    func runAllCells(in document: Document) {
+        guard let notebook = document.notebook,
+              !notebook.cells.contains(where: { $0.isRunning }) else { return }
+        notebook.cells.forEach { $0.isQueued = $0.cellType == .code }
+        runningChainDocumentID = document.id
+        runChain(after: nil, in: document)
+    }
+
+    func setSourceCollapsed(_ collapsed: Bool, for cell: NotebookCell, in document: Document) {
+        guard cell.isSourceCollapsed != collapsed else { return }
+        cell.isSourceCollapsed = collapsed
+        document.isDirty = true
+    }
+
+    func setOutputCollapsed(_ collapsed: Bool, for cell: NotebookCell, in document: Document) {
+        guard cell.isOutputCollapsed != collapsed else { return }
+        cell.isOutputCollapsed = collapsed
+        document.isDirty = true
+    }
+
+    private func endRunChain(in document: Document) {
+        if runningChainDocumentID == document.id { runningChainDocumentID = nil }
+        document.notebook?.cells.forEach { $0.isQueued = false }
+    }
+
+    private func runChain(after cellID: UUID?, in document: Document) {
+        guard runningChainDocumentID == document.id,
+              openDocuments.contains(where: { $0.id == document.id }),
+              let notebook = document.notebook else {
+            endRunChain(in: document)
+            return
+        }
+        let cells = notebook.cells
+        let startIndex: Int
+        if let cellID {
+            guard let previous = cells.firstIndex(where: { $0.id == cellID }) else {
+                endRunChain(in: document)
+                return
+            }
+            startIndex = previous + 1
+        } else {
+            startIndex = 0
+        }
+        guard startIndex < cells.count else {
+            endRunChain(in: document)
+            return
+        }
+        let cell = cells[startIndex]
+        guard cell.cellType == .code else {
+            runChain(after: cell.id, in: document)
+            return
+        }
+        runCell(cell, in: document, advance: false) { [weak self] ok in
+            guard let self else { return }
+            guard ok else {
+                self.endRunChain(in: document)
+                return
+            }
+            self.runChain(after: cell.id, in: document)
+        }
+    }
+
+    private func advanceSelection(after cell: NotebookCell, in document: Document) {
+        guard let notebook = document.notebook,
+              let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        let next: NotebookCell
+        if index + 1 < notebook.cells.count {
+            next = notebook.cells[index + 1]
+        } else {
+            next = NotebookCell(type: .code)
+            notebook.cells.append(next)
+            document.isDirty = true
+        }
+        selectedCellID = next.id
+        if !isCommandMode {
+            if next.cellType == .markdown && !next.isEditingMarkdown {
+                scrollRequest = next.id
+            } else {
+                focusCellEditor(next.id)
+            }
+        } else {
+            scrollRequest = next.id
+        }
+    }
+
+    func appendCell(type: CellType, to notebook: Notebook, in document: Document) {
+        let cell = NotebookCell(type: type)
+        if type == .markdown { cell.isEditingMarkdown = true }
+        notebook.cells.append(cell)
+        selectedCellID = cell.id
+        scrollRequest = cell.id
+        if !isCommandMode { focusCellEditor(cell.id) }
+        document.isDirty = true
+    }
+
+    func insertCell(type: CellType, nextTo cell: NotebookCell, offset: Int,
+                    in notebook: Notebook, document: Document) {
+        guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        let newCell = NotebookCell(type: type)
+        if type == .markdown { newCell.isEditingMarkdown = true }
+        let target = max(0, min(index + offset, notebook.cells.count))
+        notebook.cells.insert(newCell, at: target)
+        selectedCellID = newCell.id
+        scrollRequest = newCell.id
+        if !isCommandMode { focusCellEditor(newCell.id) }
+        document.isDirty = true
+    }
+
+    func deleteCell(_ cell: NotebookCell, in notebook: Notebook, document: Document) {
+        guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        document.deletedCells.append((dict: notebook.serializeCell(cell), index: index,
+                                      restoreSource: nil))
+        if document.deletedCells.count > 50 { document.deletedCells.removeFirst() }
+        notebook.cells.remove(at: index)
+        if notebook.cells.isEmpty {
+            notebook.cells.append(NotebookCell(type: .code))
+        }
+        selectedCellID = notebook.cells[min(index, notebook.cells.count - 1)].id
+        document.isDirty = true
+    }
+
+    func moveCell(_ cell: NotebookCell, direction: Int, in notebook: Notebook, document: Document) {
+        guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        let target = index + direction
+        guard target >= 0, target < notebook.cells.count else { return }
+        notebook.cells.swapAt(index, target)
+        document.isDirty = true
+        cellRevision += 1
+    }
+
+    func convertCell(_ cell: NotebookCell, to type: CellType, in document: Document) {
+        guard cell.cellType != type else { return }
+        cell.cellType = type
+        cell.outputs = []
+        cell.executionCount = nil
+        if type == .markdown { cell.isEditingMarkdown = true }
+        document.isDirty = true
+    }
+
+    enum LatexResult {
+        case image(NSImage, depth: CGFloat)
+        case failure(String)
+    }
+
+    func renderLatex(_ tex: String, fontSize: CGFloat, colorHex: String,
+                     completion: @escaping (LatexResult) -> Void) {
+        let key = "\(colorHex)|\(Int(fontSize))|\(tex)"
+        if let cached = latexCache[key] {
+            completion(cached)
+            return
+        }
+        if latexPending[key] != nil {
+            latexPending[key]?.append(completion)
+            return
+        }
+        guard kernel.isRunning else {
+            completion(.failure("kernel not running"))
+            return
+        }
+        latexPending[key] = [completion]
+        kernel.request(["op": "latex", "tex": tex,
+                        "fontsize": Double(fontSize), "color": colorHex]) { [weak self] message in
+            guard let self else { return true }
+            switch message["type"] as? String {
+            case "latex":
+                if let b64 = message["data"] as? String,
+                   let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters),
+                   let image = NSImage(data: data) {
+                    let depth = CGFloat((message["depth"] as? Double) ?? 0)
+                    self.finishLatex(key, with: .image(image, depth: depth), cache: true)
+                } else {
+                    self.finishLatex(key, with: .failure("malformed kernel reply"), cache: true)
+                }
+                return true
+            case "latex_error":
+                self.finishLatex(key,
+                                 with: .failure(message["error"] as? String ?? "unsupported expression"),
+                                 cache: true)
+                return true
+            case "dead":
+                self.finishLatex(key, with: .failure("kernel stopped"), cache: false)
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private func finishLatex(_ key: String, with result: LatexResult, cache: Bool) {
+        if cache { latexCache[key] = result }
+        latexPending.removeValue(forKey: key)?.forEach { $0(result) }
+    }
+
+    func refreshVariables() {
+        guard kernel.isRunning else { return }
+        kernel.request(["op": "vars"]) { [weak self] message in
+            guard let self else { return true }
+            switch message["type"] as? String {
+            case "vars":
+                let raw = message["variables"] as? [[String: Any]] ?? []
+                self.variables = raw.compactMap { VariableInfo(dict: $0) }
+                return true
+            case "dead":
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    func openDataFrame(named name: String) {
+        if let existing = openDocuments.first(where: { $0.kind == .dataFrame && $0.dataFrameName == name }) {
+            activeDocumentID = existing.id
+            reloadDataFrame(existing)
+            return
+        }
+        let document = Document(dataFrameNamed: name)
+        openDocuments.append(document)
+        activeDocumentID = document.id
+        reloadDataFrame(document)
+    }
+
+    func reloadDataFrame(_ document: Document) {
+        guard let name = document.dataFrameName else { return }
+        document.dataFrame = nil
+        document.dataFrameError = nil
+        document.isLoadingDataFrame = true
+        fetchDataFrame(name: name, offset: 0, limit: 1000) { [weak document] payload, error in
+            document?.isLoadingDataFrame = false
+            document?.dataFrame = payload
+            document?.dataFrameError = error
+        }
+    }
+
+    func loadMoreDataFrame(_ document: Document) {
+        guard let name = document.dataFrameName,
+              let current = document.dataFrame, !document.isLoadingDataFrame else { return }
+        document.isLoadingDataFrame = true
+        fetchDataFrame(name: name, offset: current.rows.count, limit: 1000) { [weak self, weak document] payload, error in
+            document?.isLoadingDataFrame = false
+            if let payload {
+                document?.dataFrame?.appendPage(payload)
+            } else if let error {
+                self?.appendConsole(.system, "Could not load more rows: \(error)")
+            }
+        }
+    }
+
+    private func fetchDataFrame(name: String, offset: Int, limit: Int,
+                                completion: @escaping (DataFramePayload?, String?) -> Void) {
+        guard kernel.isRunning else {
+            completion(nil, "Kernel is not running")
+            return
+        }
+        kernel.request(["op": "df", "name": name, "offset": offset, "limit": limit,
+                        "max_cols": 60]) { message in
+            switch message["type"] as? String {
+            case "dataframe":
+                if let dict = message["payload"] as? [String: Any],
+                   let payload = DataFramePayload(dict: dict) {
+                    completion(payload, nil)
+                } else {
+                    completion(nil, "Malformed response from kernel")
+                }
+                return true
+            case "df_error":
+                completion(nil, message["error"] as? String ?? "Unknown error")
+                return true
+            case "dead":
+                completion(nil, "Kernel died")
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    func requestCompletions(code: String, cursor: Int,
+                            reply: @escaping ([String], Int, Int) -> Void) {
+        guard kernel.isRunning, kernelStatus == .idle else { return }
+        kernel.request(["op": "complete", "code": code, "cursor": cursor]) { message in
+            switch message["type"] as? String {
+            case "completions":
+                reply(message["matches"] as? [String] ?? [],
+                      message["start"] as? Int ?? 0,
+                      message["end"] as? Int ?? 0)
+                return true
+            case "dead":
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    func requestInspection(code: String, cursor: Int,
+                           reply: @escaping (InspectionInfo?) -> Void) {
+        guard kernel.isRunning, kernelStatus == .idle else {
+            reply(nil)
+            return
+        }
+        kernel.request(["op": "inspect", "code": code, "cursor": cursor]) { message in
+            switch message["type"] as? String {
+            case "inspection":
+                reply(InspectionInfo(signature: message["signature"] as? String ?? "",
+                                     doc: message["doc"] as? String ?? ""))
+                return true
+            case "inspect_error", "dead":
+                reply(nil)
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    @Published var scrollRequest: UUID?
+    private var pendingDeleteTimestamp: TimeInterval = 0
+
+    func enterCommandMode() {
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow,
+              let catcher = CommandCatcherView.activeCatcher(in: window) else { return }
+        window.makeFirstResponder(catcher)
+    }
+
+    func enterEditMode() {
+        guard let notebook = activeDocument?.notebook,
+              let cell = notebook.cells.first(where: { $0.id == selectedCellID }) else { return }
+        if cell.cellType == .markdown { cell.isEditingMarkdown = true }
+        if cell.isSourceCollapsed { cell.isSourceCollapsed = false }
+        focusCellEditor(cell.id)
+    }
+
+    func focusCellEditor(_ id: UUID, caret: Int? = nil) {
+        scrollRequest = id
+        focusEditor(id, caret: caret)
+    }
+
+    func focusEditor(_ id: UUID, caret: Int? = nil) {
+        func attempt(_ remaining: Int) {
+            if let tv = EditorRegistry.shared.view(for: id), tv.window != nil {
+                tv.window?.makeFirstResponder(tv)
+                if let caret {
+                    let length = (tv.string as NSString).length
+                    tv.setSelectedRange(NSRange(location: min(caret, length), length: 0))
+                }
+            } else if remaining > 0 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { attempt(remaining - 1) }
+            }
+        }
+        DispatchQueue.main.async { attempt(12) }
+    }
+
+    func handleCommandModeKey(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else {
+            return false
+        }
+        guard let document = activeDocument, document.kind == .notebook,
+              let notebook = document.notebook, !notebook.cells.isEmpty else { return false }
+        let index: Int
+        if let found = notebook.cells.firstIndex(where: { $0.id == selectedCellID }) {
+            index = found
+        } else if selectedCellID == nil {
+            index = 0
+        } else {
+            selectedCellID = notebook.cells[0].id
+            return true
+        }
+        let cell = notebook.cells[index]
+        if event.charactersIgnoringModifiers?.lowercased() != "d" { pendingDeleteTimestamp = 0 }
+
+        switch event.keyCode {
+        case 36:
+            if event.modifierFlags.contains(.shift) {
+                runCell(cell, in: document, advance: true)
+            } else {
+                enterEditMode()
+            }
+            return true
+        case 126:
+            selectCell(at: index - 1, in: notebook)
+            return true
+        case 125:
+            selectCell(at: index + 1, in: notebook)
+            return true
+        default:
+            break
+        }
+
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "a":
+            insertCell(type: .code, nextTo: cell, offset: 0, in: notebook, document: document)
+            return true
+        case "b":
+            insertCell(type: .code, nextTo: cell, offset: 1, in: notebook, document: document)
+            return true
+        case "d":
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - pendingDeleteTimestamp < 0.7 {
+                pendingDeleteTimestamp = 0
+                deleteCell(cell, in: notebook, document: document)
+            } else {
+                pendingDeleteTimestamp = now
+            }
+            return true
+        case "c":
+            copyCell(cell, in: notebook)
+            return true
+        case "x":
+            copyCell(cell, in: notebook)
+            deleteCell(cell, in: notebook, document: document)
+            return true
+        case "v":
+            pasteCell(after: cell, in: notebook, document: document)
+            return true
+        case "m":
+            convertCell(cell, to: .markdown, in: document)
+            return true
+        case "y":
+            convertCell(cell, to: .code, in: document)
+            return true
+        case "z":
+            undoCellDeletion(in: document)
+            return true
+        case "o":
+            setOutputCollapsed(!cell.isOutputCollapsed, for: cell, in: document)
+            return true
+        case "f":
+            openFind()
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func rebindCellSelection(from previousID: UUID?) {
+        if let previous = openDocuments.first(where: { $0.id == previousID }),
+           previous.notebook?.cells.contains(where: { $0.id == selectedCellID }) == true {
+            previous.lastSelectedCellID = selectedCellID
+        }
+        guard let document = activeDocument, let cells = document.notebook?.cells else {
+            selectedCellID = nil
+            return
+        }
+        guard !cells.contains(where: { $0.id == selectedCellID }) else { return }
+        let remembered = document.lastSelectedCellID
+        selectedCellID = cells.first { $0.id == remembered }?.id ?? cells.first?.id
+    }
+
+    var selectionContext: (cell: NotebookCell, notebook: Notebook, document: Document)? {
+        guard let document = activeDocument, let notebook = document.notebook,
+              let cell = notebook.cells.first(where: { $0.id == selectedCellID }) else { return nil }
+        return (cell, notebook, document)
+    }
+
+    func commandInsert(offset: Int) {
+        guard let ctx = selectionContext else { return }
+        insertCell(type: .code, nextTo: ctx.cell, offset: offset,
+                   in: ctx.notebook, document: ctx.document)
+    }
+
+    func commandCopy() {
+        guard let ctx = selectionContext else { return }
+        copyCell(ctx.cell, in: ctx.notebook)
+    }
+
+    func commandCut() {
+        guard let ctx = selectionContext else { return }
+        copyCell(ctx.cell, in: ctx.notebook)
+        deleteCell(ctx.cell, in: ctx.notebook, document: ctx.document)
+    }
+
+    func commandPaste() {
+        guard let ctx = selectionContext else { return }
+        pasteCell(after: ctx.cell, in: ctx.notebook, document: ctx.document)
+    }
+
+    func commandDuplicate() {
+        guard let ctx = selectionContext else { return }
+        duplicateCell(ctx.cell, in: ctx.notebook, document: ctx.document)
+    }
+
+    func commandDelete() {
+        guard let ctx = selectionContext else { return }
+        deleteCell(ctx.cell, in: ctx.notebook, document: ctx.document)
+    }
+
+    func commandConvert(to type: CellType) {
+        guard let ctx = selectionContext, ctx.cell.cellType != type else { return }
+        convertCell(ctx.cell, to: type, in: ctx.document)
+    }
+
+    @MainActor
+    func openSelectedPlotWindow() {
+        guard let ctx = selectionContext else { return }
+        for output in ctx.cell.outputs.reversed() {
+            switch output.kind {
+            case .plotlyFigure(let html, let jsPath, _, let image, _):
+                if !jsPath.isEmpty, FileManager.default.fileExists(atPath: jsPath) {
+                    PlotWindow.open(html: html, jsPath: jsPath)
+                } else if let image {
+                    PlotWindow.open(image: image)
+                } else {
+                    continue
+                }
+                return
+            case .image(_, let image):
+                guard let image else { continue }
+                PlotWindow.open(image: image)
+                return
+            default:
+                continue
+            }
+        }
+    }
+
+    private func selectCell(at index: Int, in notebook: Notebook) {
+        guard !notebook.cells.isEmpty else { return }
+        let clamped = max(0, min(index, notebook.cells.count - 1))
+        selectedCellID = notebook.cells[clamped].id
+        scrollRequest = selectedCellID
+    }
+
+    private var cellClipboard: [String: Any]?
+
+    func copyCell(_ cell: NotebookCell, in notebook: Notebook) {
+        cellClipboard = notebook.serializeCell(cell)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(cell.source, forType: .string)
+    }
+
+    func pasteCell(after cell: NotebookCell, in notebook: Notebook, document: Document) {
+        guard var dict = cellClipboard else { return }
+        dict["id"] = NotebookCell.makeNBID()
+        guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        let restored = Notebook.parseCell(dict)
+        notebook.cells.insert(restored, at: index + 1)
+        selectedCellID = restored.id
+        scrollRequest = restored.id
+        document.isDirty = true
+    }
+
+    func duplicateCell(_ cell: NotebookCell, in notebook: Notebook, document: Document) {
+        var dict = notebook.serializeCell(cell)
+        dict["id"] = NotebookCell.makeNBID()
+        guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        let copy = Notebook.parseCell(dict)
+        notebook.cells.insert(copy, at: index + 1)
+        selectedCellID = copy.id
+        scrollRequest = copy.id
+        document.isDirty = true
+    }
+
+    func undoCellDeletion(in document: Document) {
+        guard let notebook = document.notebook,
+              let record = document.deletedCells.popLast() else { return }
+        if let restore = record.restoreSource,
+           let merged = notebook.cells.first(where: { $0.id == restore.cellID }) {
+            merged.source = restore.source
+        }
+        let cell = Notebook.parseCell(record.dict)
+        let index = max(0, min(record.index, notebook.cells.count))
+        notebook.cells.insert(cell, at: index)
+        selectedCellID = cell.id
+        scrollRequest = cell.id
+        document.isDirty = true
+    }
+
+    func splitSelectedCell() {
+        guard let document = activeDocument, let notebook = document.notebook,
+              let cell = notebook.cells.first(where: { $0.id == selectedCellID }),
+              let tv = EditorRegistry.shared.view(for: cell.id),
+              let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        let ns = cell.source as NSString
+        let caret = min(tv.selectedRange().location, ns.length)
+        let head = ns.substring(to: caret)
+        let tail = ns.substring(from: caret)
+        cell.source = head
+        let newCell = NotebookCell(type: cell.cellType, source: tail)
+        if cell.cellType == .markdown { newCell.isEditingMarkdown = true }
+        notebook.cells.insert(newCell, at: index + 1)
+        selectedCellID = newCell.id
+        document.isDirty = true
+        focusCellEditor(newCell.id, caret: 0)
+    }
+
+    func mergeSelectedCellWithBelow() {
+        guard let document = activeDocument, let notebook = document.notebook,
+              let index = notebook.cells.firstIndex(where: { $0.id == selectedCellID }),
+              index + 1 < notebook.cells.count else { return }
+        let cell = notebook.cells[index]
+        let below = notebook.cells[index + 1]
+        document.deletedCells.append((dict: notebook.serializeCell(below), index: index + 1,
+                                      restoreSource: (cellID: cell.id, source: cell.source)))
+        cell.source += "\n" + below.source
+        notebook.cells.remove(at: index + 1)
+        document.isDirty = true
+        cellRevision += 1
+    }
+
+    func clearAllOutputs(in document: Document?) {
+        guard let document, let notebook = document.notebook else { return }
+        for cell in notebook.cells {
+            cell.outputs = []
+            cell.executionCount = nil
+            cell.lastDuration = nil
+        }
+        document.isDirty = true
+    }
+
+    private var pendingRunAllDocumentID: UUID?
+    private var runningChainDocumentID: UUID?
+
+    func restartAndRunAll() {
+        guard let document = activeDocument, document.kind == .notebook else { return }
+        clearAllOutputs(in: document)
+        pendingRunAllDocumentID = document.id
+        restartKernel(confirm: false)
+        if kernelStatus != .starting && kernelStatus != .idle {
+            pendingRunAllDocumentID = nil
+        }
+    }
+
+    func kernelBecameIdle() {
+        guard let id = pendingRunAllDocumentID else { return }
+        pendingRunAllDocumentID = nil
+        if let document = openDocuments.first(where: { $0.id == id }) {
+            runAllCells(in: document)
+        }
+    }
+
+    private func cancelPendingRunAll() {
+        pendingRunAllDocumentID = nil
+    }
+
+    func openFind() {
+        guard let document = activeDocument else { return }
+        switch document.kind {
+        case .script:
+            performScriptFinderAction(.showFindInterface, in: document)
+        case .notebook:
+            let find = document.find
+            find.isVisible = true
+            find.focusRequest += 1
+            recomputeFind(in: document, resetIndex: false)
+        case .dataFrame, .diff:
+            break
+        }
+    }
+
+    private func performScriptFinderAction(_ action: NSTextFinder.Action, in document: Document) {
+        guard let tv = EditorRegistry.shared.view(for: document.id) else { return }
+        if action == .showFindInterface { tv.window?.makeFirstResponder(tv) }
+        let item = NSMenuItem()
+        item.tag = action.rawValue
+        tv.performTextFinderAction(item)
+    }
+
+    func closeFind(in document: Document) {
+        document.find.isVisible = false
+        document.find.matches = []
+        document.find.currentIndex = 0
+        if let id = selectedCellID, EditorRegistry.shared.view(for: id) != nil {
+            focusCellEditor(id)
+        } else {
+            enterCommandMode()
+        }
+    }
+
+    func recomputeFind(in document: Document, resetIndex: Bool) {
+        let find = document.find
+        guard let notebook = document.notebook, !find.query.isEmpty else {
+            find.matches = []
+            find.currentIndex = 0
+            return
+        }
+        var matches: [(cellID: UUID, range: NSRange)] = []
+        for cell in notebook.cells {
+            let ns = cell.source as NSString
+            var search = NSRange(location: 0, length: ns.length)
+            while true {
+                let found = ns.range(of: find.query, options: .caseInsensitive, range: search)
+                guard found.location != NSNotFound else { break }
+                matches.append((cell.id, found))
+                let next = found.location + max(found.length, 1)
+                guard next < ns.length else { break }
+                search = NSRange(location: next, length: ns.length - next)
+            }
+        }
+        find.matches = matches
+        find.currentIndex = resetIndex ? 0
+            : (matches.isEmpty ? 0 : min(find.currentIndex, matches.count - 1))
+        find.hasNavigated = resetIndex ? false : find.hasNavigated
+    }
+
+    func findQueryChanged(in document: Document) {
+        recomputeFind(in: document, resetIndex: true)
+        highlightCurrentMatch(in: document)
+    }
+
+    func findAdvance(in document: Document, delta: Int) {
+        guard document.kind == .notebook else {
+            performScriptFinderAction(delta > 0 ? .nextMatch : .previousMatch, in: document)
+            return
+        }
+        let find = document.find
+        if find.matches.isEmpty { recomputeFind(in: document, resetIndex: true) }
+        guard !find.matches.isEmpty else { return }
+        if find.hasNavigated {
+            let count = find.matches.count
+            find.currentIndex = ((find.currentIndex + delta) % count + count) % count
+        }
+        find.hasNavigated = true
+        highlightCurrentMatch(in: document)
+    }
+
+    func highlightCurrentMatch(in document: Document) {
+        let find = document.find
+        guard find.currentIndex < find.matches.count, let notebook = document.notebook else { return }
+        let match = find.matches[find.currentIndex]
+        guard let cell = notebook.cells.first(where: { $0.id == match.cellID }) else { return }
+        if cell.cellType == .markdown, !cell.isEditingMarkdown { cell.isEditingMarkdown = true }
+        if cell.isSourceCollapsed { cell.isSourceCollapsed = false }
+        if selectedCellID != cell.id { selectedCellID = cell.id }
+        scrollRequest = cell.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            guard let tv = EditorRegistry.shared.view(for: cell.id) else { return }
+            let length = (tv.string as NSString).length
+            guard match.range.location + match.range.length <= length else { return }
+            tv.setSelectedRange(match.range)
+            tv.scrollRangeToVisible(match.range)
+            tv.showFindIndicator(for: match.range)
+        }
+    }
+
+    func replaceCurrentMatch(in document: Document) {
+        let find = document.find
+        guard find.currentIndex < find.matches.count, let notebook = document.notebook else { return }
+        let match = find.matches[find.currentIndex]
+        guard let cell = notebook.cells.first(where: { $0.id == match.cellID }) else { return }
+        let ns = cell.source as NSString
+        guard match.range.location + match.range.length <= ns.length,
+              ns.substring(with: match.range).caseInsensitiveCompare(find.query) == .orderedSame else {
+            recomputeFind(in: document, resetIndex: false)
+            return
+        }
+        cell.source = ns.replacingCharacters(in: match.range, with: find.replacement)
+        document.isDirty = true
+        recomputeFind(in: document, resetIndex: false)
+        if !find.matches.isEmpty {
+            find.currentIndex = min(find.currentIndex, find.matches.count - 1)
+            highlightCurrentMatch(in: document)
+        }
+    }
+
+    func replaceAllMatches(in document: Document) {
+        let find = document.find
+        guard let notebook = document.notebook, !find.query.isEmpty else { return }
+        let pending = notebook.cells.compactMap { cell -> (NotebookCell, String)? in
+            let replaced = cell.source.replacingOccurrences(
+                of: find.query, with: find.replacement, options: .caseInsensitive)
+            return replaced == cell.source ? nil : (cell, replaced)
+        }
+        guard !pending.isEmpty else { return }
+        let cellCount = pending.count
+        let replacementLabel = find.replacement.isEmpty ? "nothing" : "“\(find.replacement)”"
+        confirmDestructive(
+            title: "Replace every match in \(cellCount) cell\(cellCount == 1 ? "" : "s")?",
+            message: "“\(find.query)” becomes \(replacementLabel) throughout this notebook. This cannot be undone.",
+            button: "Replace All") { [weak self] in
+            for (cell, replaced) in pending { cell.source = replaced }
+            document.isDirty = true
+            self?.recomputeFind(in: document, resetIndex: true)
+        }
+    }
+
+    @Published var recentWorkspaces: [String] = []
+    @Published var recentFiles: [String] = []
+
+    func loadRecents() {
+        recentWorkspaces = QuantaDefaults.store.stringArray(forKey: "QuantaRecentWorkspaces") ?? []
+        recentFiles = QuantaDefaults.store.stringArray(forKey: "QuantaRecentFiles") ?? []
+    }
+
+    func recordRecent(_ path: String, isWorkspace: Bool) {
+        let key = isWorkspace ? "QuantaRecentWorkspaces" : "QuantaRecentFiles"
+        var list = QuantaDefaults.store.stringArray(forKey: key) ?? []
+        list.removeAll { $0 == path }
+        list.insert(path, at: 0)
+        list = Array(list.prefix(8))
+        QuantaDefaults.store.set(list, forKey: key)
+        if isWorkspace { recentWorkspaces = list } else { recentFiles = list }
+    }
+
+    func clearRecents() {
+        QuantaDefaults.store.removeObject(forKey: "QuantaRecentWorkspaces")
+        QuantaDefaults.store.removeObject(forKey: "QuantaRecentFiles")
+        recentWorkspaces = []
+        recentFiles = []
+    }
+
+    func persistSession() {
+        let files = openDocuments.filter { $0.isFileBacked }.compactMap { $0.url?.path }
+        QuantaDefaults.store.set(files, forKey: "QuantaSessionFiles")
+        QuantaDefaults.store.set(activeDocument?.url?.path, forKey: "QuantaSessionActive")
+    }
+
+    func restoreSession() {
+        guard QuantaDefaults.store.object(forKey: "QuantaReopenSession") as? Bool ?? true else { return }
+        let files = QuantaDefaults.store.stringArray(forKey: "QuantaSessionFiles") ?? []
+        let active = QuantaDefaults.store.string(forKey: "QuantaSessionActive")
+        for path in files where FileManager.default.fileExists(atPath: path) {
+            openFile(URL(fileURLWithPath: path), recordSession: false)
+        }
+        if let active, let document = openDocuments.first(where: { $0.url?.path == active }) {
+            activeDocumentID = document.id
+        }
+    }
+
+    private var autosaveTimer: Timer?
+    private let draftQueue = DispatchQueue(label: "quanta.drafts", qos: .utility)
+    private var draftFingerprints: [UUID: Int] = [:]
+
+    private var draftsDirectory: URL {
+        QuantaStorage.draftsDirectory(applicationSupport:
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
+    }
+
+    func draftURL(for document: Document) -> URL {
+        if let url = document.url { return draftURL(forPath: url) }
+        let ext = document.kind == .notebook ? "ipynb" : "py"
+        return draftsDirectory.appendingPathComponent("untitled-\(document.draftKey).\(ext)")
+    }
+
+    func draftURL(forPath fileURL: URL) -> URL {
+        var hash: UInt64 = 5381
+        for byte in fileURL.path.utf8 { hash = hash &* 33 &+ UInt64(byte) }
+        return draftsDirectory.appendingPathComponent(
+            String(hash, radix: 16) + "-" + fileURL.lastPathComponent)
+    }
+
+    func startAutosave() {
+        autosaveTimer?.invalidate()
+        autosaveTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.autosaveTick()
+        }
+    }
+
+    private func autosaveTick() {
+        let saveInPlace = QuantaDefaults.store.bool(forKey: "QuantaAutoSaveFiles")
+        for document in openDocuments where document.isDirty && document.isFileBacked {
+            if saveInPlace, document.url != nil, save(document, interactive: false) {
+                continue
+            }
+            writeDraft(for: document)
+        }
+    }
+
+    func writeDraft(for document: Document) {
+        let fingerprint: Int
+        let data: Data
+        switch document.kind {
+        case .script:
+            fingerprint = document.text.hashValue
+            guard draftFingerprints[document.id] != fingerprint else { return }
+            data = Data(document.text.utf8)
+        case .notebook:
+            guard let notebook = document.notebook else { return }
+            fingerprint = notebook.contentFingerprint
+            guard draftFingerprints[document.id] != fingerprint,
+                  let serialized = try? notebook.serializedData() else { return }
+            data = serialized
+        case .dataFrame, .diff:
+            return
+        }
+        draftFingerprints[document.id] = fingerprint
+        let target = draftURL(for: document)
+        draftQueue.async {
+            try? data.write(to: target, options: .atomic)
+        }
+    }
+
+    func clearDraft(for document: Document) {
+        draftFingerprints[document.id] = nil
+        let target = draftURL(for: document)
+        draftQueue.async { try? FileManager.default.removeItem(at: target) }
+    }
+
+    func restoreUntitledDrafts() {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: draftsDirectory,
+                                                      includingPropertiesForKeys: nil) else { return }
+        for url in items where url.lastPathComponent.hasPrefix("untitled-") {
+            let key = url.deletingPathExtension().lastPathComponent
+                .replacingOccurrences(of: "untitled-", with: "")
+            do {
+                if url.pathExtension == "ipynb" {
+                    let notebook = try Notebook.load(from: Data(contentsOf: url))
+                    let document = Document(notebook: notebook, url: nil, draftKey: key)
+                    document.isDirty = true
+                    openDocuments.append(document)
+                } else {
+                    let text = try String(contentsOf: url, encoding: .utf8)
+                    let document = Document(script: nil, text: text, draftKey: key)
+                    document.isDirty = true
+                    openDocuments.append(document)
+                }
+                appendConsole(.system, "Recovered unsaved \(url.pathExtension == "ipynb" ? "notebook" : "script") from the last session.")
+            } catch {
+                let quarantined = url.appendingPathExtension("corrupt")
+                try? fm.removeItem(at: quarantined)
+                if (try? fm.moveItem(at: url, to: quarantined)) != nil {
+                    appendConsole(.system,
+                                  "Could not read an unsaved draft — kept it at \(quarantined.path)")
+                }
+            }
+        }
+        if activeDocumentID == nil { activeDocumentID = openDocuments.last?.id }
+    }
+
+    func confirmDiscardingUnsavedChanges() -> Bool {
+        let previous = activeDocumentID
+        for document in openDocuments where document.isDirty && document.isFileBacked {
+            activeDocumentID = document.id
+            switch promptToSave(document) {
+            case .save:
+                guard save(document) else { return false }
+            case .discard:
+                clearDraft(for: document)
+            case .cancel:
+                return false
+            }
+        }
+        activeDocumentID = previous
+        draftQueue.sync {}
+        return true
+    }
+
+    enum SavePromptChoice { case save, discard, cancel }
+
+    func promptToSave(_ document: Document) -> SavePromptChoice {
+        let alert = NSAlert()
+        alert.messageText = "Save changes to \(document.displayName)?"
+        alert.informativeText = "Your changes will be lost otherwise."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .discard
+        default: return .cancel
+        }
+    }
+
+    @Published var editorFontSize: CGFloat =
+        QuantaDefaults.store.object(forKey: "QuantaFontSize") as? CGFloat ?? 13
+
+    func adjustFontSize(_ delta: CGFloat) {
+        setFontSize(editorFontSize + delta)
+    }
+
+    func resetFontSize() {
+        setFontSize(13)
+    }
+
+    func setFontSize(_ size: CGFloat) {
+        let clamped = max(9, min(28, size))
+        editorFontSize = clamped
+        QuantaDefaults.store.set(clamped, forKey: "QuantaFontSize")
+        EditorTheme.fontSize = clamped
+        for tv in EditorRegistry.shared.allViews {
+            tv.typingAttributes = [.font: EditorTheme.font, .foregroundColor: EditorTheme.text]
+            if let storage = tv.textStorage { PythonHighlighter.highlight(storage) }
+            tv.onLayoutChange?()
+        }
+    }
+
+    func exportActiveNotebookAsPython() {
+        guard let document = activeDocument, let notebook = document.notebook else { return }
+        let script = NotebookExporter.pythonScript(from: notebook)
+        savePanelWrite(data: Data(script.utf8),
+                       suggested: document.displayName.replacingOccurrences(of: ".ipynb", with: ".py"),
+                       type: .pythonScript)
+    }
+
+    func exportActiveNotebookAsHTML() {
+        guard let document = activeDocument, let notebook = document.notebook else { return }
+        let html = NotebookExporter.html(from: notebook, title: document.displayName)
+        savePanelWrite(data: Data(html.utf8),
+                       suggested: document.displayName.replacingOccurrences(of: ".ipynb", with: ".html"),
+                       type: .html)
+    }
+
+    func exportActiveNotebookAsPDF() {
+        guard let document = activeDocument, let notebook = document.notebook else { return }
+        let html = NotebookExporter.html(from: notebook, title: document.displayName)
+        NotebookExporter.renderPDF(html: html) { [weak self] data in
+            guard let data else {
+                self?.appendConsole(.system, "PDF export failed.")
+                return
+            }
+            self?.savePanelWrite(
+                data: data,
+                suggested: document.displayName.replacingOccurrences(of: ".ipynb", with: ".pdf"),
+                type: .pdf)
+        }
+    }
+
+    private func savePanelWrite(data: Data, suggested: String, type: UTType) {
+        let panel = NSSavePanel()
+        panel.directoryURL = workspace?.rootURL
+        panel.nameFieldStringValue = suggested
+        panel.allowedContentTypes = [type]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url, options: .atomic)
+            refreshWorkspace()
+        } catch {
+            appendConsole(.system, "Export failed: \(error.localizedDescription)")
+            revealConsole()
+        }
+    }
+
+    func promptForName(title: String, message: String, initial: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = initial
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? nil : name
+    }
+
+    func createFile(in directory: URL) {
+        guard let name = promptForName(title: "New File",
+                                       message: "Name for the new file:",
+                                       initial: "untitled.py") else { return }
+        let url = directory.appendingPathComponent(name)
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            appendConsole(.system, "\(name) already exists.")
+            return
+        }
+        if url.pathExtension.lowercased() == "ipynb" {
+            try? (try? Notebook.empty().serializedData())?.write(to: url)
+        } else {
+            FileManager.default.createFile(atPath: url.path, contents: Data())
+        }
+        refreshWorkspace()
+        openFile(url)
+    }
+
+    func createFolder(in directory: URL) {
+        guard let name = promptForName(title: "New Folder",
+                                       message: "Name for the new folder:",
+                                       initial: "folder") else { return }
+        try? FileManager.default.createDirectory(
+            at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
+        refreshWorkspace()
+    }
+
+    func renameNode(_ node: FileNode) {
+        guard let name = promptForName(title: "Rename",
+                                       message: "New name for \(node.name):",
+                                       initial: node.name),
+              name != node.name else { return }
+        let target = node.url.deletingLastPathComponent().appendingPathComponent(name)
+        do {
+            try FileManager.default.moveItem(at: node.url, to: target)
+            for document in openDocuments {
+                guard let relative = Self.relativePath(of: document.url, under: node.url) else { continue }
+                document.url = relative.isEmpty ? target : target.appendingPathComponent(relative)
+            }
+            persistSession()
+            refreshWorkspace()
+        } catch {
+            appendConsole(.system, "Rename failed: \(error.localizedDescription)")
+        }
+    }
+
+    func trashNode(_ node: FileNode) {
+        let affected = openDocuments.filter { Self.relativePath(of: $0.url, under: node.url) != nil }
+        if affected.contains(where: { $0.isDirty }) {
+            let alert = NSAlert()
+            alert.messageText = "Move \(node.name) to the Trash?"
+            alert.informativeText = "Unsaved changes in its open tabs will be lost."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        do {
+            try FileManager.default.trashItem(at: node.url, resultingItemURL: nil)
+            for document in affected {
+                document.isDirty = false
+                closeDocument(document)
+            }
+            refreshWorkspace()
+        } catch {
+            appendConsole(.system, "Could not move \(node.name) to Trash: \(error.localizedDescription)")
+        }
+    }
+
+    static func relativePath(of url: URL?, under base: URL) -> String? {
+        guard let path = url?.path else { return nil }
+        let basePath = base.path
+        if path == basePath { return "" }
+        guard path.hasPrefix(basePath + "/") else { return nil }
+        return String(path.dropFirst(basePath.count + 1))
+    }
+
+    struct FileSearchResult: Identifiable {
+        let id = UUID()
+        let fileURL: URL
+        let line: Int
+        let preview: String
+    }
+
+    func searchWorkspace(_ query: String, completion: @escaping ([FileSearchResult]) -> Void) {
+        guard let root = workspace?.rootURL, !query.isEmpty else {
+            completion([])
+            return
+        }
+        let searchable: Set<String> = ["py", "ipynb", "md", "txt", "json", "yaml", "yml",
+                                       "toml", "csv", "cfg", "ini", "sh", "rst"]
+        DispatchQueue.global(qos: .userInitiated).async {
+            var results: [FileSearchResult] = []
+            let enumerator = FileManager.default.enumerator(
+                at: root, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                options: [.skipsHiddenFiles])
+            while let item = enumerator?.nextObject() as? URL {
+                if results.count >= 400 { break }
+                let name = item.lastPathComponent
+                if name == "__pycache__" || name == "node_modules" || name == "venv" {
+                    enumerator?.skipDescendants()
+                    continue
+                }
+                guard searchable.contains(item.pathExtension.lowercased()),
+                      let values = try? item.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                      values.isRegularFile == true,
+                      (values.fileSize ?? 0) < 8_000_000,
+                      let content = Self.searchableText(of: item) else { continue }
+                for (number, line) in content.components(separatedBy: "\n").enumerated() {
+                    if line.range(of: query, options: .caseInsensitive) != nil {
+                        results.append(FileSearchResult(
+                            fileURL: item, line: number + 1,
+                            preview: line.trimmingCharacters(in: .whitespaces).prefix(120)
+                                .description))
+                        if results.count >= 400 { break }
+                    }
+                }
+            }
+            DispatchQueue.main.async { completion(results) }
+        }
+    }
+
+    private static func searchableText(of url: URL) -> String? {
+        guard url.pathExtension.lowercased() == "ipynb" else {
+            return try? String(contentsOf: url, encoding: .utf8)
+        }
+        guard let data = try? Data(contentsOf: url),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let cells = dict["cells"] as? [[String: Any]] else { return nil }
+        return cells.map { cell -> String in
+            if let lines = cell["source"] as? [String] { return lines.joined() }
+            return cell["source"] as? String ?? ""
+        }.joined(separator: "\n")
+    }
+
+    func openSearchResult(_ result: FileSearchResult) {
+        openFile(result.fileURL)
+        guard result.fileURL.pathExtension.lowercased() != "ipynb" else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let document = self?.openDocuments.first(where: { $0.url == result.fileURL }),
+                  let tv = EditorRegistry.shared.view(for: document.id) else { return }
+            let lines = (tv.string as NSString)
+            var location = 0
+            var current = 1
+            lines.enumerateSubstrings(in: NSRange(location: 0, length: lines.length),
+                                      options: [.byLines, .substringNotRequired]) { _, range, _, stop in
+                if current == result.line {
+                    location = range.location
+                    stop.pointee = true
+                }
+                current += 1
+            }
+            tv.window?.makeFirstResponder(tv)
+            tv.setSelectedRange(NSRange(location: location, length: 0))
+            tv.scrollRangeToVisible(NSRange(location: location, length: 0))
+        }
+    }
+
+    func runSelectionOrLine(in document: Document? = nil) {
+        guard let document = document ?? activeDocument, document.kind == .script,
+              let tv = EditorRegistry.shared.view(for: document.id) else { return }
+        let ns = tv.string as NSString
+        let selection = tv.selectedRange()
+        let range = ns.lineRange(for: NSRange(location: min(selection.location, ns.length),
+                                              length: min(selection.length, ns.length - min(selection.location, ns.length))))
+        let code = Self.dedent(ns.substring(with: range))
+        if selection.length == 0 {
+            let next = min(NSMaxRange(range), ns.length)
+            tv.setSelectedRange(NSRange(location: next, length: 0))
+            tv.scrollRangeToVisible(NSRange(location: next, length: 0))
+        }
+        guard !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        revealConsole(force: true)
+        runConsoleInput(code)
+    }
+
+    static func dedent(_ code: String) -> String {
+        var lines = code.components(separatedBy: "\n").map { line -> String in
+            var columns = 0
+            var index = line.startIndex
+            while index < line.endIndex, line[index] == " " || line[index] == "\t" {
+                columns += line[index] == "\t" ? 4 : 1
+                index = line.index(after: index)
+            }
+            return String(repeating: " ", count: columns) + line[index...]
+        }
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.removeLast()
+        }
+        let indents = lines
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map { $0.prefix { $0 == " " }.count }
+        guard let common = indents.min(), common > 0 else { return lines.joined(separator: "\n") }
+        return lines.map { String($0.dropFirst(min(common, $0.prefix { $0 == " " }.count))) }
+            .joined(separator: "\n")
+    }
+}
+
+final class LatexState: ObservableObject {
+    @Published var generation = 0
+}
+
+final class CellSelection: ObservableObject {
+    @Published var selectedCellID: UUID?
+    @Published var isCommandMode = false
+}
