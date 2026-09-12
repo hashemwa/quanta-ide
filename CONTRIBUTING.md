@@ -11,7 +11,7 @@ genuinely needs explaining, it goes in the commit message, in `README.md`, or in
 `CLAUDE.md`. A PR that adds explanatory comments will be asked to remove them, so please
 match the surrounding style from the start.
 
-`CLAUDE.md` is the architecture guide. It documents the layering, the invariants that
+[Development](docs/development.md) is the architecture guide. It documents the layering, the invariants that
 must not regress, and the UI conventions. Read it before changing anything structural —
 several rules there look arbitrary and are not (for example, cell views deliberately do
 not observe `AppState`, because that would re-render every cell on each kernel publish).
