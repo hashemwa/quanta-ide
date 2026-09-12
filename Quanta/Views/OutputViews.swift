@@ -7,7 +7,7 @@ struct OutputListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(cell.outputs) { output in
-                OutputItemView(output: output, cellSource: cell.source)
+                OutputItemView(output: output)
             }
         }
         .padding(.bottom, 2)
@@ -16,7 +16,6 @@ struct OutputListView: View {
 
 struct OutputItemView: View {
     let output: CellOutput
-    var cellSource: String? = nil
     @Environment(\.monoFontSize) private var monoSize
 
     var body: some View {
@@ -53,7 +52,7 @@ struct OutputItemView: View {
 
         case .error(let ename, let evalue, let traceback, let frames):
             TracebackView(ename: ename, evalue: evalue, traceback: traceback,
-                          frames: frames, cellSource: cellSource)
+                          frames: frames)
 
         case .dataFrame(let payload):
             DataFrameOutputView(payload: payload, cacheKey: output.id)

@@ -195,11 +195,8 @@ struct TracebackView: View {
     let evalue: String
     let traceback: String
     let frames: [TraceFrame]
-    var cellSource: String? = nil
     @Environment(\.monoFontSize) private var monoSize
     @State private var showLibraryFrames = false
-    @State private var explanation: String?
-    @State private var isExplaining = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -212,21 +209,17 @@ struct TracebackView: View {
                         .font(.system(size: monoSize - 1, design: .monospaced))
                         .foregroundStyle(.primary)
                 }
-                explainButton
             } else {
                 let libraryCount = frames.filter { !$0.isUser }.count
-                HStack(spacing: 12) {
-                    if libraryCount > 0 {
-                        Button {
-                            showLibraryFrames.toggle()
-                        } label: {
-                            Label("\(libraryCount) library frame\(libraryCount == 1 ? "" : "s")",
-                                  systemImage: showLibraryFrames ? "chevron.down" : "chevron.right")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.borderless)
+                if libraryCount > 0 {
+                    Button {
+                        showLibraryFrames.toggle()
+                    } label: {
+                        Label("\(libraryCount) library frame\(libraryCount == 1 ? "" : "s")",
+                              systemImage: showLibraryFrames ? "chevron.down" : "chevron.right")
+                            .font(.caption)
                     }
-                    explainButton
+                    .buttonStyle(.borderless)
                 }
                 ForEach(frames) { frame in
                     if frame.isUser || showLibraryFrames {
@@ -234,89 +227,11 @@ struct TracebackView: View {
                     }
                 }
             }
-            explanationBlock
         }
         .textSelection(.enabled)
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .outputCard(.error)
-        .onAppear { explanation = explanation ?? Self.explanations[cacheKey] }
-    }
-
-    @ViewBuilder
-    private var explainButton: some View {
-        if AssistCLI.claudePath != nil {
-            Button {
-                explain()
-            } label: {
-                Label("Explain", systemImage: "sparkles")
-                    .font(.caption)
-            }
-            .buttonStyle(.borderless)
-            .disabled(isExplaining)
-            .help("Explain with Claude via your own CLI login")
-        }
-    }
-
-    @ViewBuilder
-    private var explanationBlock: some View {
-        if isExplaining || explanation != nil {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 5) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 10))
-                    Text("Claude · via your CLI login")
-                        .font(.caption.weight(.semibold))
-                    if isExplaining {
-                        ProgressView()
-                            .controlSize(.mini)
-                    }
-                }
-                .foregroundStyle(.secondary)
-                if let explanation {
-                    Text(explanation)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .outputCard()
-        }
-    }
-
-    private func explain() {
-        isExplaining = true
-        explanation = nil
-        let key = cacheKey
-        Task { @MainActor in
-            let workspaceRoot = AppState.shared.workspace?.rootURL
-            for await text in AssistCLI.explain(cellSource: cellSource, ename: ename,
-                                                evalue: evalue, frameText: frameText,
-                                                workingDirectory: workspaceRoot) {
-                Self.explanations[key] = text
-                explanation = text
-            }
-            isExplaining = false
-        }
-    }
-
-    private var cacheKey: String { ename + "\u{1}" + evalue + "\u{1}" + traceback }
-
-    private static var explanations: [String: String] = [:]
-
-    private var frameText: String {
-        guard !frames.isEmpty else { return traceback.strippingANSI }
-        var picked = frames.filter(\.isUser)
-        if picked.isEmpty {
-            picked = Array(frames.suffix(4))
-        } else if let last = frames.last, !last.isUser {
-            picked.append(last)
-        }
-        return picked.suffix(8).map { frame in
-            let location = "\(frame.file):\(frame.line) in \(frame.function)"
-            return frame.code.isEmpty ? location : location + "\n    " + frame.code
-        }.joined(separator: "\n")
     }
 
     private func frameView(_ frame: TraceFrame) -> some View {

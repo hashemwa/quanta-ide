@@ -197,9 +197,6 @@ struct WelcomeView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "hurricane")
-                .font(.system(size: 54, weight: .thin))
-                .foregroundStyle(Color.accentColor)
             Text("Quanta")
                 .font(.system(size: 34, weight: .semibold, design: .rounded))
             Text("A native data-science IDE for macOS")
