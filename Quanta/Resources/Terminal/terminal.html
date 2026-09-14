@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src data:"><link rel="stylesheet" href="xterm.css"><style>html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent}#terminal{height:100%;box-sizing:border-box;padding:6px 10px}.xterm{height:100%}</style></head><body><div id="terminal"></div><script src="xterm.js"></script><script src="addon-fit.js"></script><script>
+const term = new Terminal({fontFamily:'Menlo, monospace',fontSize:12,cursorBlink:true,scrollback:10000,screenReaderMode:true,allowProposedApi:false});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById('terminal'));
+const send = value => window.webkit.messageHandlers.terminal.postMessage(value);
+term.onData(data => send({type:'input',data}));
+term.onResize(size => send({type:'resize',cols:size.cols,rows:size.rows}));
+function configureTerminal(dark,size) {
+ term.options.fontSize=size;
+ term.options.theme=dark?{background:'#1e1e1e',foreground:'#eeeeee',cursor:'#eeeeee',selectionBackground:'#4b638a'}:{background:'#ffffff',foreground:'#202020',cursor:'#202020',selectionBackground:'#b4d5ff'};
+ fit.fit();
+}
+new ResizeObserver(() => {if(document.body.clientWidth>0&&document.body.clientHeight>0)fit.fit()}).observe(document.body);
+fit.fit();
+send({type:'ready'});
+term.focus();
+</script></body></html>
