@@ -13,6 +13,11 @@ Quanta requires Xcode 26 or later and targets macOS 15 or later.
 
 The helper shares Xcode's DerivedData. Use `./scripts/quanta logs` to stream app logs.
 The test command runs the unit suite. The shared Xcode scheme also includes a UI launch test.
+For the terminal, navigation, notebook, search, and inspection workflows, see
+[UI/UX verification](ui-ux-verification.md). Run `scripts/test-ui-workflows.py` with a
+Python interpreter containing pandas to verify kernel-side inspection and table queries.
+Terminal rendering uses locally bundled xterm.js assets; licenses and pinned versions
+are in `Quanta/Resources/Terminal/DEPENDENCIES.md`.
 
 ## Architecture
 
