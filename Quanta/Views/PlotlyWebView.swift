@@ -53,7 +53,7 @@ struct PlotlyFigureView: View {
             }
             IconButton("house", help: "Reset view") { controller.resetView() }
             ToolbarDivider()
-            IconButton("macwindow.badge.plus", help: "Open in separate window (⇧⌘P)") {
+            IconButton("macwindow.badge.plus", help: "Open in separate window (⌥⌘P)") {
                 PlotWindow.open(html: html, jsPath: jsPath)
             }
             IconButton("square.and.arrow.down", help: "Save as PNG…") {

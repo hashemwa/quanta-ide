@@ -197,6 +197,7 @@ struct TracebackView: View {
     let frames: [TraceFrame]
     @Environment(\.monoFontSize) private var monoSize
     @State private var showLibraryFrames = false
+    @Environment(\.outputCellID) private var cellID
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -236,6 +237,10 @@ struct TracebackView: View {
 
     private func frameView(_ frame: TraceFrame) -> some View {
         VStack(alignment: .leading, spacing: 1) {
+            Button {
+                AppState.shared.navigateTo(file: frame.file, line: frame.line,
+                                           cellID: frame.file.hasPrefix("<cell") ? cellID : nil)
+            } label: {
             HStack(spacing: 4) {
                 Text(frame.file.hasPrefix("<cell") ? "cell" : URL(fileURLWithPath: frame.file).lastPathComponent)
                     .fontWeight(frame.isUser ? .semibold : .regular)
@@ -246,6 +251,9 @@ struct TracebackView: View {
             }
             .font(.subheadline)
             .foregroundStyle(frame.isUser ? Color.primary : Color.secondary)
+            }
+            .buttonStyle(.link)
+            .help("Go to \(frame.file), line \(frame.line)")
             if !frame.code.isEmpty {
                 Text(frame.code)
                     .font(.system(size: monoSize - 1, design: .monospaced))

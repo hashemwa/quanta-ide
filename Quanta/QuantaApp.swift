@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard AppState.shared.confirmDiscardingUnsavedChanges() else { return .terminateCancel }
+        AppState.shared.terminal.stop()
         AppState.shared.kernel.stop()
         return .terminateNow
     }
@@ -72,6 +73,26 @@ struct QuantaCommands: Commands {
     @ObservedObject var selection: CellSelection
 
     var body: some Commands {
+        CommandMenu("Navigate") {
+            Button("Quick Open…") { app.paletteMode = .files }
+                .keyboardShortcut("p", modifiers: .command)
+            Button("Command Palette…") { app.paletteMode = .commands }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+            Divider()
+            Button("Reopen Closed Tab") { app.reopenClosedDocument() }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(app.closedDocuments.isEmpty)
+            Button("Toggle Split Editor") { app.toggleSplitEditor() }
+                .keyboardShortcut("\\", modifiers: .command)
+                .disabled(app.activeDocument == nil)
+            Button("Pin / Unpin Tab") { if let document = app.activeDocument { app.togglePin(document) } }
+                .disabled(app.activeDocument == nil)
+            Divider()
+            Button("Show Terminal") { app.showTerminal() }
+                .keyboardShortcut("`", modifiers: .control)
+            Button("New Terminal Session…") { app.newTerminalSession() }
+            Button("Show Python Console") { app.showPythonConsole() }
+        }
         CommandGroup(replacing: .newItem) {
             Button("New Notebook") { app.newNotebook() }
                 .keyboardShortcut("n", modifiers: .command)
@@ -252,15 +273,17 @@ struct QuantaCommands: Commands {
             Divider()
             Button(app.showVariables ? "Hide Variables" : "Show Variables") { app.toggleVariables() }
                 .keyboardShortcut("0", modifiers: [.command, .option])
-            Button(app.showConsole ? "Hide Console" : "Show Console") { app.toggleConsole() }
+            Button(app.showConsole ? "Hide Bottom Panel" : "Show Bottom Panel") { app.toggleConsole() }
                 .keyboardShortcut("y", modifiers: [.command, .shift])
             Button("Focus Console") { app.focusConsoleInput() }
                 .keyboardShortcut("y", modifiers: [.command, .option])
-            Button("Clear Console") { app.console.clear() }
+            Button(app.bottomPane == .terminal ? "Clear Terminal Scrollback" : "Clear Console") {
+                if app.bottomPane == .terminal { app.terminal.clear() } else { app.console.clear() }
+            }
                 .keyboardShortcut("k", modifiers: .command)
             Divider()
             Button("Open Plot in Separate Window") { app.openSelectedPlotWindow() }
-                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .keyboardShortcut("p", modifiers: [.command, .option])
                 .disabled(!app.selectedCellHasPlot)
             Divider()
             Button("Show Next Tab") { app.selectTab(offset: 1) }

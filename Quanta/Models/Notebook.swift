@@ -20,6 +20,8 @@ final class NotebookCell: ObservableObject, Identifiable {
     @Published var isEditingMarkdown = false
     @Published var editorHeight: CGFloat
     @Published var lastDuration: Double?
+    @Published var lastExecutedSource: String?
+    var hasStaleOutput: Bool { !outputs.isEmpty && lastExecutedSource.map { $0 != source } == true }
     var runStartedAt: Date?
     @Published var isSourceCollapsed = false
     @Published var isOutputCollapsed = false
@@ -35,6 +37,7 @@ final class NotebookCell: ObservableObject, Identifiable {
          extraKeys: [String: Any] = [:]) {
         self.cellType = type
         self.source = source
+        self.lastExecutedSource = outputs.isEmpty ? nil : source
         self.outputs = outputs
         self.executionCount = executionCount
         self.nbID = nbID

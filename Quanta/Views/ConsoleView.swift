@@ -1,10 +1,12 @@
 import SwiftUI
 
 struct ConsoleView: View {
+    var query = ""
+    var scope = "All"
     @EnvironmentObject var app: AppState
 
     var body: some View {
-        ConsoleBody(console: app.console)
+        ConsoleBody(console: app.console, query: query, scope: scope)
     }
 }
 
@@ -12,6 +14,17 @@ private struct ConsoleBody: View {
     @ObservedObject var console: ConsoleModel
     @EnvironmentObject var app: AppState
     @State private var input = ""
+    let query: String
+    let scope: String
+
+    private var visibleLines: [ConsoleLine] {
+        console.lines.filter { line in
+            (query.isEmpty || line.text.localizedStandardContains(query))
+                && (scope == "All" || (scope == "Errors" && line.kind == .stderr)
+                    || (scope == "Output" && [.stdout, .result].contains(line.kind))
+                    || (scope == "Commands" && line.kind == .input))
+        }
+    }
     @State private var pinnedToBottom = true
     @State private var historyIndex = 0
     @FocusState private var inputFocused: Bool
@@ -27,14 +40,10 @@ private struct ConsoleBody: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader("Console", systemImage: "terminal") {
-                IconButton("trash", help: "Clear Console (⌘K)") { console.clear() }
-            }
-
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(console.lines) { line in
+                        ForEach(visibleLines) { line in
                             ConsoleLineView(line: line, fontSize: app.editorFontSize - 1)
                                 .id(line.id)
                         }
@@ -46,12 +55,19 @@ private struct ConsoleBody: View {
                     .padding(.horizontal, DS.Space.bar)
                     .padding(.vertical, DS.Space.m)
                 }
+                .overlay(alignment: .bottomTrailing) {
+                    if !pinnedToBottom, let last = visibleLines.last {
+                        Button { proxy.scrollTo(last.id, anchor: .bottom); pinnedToBottom = true } label: {
+                            Label("Latest", systemImage: "arrow.down")
+                        }.buttonStyle(.bordered).controlSize(.small).padding(DS.Space.m)
+                    }
+                }
                 .onChange(of: console.revision) { _, _ in
-                    guard pinnedToBottom, let last = console.lines.last else { return }
+                    guard pinnedToBottom, let last = visibleLines.last else { return }
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
                 .onAppear {
-                    guard let last = console.lines.last else { return }
+                    guard let last = visibleLines.last else { return }
                     DispatchQueue.main.async { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
             }
@@ -68,6 +84,8 @@ private struct ConsoleBody: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: app.editorFontSize - 1, design: .monospaced))
                     .focused($inputFocused)
+                    .disabled(app.kernelStatus == .busy || app.kernelStatus == .starting)
+                    .help(app.kernelStatus == .busy ? "Wait for execution to finish, or interrupt the kernel" : "Run Python in the current kernel")
                     .onSubmit {
                         let code = input.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !code.isEmpty else { return }
@@ -102,8 +120,16 @@ struct ConsoleLineView: View {
                 Text("»")
                     .foregroundStyle(Color.accentColor)
             }
-            Text(ANSIRenderer.attributed(line.text.trimmingTrailingNewlines))
-                .foregroundStyle(color)
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Text(ANSIRenderer.attributed(line.text.trimmingTrailingNewlines)).foregroundStyle(color)
+                if line.kind == .stderr {
+                    ForEach(Array(TracebackLocation.parse(line.text).enumerated()), id: \.offset) { _, location in
+                        Button("\(URL(fileURLWithPath: location.file).lastPathComponent):\(location.line)") {
+                            AppState.shared.navigateTo(file: location.file, line: location.line)
+                        }.buttonStyle(.link).help("Go to \(location.file), line \(location.line)")
+                    }
+                }
+            }
         }
         .font(.system(size: fontSize, design: .monospaced))
         .textSelection(.enabled)

@@ -815,6 +815,39 @@ def variables_snapshot():
     out.sort(key=lambda d: d["name"].lower())
     return out[:400]
 
+def handle_variable(msg):
+    name = msg.get("name", "")
+    if name not in user_ns:
+        emit({"id": msg.get("id"), "type": "variable_error", "error": "Variable no longer exists"})
+        return
+    remaining = [300]
+    seen = set()
+    def node(value, label, depth):
+        remaining[0] -= 1
+        result = {"name": label, "type": type(value).__name__, "value": safe_repr(value, short=True)}
+        if type(value) not in (dict, list, tuple):
+            return result
+        if id(value) in seen:
+            result["value"] = "<recursive reference>"
+            return result
+        if depth >= 4 or remaining[0] <= 0:
+            result["value"] += " · preview limit reached"
+            return result
+        seen.add(id(value))
+        children = []
+        items = value.items() if type(value) is dict else enumerate(value)
+        for index, (key, child) in enumerate(items):
+            if index >= 100 or remaining[0] <= 0:
+                children.append({"name": "…", "type": "", "value": "More items omitted"})
+                break
+            children.append(node(child, safe_repr(key, short=True), depth + 1))
+        seen.remove(id(value))
+        result["children"] = children
+        return result
+    value = user_ns[name]
+    emit({"id": msg.get("id"), "type": "variable", "node": node(value, name, 0),
+          "bytes": sys.getsizeof(value)})
+
 def handle_df(msg):
     name = msg.get("name", "")
     val = user_ns.get(name)
@@ -822,6 +855,30 @@ def handle_df(msg):
         emit({"id": msg.get("id"), "type": "df_error",
               "error": "'%s' is not defined in the kernel" % name})
         return
+    query = msg.get("filter", "")
+    sort_column = msg.get("sort_column")
+    if query or sort_column is not None:
+        try:
+            import pandas as pd
+            frame = val.to_frame() if isinstance(val, pd.Series) else val
+            if not isinstance(frame, pd.DataFrame):
+                raise ValueError("The variable is not a DataFrame or Series")
+            if query:
+                mask = pd.Series(False, index=frame.index)
+                for _, column in frame.iloc[:, :msg.get("max_cols", 60)].items():
+                    mask |= column.astype(str).str.contains(query, case=False, regex=False, na=False)
+                frame = frame.loc[mask]
+            if sort_column is not None:
+                position = int(sort_column)
+                if not 0 <= position < len(frame.columns):
+                    raise ValueError("The sort column no longer exists; clear the sort and retry")
+                order = frame.iloc[:, position].reset_index(drop=True).sort_values(
+                    ascending=bool(msg.get("ascending", True)), kind="stable", na_position="last").index
+                frame = frame.iloc[order]
+            val = frame
+        except Exception as error:
+            emit({"id": msg.get("id"), "type": "df_error", "error": _clean(str(error))})
+            return
     payload = dataframe_payload(val, msg.get("offset", 0), msg.get("limit", 500), name,
                                 max_cols=msg.get("max_cols", 150))
     if payload is None:
@@ -999,6 +1056,8 @@ def _handle_internal_error(op, msg):
               "execution_count": _exec_count})
     elif op == "vars":
         emit({"id": msg.get("id"), "type": "vars", "variables": []})
+    elif op == "variable":
+        emit({"id": msg.get("id"), "type": "variable_error", "error": "Could not inspect this variable"})
     elif op == "df":
         last = err.strip().splitlines()[-1] if err.strip() else "internal error"
         emit({"id": msg.get("id"), "type": "df_error", "error": last})
@@ -1053,6 +1112,8 @@ def main():
             elif op == "vars":
                 emit({"id": msg.get("id"), "type": "vars",
                       "variables": variables_snapshot()})
+            elif op == "variable":
+                handle_variable(msg)
             elif op == "df":
                 handle_df(msg)
             elif op == "latex":

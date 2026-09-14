@@ -2,20 +2,23 @@ import AppKit
 
 final class EditorRegistry {
     static let shared = EditorRegistry()
-    private let map = NSMapTable<NSUUID, QuantaTextView>(
-        keyOptions: .copyIn, valueOptions: .weakMemory)
+    private var map: [UUID: NSHashTable<QuantaTextView>] = [:]
 
     func register(_ textView: QuantaTextView, for id: UUID) {
-        map.setObject(textView, forKey: id as NSUUID)
+        map = map.filter { !$0.value.allObjects.isEmpty }
+        let views = map[id] ?? NSHashTable<QuantaTextView>.weakObjects()
+        views.add(textView)
+        map[id] = views
     }
 
     func view(for id: UUID) -> QuantaTextView? {
-        map.object(forKey: id as NSUUID)
+        let views = map[id]?.allObjects ?? []
+        return views.first { $0.window?.firstResponder === $0 }
+            ?? views.first { $0.window != nil } ?? views.first
     }
 
-    var allViews: [QuantaTextView] {
-        (map.objectEnumerator()?.allObjects as? [QuantaTextView]) ?? []
-    }
+    var allViews: [QuantaTextView] { map.values.flatMap(\.allObjects) }
+
 }
 
 struct InspectionInfo {

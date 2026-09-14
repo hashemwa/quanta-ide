@@ -11,13 +11,64 @@ struct EditorAreaView: View {
             } else {
                 TabBarView()
                 Divider()
-                if let document = app.activeDocument {
-                    DocumentContentView(document: document)
-                        .id(document.id)
+                if let notice = app.userNotice {
+                    HStack(alignment: .top, spacing: DS.Space.s) {
+                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                        Text(notice).font(.callout).textSelection(.enabled)
+                        Spacer()
+                        IconButton("xmark", help: "Dismiss Message") { app.userNotice = nil }
+                    }.padding(DS.Space.bar)
+                }
+                if let splitID = app.splitDocumentID,
+                   let secondary = app.openDocuments.first(where: { $0.id == splitID }),
+                   let primary = app.openDocuments.first(where: { $0.id == app.primarySplitDocumentID }) ?? app.activeDocument {
+                    HSplitView {
+                        EditorPaneView(document: primary).frame(minWidth: DS.Layout.editorPaneMin)
+                        EditorPaneView(document: secondary, secondary: true).frame(minWidth: DS.Layout.editorPaneMin)
+                    }
+                } else if let document = app.activeDocument {
+                    EditorPaneView(document: document)
                 } else {
                     Spacer()
                 }
             }
+        }
+    }
+}
+
+private struct EditorPaneView: View {
+    @ObservedObject var document: Document
+    var secondary = false
+    @EnvironmentObject private var app: AppState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if app.splitDocumentID != nil {
+                PanelBar {
+                    LabelMenu(help: "Choose Editor Document") {
+                        ForEach(app.openDocuments) { candidate in
+                            Button(candidate.displayName) {
+                                if secondary { app.splitDocumentID = candidate.id }
+                                else { app.primarySplitDocumentID = candidate.id }
+                                app.activeDocumentID = candidate.id
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: DS.Space.s) {
+                            Image(systemName: document.iconName).foregroundStyle(.secondary)
+                            Text(document.url.map { app.relativePath($0) } ?? document.displayName)
+                                .lineLimit(1).truncationMode(.middle)
+                            Image(systemName: "chevron.down").foregroundStyle(.secondary)
+                        }.font(.caption)
+                    }
+                    .help(document.url?.path ?? document.displayName)
+                    Spacer(minLength: 0)
+                    if document.isDirty {
+                        Text("Edited").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            DocumentContentView(document: document).id(document.id)
         }
     }
 }
@@ -73,7 +124,8 @@ struct ScriptEditorView: View {
                     return true
                 }
                 return false
-            })
+            },
+            onFocus: { app.activeDocumentID = document.id })
     }
 }
 
@@ -85,7 +137,7 @@ struct TabBarView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
-                    ForEach(app.openDocuments) { document in
+                    ForEach(app.openDocuments.filter(\.isPinned) + app.openDocuments.filter { !$0.isPinned }) { document in
                         if document.id != app.openDocuments.first?.id {
                             Divider().frame(height: DS.Layout.tabDividerHeight)
                         }
@@ -117,13 +169,15 @@ struct TabItemView: View {
             Image(systemName: document.iconName)
                 .font(.system(size: 10))
                 .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-            Text(document.displayName)
+            Text(app.tabTitle(document))
                 .font(.callout)
                 .foregroundStyle(isActive ? Color.primary : Color.secondary)
                 .lineLimit(1)
             Spacer(minLength: 0)
             ZStack {
-                if hovering {
+                if document.isPinned {
+                    Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary)
+                } else if hovering {
                     Button {
                         app.closeDocument(document)
                     } label: {
@@ -145,7 +199,7 @@ struct TabItemView: View {
         }
         .padding(.leading, DS.Space.bar)
         .padding(.trailing, DS.Space.s)
-        .frame(minWidth: 96, maxWidth: 220)
+        .frame(minWidth: DS.Layout.tabMinWidth, maxWidth: DS.Layout.tabMaxWidth)
         .frame(height: DS.Bar.primary)
         .background {
             if isActive {
@@ -155,10 +209,24 @@ struct TabItemView: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { app.activeDocumentID = document.id }
+        .onTapGesture {
+            app.primarySplitDocumentID = document.id
+            app.activeDocumentID = document.id
+        }
+        .draggable(document.id.uuidString)
+        .dropDestination(for: String.self) { items, _ in
+            guard let first = items.first, let id = UUID(uuidString: first) else { return false }
+            app.reorderDocument(id, before: document.id)
+            return true
+        }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { app.activeDocumentID = document.id }
         .scrollAwareHover($hovering)
         .help(document.url?.path ?? document.displayName)
         .contextMenu {
+            Button(document.isPinned ? "Unpin Tab" : "Pin Tab") { app.togglePin(document) }
+            Button("Split Editor") { app.activeDocumentID = document.id; app.toggleSplitEditor() }
+            Divider()
             Button("Close Tab") { app.closeDocument(document) }
             Button("Close Other Tabs") { app.closeOtherDocuments(except: document) }
                 .disabled(app.openDocuments.count < 2)

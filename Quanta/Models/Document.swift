@@ -12,6 +12,7 @@ final class Document: ObservableObject, Identifiable {
     let id = UUID()
     let kind: Kind
     @Published var url: URL?
+    @Published var isPinned = false
     @Published var isDirty = false
     var fileModificationDate: Date?
 
@@ -23,6 +24,10 @@ final class Document: ObservableObject, Identifiable {
     @Published var dataFrame: DataFramePayload?
     @Published var dataFrameError: String?
     @Published var isLoadingDataFrame = false
+    @Published var dataFrameFilter = ""
+    @Published var dataFrameSortColumn: Int?
+    @Published var dataFrameSortAscending = true
+    var dataFrameRequest = 0
 
     @Published var diffSource: DiffSource?
     @Published var diff: DiffDocument?

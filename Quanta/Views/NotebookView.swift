@@ -16,6 +16,7 @@ struct NotebookView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            NotebookNavigator(document: document, notebook: notebook)
             if find.isVisible {
                 FindBarView(document: document, find: find)
                 Divider()
@@ -50,7 +51,7 @@ struct NotebookView: View {
                     .background(NotebookScrollMarker())
                 }
                 .onChange(of: app.scrollRequest) { _, target in
-                    guard let target else { return }
+                    guard let target, notebook.cells.contains(where: { $0.id == target }) else { return }
                     withAnimation(reduceMotion ? nil : DS.Motion.quick) {
                         proxy.scrollTo(target, anchor: nil)
                     }
@@ -324,6 +325,12 @@ struct CellView: View {
                         .font(.caption.monospaced())
                         .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                 }
+                if cell.hasStaleOutput && !cell.isRunning {
+                    Image(systemName: "clock.badge.exclamationmark")
+                        .foregroundStyle(.orange).font(.caption)
+                        .help("Output is stale: the source changed after the last run")
+                        .accessibilityLabel("Output is stale")
+                }
                 if let duration = cell.lastDuration, !cell.isRunning {
                     Text(Self.durationLabel(duration))
                         .font(.caption2.monospaced())
@@ -348,6 +355,7 @@ struct CellView: View {
         .padding(.top, cell.cellType == .code ? DS.Space.xs + DS.Space.s : DS.Space.xxs)
         .contentShape(Rectangle())
         .onTapGesture {
+            app.activeDocumentID = document.id
             app.selectedCellID = cell.id
             app.enterCommandMode()
         }
@@ -380,6 +388,7 @@ struct CellView: View {
                     app.focusCellEditor(cell.id)
                 }
                 .onTapGesture {
+                    app.activeDocumentID = document.id
                     app.selectedCellID = cell.id
                     app.enterCommandMode()
                 }
@@ -433,7 +442,7 @@ struct CellView: View {
                 app.handleCellCommand(command, cell: cell, document: document)
                 return true
             },
-            onFocus: { app.selectedCellID = cell.id },
+            onFocus: { app.activeDocumentID = document.id; app.selectedCellID = cell.id },
             onEscape: { app.enterCommandMode() })
         .frame(height: cell.editorHeight)
         .padding(DS.Space.xs)

@@ -511,6 +511,8 @@ struct DataFrameNSTable: NSViewRepresentable {
 }
 
 struct DataFrameTabView: View {
+    @State private var filterDraft = ""
+    @State private var showingSearch = false
     @ObservedObject var document: Document
     @EnvironmentObject var app: AppState
 
@@ -532,17 +534,67 @@ struct DataFrameTabView: View {
                             .help("Load the next 1,000 rows from the kernel")
                     }
                 }
+                IconButton("magnifyingglass", help: "Filter Table Rows", isActive: showingSearch || !document.dataFrameFilter.isEmpty) {
+                    showingSearch.toggle()
+                    filterDraft = document.dataFrameFilter
+                }
+                IconMenu("arrow.up.arrow.down", help: "Sort Table Rows") {
+                    Picker("Column", selection: Binding(
+                        get: { document.dataFrameSortColumn ?? -1 },
+                        set: { document.dataFrameSortColumn = $0 < 0 ? nil : $0; app.reloadDataFrame(document) }
+                    )) {
+                        Text("Original Order").tag(-1)
+                        if let payload = document.dataFrame {
+                            ForEach(Array(payload.columns.enumerated()), id: \.offset) { index, name in
+                                Text(name).tag(index)
+                            }
+                        }
+                    }.pickerStyle(.inline)
+                    Divider()
+                    Picker("Direction", selection: Binding(
+                        get: { document.dataFrameSortAscending },
+                        set: { document.dataFrameSortAscending = $0; app.reloadDataFrame(document) }
+                    )) {
+                        Text("Ascending").tag(true)
+                        Text("Descending").tag(false)
+                    }.pickerStyle(.inline).disabled(document.dataFrameSortColumn == nil)
+                }.disabled(document.isLoadingDataFrame)
                 IconButton("arrow.clockwise", help: "Reload table (⌘R)") {
                     app.reloadDataFrame(document)
                 }
             }
-
+            if showingSearch {
+                PanelSearchBar(prompt: "Filter rows — press Return", text: $filterDraft, onSubmit: applyFilter) {
+                    showingSearch = false
+                    filterDraft = document.dataFrameFilter
+                }
+                .disabled(document.isLoadingDataFrame)
+                .onChange(of: filterDraft) { _, text in
+                    if text.isEmpty, !document.dataFrameFilter.isEmpty { applyFilter() }
+                }
+            }
+            if !document.dataFrameFilter.isEmpty || document.dataFrameSortColumn != nil {
+                HStack {
+                    Text(document.dataFrameFilter.isEmpty ? "All rows" : "Matching “\(document.dataFrameFilter)”")
+                    if let index = document.dataFrameSortColumn, let payload = document.dataFrame, payload.columns.indices.contains(index) {
+                        Text("· \(payload.columns[index]) \(document.dataFrameSortAscending ? "ascending" : "descending")")
+                    }
+                    Spacer()
+                    IconButton("xmark.circle.fill", help: "Reset Table Filters and Sort") {
+                        filterDraft = ""
+                        document.dataFrameFilter = ""
+                        document.dataFrameSortColumn = nil
+                        app.reloadDataFrame(document)
+                    }.disabled(document.isLoadingDataFrame)
+                    if document.isLoadingDataFrame { ProgressView().controlSize(.mini) }
+                }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, DS.Space.bar).padding(.vertical, DS.Space.xs)
+            }
             if let payload = document.dataFrame {
                 if payload.totalRows == 0 {
                     ContentUnavailableView {
-                        Label("Empty DataFrame", systemImage: "tablecells")
+                        Label(document.dataFrameFilter.isEmpty ? "Empty DataFrame" : "No Matching Rows", systemImage: "tablecells")
                     } description: {
-                        Text("\(document.dataFrameName ?? "The frame") has no rows · \(payload.columnSummary)")
+                        Text(document.dataFrameFilter.isEmpty ? "\(document.dataFrameName ?? "The frame") has no rows · \(payload.columnSummary)" : "Change or clear the filter to see more rows.")
                     }
                 } else {
                     DataFrameNSTable(payload: payload, cacheKey: document.id)
@@ -561,6 +613,11 @@ struct DataFrameTabView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+
+    private func applyFilter() {
+        document.dataFrameFilter = filterDraft
+        app.reloadDataFrame(document)
     }
 
     private func summary(_ payload: DataFramePayload) -> String {

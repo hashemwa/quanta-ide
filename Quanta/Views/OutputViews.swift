@@ -10,6 +10,7 @@ struct OutputListView: View {
                 OutputItemView(output: output)
             }
         }
+        .environment(\.outputCellID, cell.id)
         .padding(.bottom, 2)
     }
 }
@@ -116,7 +117,7 @@ struct ImageOutputView: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.writeObjects([image])
             }
-            IconButton("macwindow.badge.plus", help: "Open in separate window (⇧⌘P)") {
+            IconButton("macwindow.badge.plus", help: "Open in separate window (⌥⌘P)") {
                 PlotWindow.open(image: image)
             }
             IconButton("square.and.arrow.down", help: "Save as PNG…") { savePNG() }

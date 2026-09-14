@@ -6,11 +6,22 @@ import UniformTypeIdentifiers
 final class AppState: ObservableObject {
     static let shared = AppState()
 
+    @Published var paletteMode: PaletteMode?
+    @Published var bottomPane: BottomPane = .console
+    let terminal = TerminalSession()
+    @Published var closedDocuments: [URL] = []
+    @Published var splitDocumentID: UUID?
+    @Published var primarySplitDocumentID: UUID?
+    @Published var userNotice: String?
+    @Published var changedVariables: Set<String> = []
     @Published var workspace: Workspace?
     @Published var openDocuments: [Document] = []
     @Published var activeDocumentID: UUID? {
         didSet {
             guard activeDocumentID != oldValue else { return }
+            if splitDocumentID != nil, activeDocumentID != splitDocumentID {
+                primarySplitDocumentID = activeDocumentID
+            }
             rebindCellSelection(from: oldValue)
             persistSession()
         }
@@ -157,9 +168,13 @@ final class AppState: ObservableObject {
         }
     }
 
-    func toggleConsole() { setConsoleVisible(!showConsole) }
+    func toggleConsole() {
+        if !showConsole && consoleRevealPending { bottomPane = .console }
+        setConsoleVisible(!showConsole)
+    }
 
     func focusConsoleInput() {
+        bottomPane = .console
         setConsoleVisible(true)
         console.focusRequest += 1
     }
@@ -172,6 +187,7 @@ final class AppState: ObservableObject {
     func toggleVariables() { setVariablesVisible(!showVariables) }
 
     func revealConsole(force: Bool = false) {
+        if force { bottomPane = .console }
         if showConsole { return }
         if force || !consoleUserHidden {
             consoleUserHidden = false
@@ -226,7 +242,7 @@ final class AppState: ObservableObject {
     }
 
     func closeOtherDocuments(except document: Document) {
-        for other in openDocuments where other.id != document.id {
+        for other in openDocuments where other.id != document.id && !other.isPinned {
             guard closeDocument(other, persist: false) else { break }
         }
         persistSession()
@@ -276,6 +292,7 @@ final class AppState: ObservableObject {
     private func kernelStatusChanged(_ status: KernelStatus) {
         kernelStatus = status
         if status == .dead {
+            userNotice = "The Python kernel stopped unexpectedly. Restart it from the interpreter menu, then rerun the cells you need."
             clearRunningFlags()
             cancelPendingRunAll()
             variables = []
@@ -573,10 +590,20 @@ final class AppState: ObservableObject {
                 return false
             }
         }
+        if let url = document.url {
+            closedDocuments.removeAll { $0 == url }
+            closedDocuments.insert(url, at: 0)
+            closedDocuments = Array(closedDocuments.prefix(20))
+        }
+        if splitDocumentID == document.id { splitDocumentID = nil; primarySplitDocumentID = nil }
         endRunChain(in: document)
         clearDraft(for: document)
         let position = openDocuments.firstIndex { $0.id == document.id } ?? openDocuments.count
         openDocuments.removeAll { $0.id == document.id }
+        if primarySplitDocumentID == document.id {
+            primarySplitDocumentID = openDocuments.first { $0.id != splitDocumentID }?.id
+            if primarySplitDocumentID == nil { splitDocumentID = nil }
+        }
         if activeDocumentID == document.id {
             activeDocumentID = openDocuments.isEmpty
                 ? nil
@@ -634,12 +661,14 @@ final class AppState: ObservableObject {
             clearDraft(for: document)
             document.url = target
             document.isDirty = false
+            userNotice = nil
             document.fileModificationDate = fileModificationDate(of: target)
             clearDraft(for: document)
             persistSession()
             refreshWorkspace()
             return true
         } catch {
+            userNotice = "Could not save \(document.displayName): \(error.localizedDescription). Your edits are still open; try Save again or save to another location."
             appendConsole(.system, "Save failed: \(error.localizedDescription)")
             revealConsole()
             return false
@@ -708,7 +737,7 @@ final class AppState: ObservableObject {
             return
         }
         if document.url != nil && document.isDirty {
-            _ = save(document)
+            guard save(document) else { return }
         }
         revealConsole(force: true)
         appendConsole(.input, "run \(document.displayName)")
@@ -800,6 +829,7 @@ final class AppState: ObservableObject {
             return
         }
         if document.id == activeDocumentID { selectedCellID = cell.id }
+        cell.lastExecutedSource = cell.source
         cell.outputs = []
         cell.isRunning = true
         cell.isQueued = false
@@ -1159,7 +1189,10 @@ final class AppState: ObservableObject {
             switch message["type"] as? String {
             case "vars":
                 let raw = message["variables"] as? [[String: Any]] ?? []
-                self.variables = raw.compactMap { VariableInfo(dict: $0) }
+                let previous = Dictionary(uniqueKeysWithValues: self.variables.map { ($0.name, $0.summary + $0.typeName) })
+                let next = raw.compactMap { VariableInfo(dict: $0) }
+                self.changedVariables = Set(next.filter { previous[$0.name] != $0.summary + $0.typeName }.map(\.name))
+                self.variables = next
                 return true
             case "dead":
                 return true
@@ -1183,10 +1216,13 @@ final class AppState: ObservableObject {
 
     func reloadDataFrame(_ document: Document) {
         guard let name = document.dataFrameName else { return }
-        document.dataFrame = nil
+        document.dataFrameRequest += 1
+        let request = document.dataFrameRequest
         document.dataFrameError = nil
         document.isLoadingDataFrame = true
-        fetchDataFrame(name: name, offset: 0, limit: 1000) { [weak document] payload, error in
+        fetchDataFrame(name: name, offset: 0, limit: 1000, filter: document.dataFrameFilter,
+                       sortColumn: document.dataFrameSortColumn, ascending: document.dataFrameSortAscending) { [weak document] payload, error in
+            guard document?.dataFrameRequest == request else { return }
             document?.isLoadingDataFrame = false
             document?.dataFrame = payload
             document?.dataFrameError = error
@@ -1197,7 +1233,10 @@ final class AppState: ObservableObject {
         guard let name = document.dataFrameName,
               let current = document.dataFrame, !document.isLoadingDataFrame else { return }
         document.isLoadingDataFrame = true
-        fetchDataFrame(name: name, offset: current.rows.count, limit: 1000) { [weak self, weak document] payload, error in
+        let request = document.dataFrameRequest
+        fetchDataFrame(name: name, offset: current.rows.count, limit: 1000, filter: document.dataFrameFilter,
+                       sortColumn: document.dataFrameSortColumn, ascending: document.dataFrameSortAscending) { [weak self, weak document] payload, error in
+            guard document?.dataFrameRequest == request else { return }
             document?.isLoadingDataFrame = false
             if let payload {
                 document?.dataFrame?.appendPage(payload)
@@ -1207,14 +1246,17 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func fetchDataFrame(name: String, offset: Int, limit: Int,
+    private func fetchDataFrame(name: String, offset: Int, limit: Int, filter: String = "",
+                                sortColumn: Int? = nil, ascending: Bool = true,
                                 completion: @escaping (DataFramePayload?, String?) -> Void) {
         guard kernel.isRunning else {
             completion(nil, "Kernel is not running")
             return
         }
-        kernel.request(["op": "df", "name": name, "offset": offset, "limit": limit,
-                        "max_cols": 60]) { message in
+        var request: [String: Any] = ["op": "df", "name": name, "offset": offset, "limit": limit,
+                                      "max_cols": 60, "filter": filter, "ascending": ascending]
+        if let sortColumn { request["sort_column"] = sortColumn }
+        kernel.request(request) { message in
             switch message["type"] as? String {
             case "dataframe":
                 if let dict = message["payload"] as? [String: Any],
@@ -1763,6 +1805,7 @@ final class AppState: ObservableObject {
     func persistSession() {
         let files = openDocuments.filter { $0.isFileBacked }.compactMap { $0.url?.path }
         QuantaDefaults.store.set(files, forKey: "QuantaSessionFiles")
+        QuantaDefaults.store.set(openDocuments.filter(\.isPinned).compactMap { $0.url?.path }, forKey: "QuantaPinnedFiles")
         QuantaDefaults.store.set(activeDocument?.url?.path, forKey: "QuantaSessionActive")
     }
 
@@ -1770,9 +1813,11 @@ final class AppState: ObservableObject {
         guard QuantaDefaults.store.object(forKey: "QuantaReopenSession") as? Bool ?? true else { return }
         let files = QuantaDefaults.store.stringArray(forKey: "QuantaSessionFiles") ?? []
         let active = QuantaDefaults.store.string(forKey: "QuantaSessionActive")
+        let pinned = Set(QuantaDefaults.store.stringArray(forKey: "QuantaPinnedFiles") ?? [])
         for path in files where FileManager.default.fileExists(atPath: path) {
             openFile(URL(fileURLWithPath: path), recordSession: false)
         }
+        for document in openDocuments { document.isPinned = document.url.map { pinned.contains($0.path) } ?? false }
         if let active, let document = openDocuments.first(where: { $0.url?.path == active }) {
             activeDocumentID = document.id
         }
@@ -2079,61 +2124,25 @@ final class AppState: ObservableObject {
         let fileURL: URL
         let line: Int
         let preview: String
+        var cellIndex: Int? = nil
     }
 
-    func searchWorkspace(_ query: String, completion: @escaping ([FileSearchResult]) -> Void) {
-        guard let root = workspace?.rootURL, !query.isEmpty else {
-            completion([])
-            return
-        }
-        let searchable: Set<String> = ["py", "ipynb", "md", "txt", "json", "yaml", "yml",
-                                       "toml", "csv", "cfg", "ini", "sh", "rst"]
+    func searchWorkspace(_ query: String, options: WorkspaceSearchOptions = WorkspaceSearchOptions(),
+                         completion: @escaping (WorkspaceSearchReport) -> Void) {
+        guard let root = workspace?.rootURL else { completion(WorkspaceSearchReport()); return }
         DispatchQueue.global(qos: .userInitiated).async {
-            var results: [FileSearchResult] = []
-            let enumerator = FileManager.default.enumerator(
-                at: root, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
-                options: [.skipsHiddenFiles])
-            while let item = enumerator?.nextObject() as? URL {
-                if results.count >= 400 { break }
-                let name = item.lastPathComponent
-                if name == "__pycache__" || name == "node_modules" || name == "venv" {
-                    enumerator?.skipDescendants()
-                    continue
-                }
-                guard searchable.contains(item.pathExtension.lowercased()),
-                      let values = try? item.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
-                      values.isRegularFile == true,
-                      (values.fileSize ?? 0) < 8_000_000,
-                      let content = Self.searchableText(of: item) else { continue }
-                for (number, line) in content.components(separatedBy: "\n").enumerated() {
-                    if line.range(of: query, options: .caseInsensitive) != nil {
-                        results.append(FileSearchResult(
-                            fileURL: item, line: number + 1,
-                            preview: line.trimmingCharacters(in: .whitespaces).prefix(120)
-                                .description))
-                        if results.count >= 400 { break }
-                    }
-                }
-            }
-            DispatchQueue.main.async { completion(results) }
+            let result = WorkspaceSearcher.search(root: root, query: query, options: options)
+            DispatchQueue.main.async { completion(result) }
         }
-    }
-
-    private static func searchableText(of url: URL) -> String? {
-        guard url.pathExtension.lowercased() == "ipynb" else {
-            return try? String(contentsOf: url, encoding: .utf8)
-        }
-        guard let data = try? Data(contentsOf: url),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let cells = dict["cells"] as? [[String: Any]] else { return nil }
-        return cells.map { cell -> String in
-            if let lines = cell["source"] as? [String] { return lines.joined() }
-            return cell["source"] as? String ?? ""
-        }.joined(separator: "\n")
     }
 
     func openSearchResult(_ result: FileSearchResult) {
         openFile(result.fileURL)
+        if let index = result.cellIndex, let document = activeDocument,
+           let cells = document.notebook?.cells, cells.indices.contains(index) {
+            navigateTo(file: "<cell>", line: result.line, cellID: cells[index].id)
+            return
+        }
         guard result.fileURL.pathExtension.lowercased() != "ipynb" else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let document = self?.openDocuments.first(where: { $0.url == result.fileURL }),

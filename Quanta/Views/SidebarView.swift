@@ -9,6 +9,9 @@ struct SidebarView: View {
     @State private var searchedQuery: String?
     @State private var selectedFile: URL?
     @State private var searchGeneration = 0
+    @State private var searchOptions = WorkspaceSearchOptions()
+    @State private var searchReport = WorkspaceSearchReport()
+    @State private var showSearchOptions = false
 
     private var showsSearch: Bool { searching || searchedQuery != nil }
 
@@ -47,6 +50,7 @@ struct SidebarView: View {
     private var filesPane: some View {
         if let workspace = app.workspace {
             searchRow
+            if showSearchOptions { searchOptionsView }
             if showsSearch {
                 searchList
             } else {
@@ -68,6 +72,7 @@ struct SidebarView: View {
                         onSubmit: runSearch)
                 .frame(maxWidth: .infinity)
                 .frame(height: DS.Layout.slot)
+            IconButton("slider.horizontal.3", help: "Search Options", isActive: showSearchOptions) { showSearchOptions.toggle() }
         }
         .onChange(of: searchQuery) { _, value in
             if value.isEmpty {
@@ -150,53 +155,83 @@ struct SidebarView: View {
         searchGeneration += 1
         let generation = searchGeneration
         searching = true
-        app.searchWorkspace(query) { results in
+        app.searchWorkspace(query, options: searchOptions) { report in
             guard generation == searchGeneration else { return }
             searching = false
-            searchResults = results
+            searchReport = report
+            searchResults = report.results
             searchedQuery = query
         }
     }
 
+    private var searchOptionsView: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            HStack(spacing: DS.Space.s) {
+                Toggle("Aa", isOn: $searchOptions.caseSensitive).help("Match Case")
+                Toggle("Word", isOn: $searchOptions.wholeWord).help("Match Whole Word")
+                Toggle(".*", isOn: $searchOptions.regularExpression).help("Use Regular Expression")
+            }.toggleStyle(.button).controlSize(.small)
+            TextField("Include: *.py, **/*.ipynb", text: $searchOptions.include).onSubmit(runSearch)
+            TextField("Exclude: tests/**", text: $searchOptions.exclude).onSubmit(runSearch)
+        }
+        .font(.caption)
+        .padding(.horizontal, DS.Space.bar).padding(.bottom, DS.Space.s)
+        .onChange(of: searchOptions) { _, _ in if !searchQuery.isEmpty { runSearch() } }
+    }
+
     private var searchList: some View {
-        List(searchResults) { result in
-            Button {
-                app.openSearchResult(result)
-            } label: {
-                VStack(alignment: .leading, spacing: DS.Space.xxs) {
-                    HStack(spacing: DS.Space.xs) {
-                        Text(result.fileURL.lastPathComponent)
-                            .font(.callout.weight(.medium))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Text(":\(result.line)")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.tertiary)
-                    }
-                    Text(result.preview)
-                        .font(.subheadline.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        VStack(spacing: 0) {
+            HStack {
+                Text(searchReport.truncated ? "First 400 matching lines" : "\(searchResults.count) matching lines")
+                Spacer()
+                if searchReport.skippedFiles > 0 {
+                    Text("\(searchReport.skippedFiles) skipped").help("Unreadable files or files larger than 8 MB were skipped")
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, DS.Space.s)
-                .padding(.vertical, DS.Space.xs)
-                .contentShape(Rectangle())
+            }.font(.caption).foregroundStyle(.secondary).padding(DS.Space.bar)
+            List {
+                ForEach(Array(Set(searchResults.map(\.fileURL))).sorted { $0.path < $1.path }, id: \.self) { url in
+                    Section {
+                        ForEach(searchResults.filter { $0.fileURL == url }) { result in
+                            Button { app.openSearchResult(result) } label: {
+                                VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                                    Text(result.cellIndex.map { "Cell \($0 + 1) · line \(result.line)" } ?? "Line \(result.line)")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    Text(highlighted(result.preview)).font(.caption.monospaced()).lineLimit(2)
+                                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                            }.buttonStyle(.plain).help("\(url.path):\(result.line)")
+                        }
+                    } header: {
+                        Text(app.relativePath(url)).lineLimit(1).truncationMode(.middle).help(url.path)
+                    }
+                }
             }
-            .buttonStyle(.plain)
-            .hoverHighlight()
-            .help("\(result.fileURL.path):\(result.line)")
-        }
-        .listStyle(.sidebar)
-        .environment(\.defaultMinListRowHeight, DS.Layout.listRowMinHeight)
-        .overlay {
-            if searching {
-                ProgressView()
-                    .controlSize(.small)
-            } else if searchResults.isEmpty, let query = searchedQuery {
-                ContentUnavailableView.search(text: query)
+            .listStyle(.sidebar)
+            .overlay {
+                if searching { ProgressView() }
+                else if let error = searchReport.error {
+                    ContentUnavailableView("Search Error", systemImage: "exclamationmark.triangle", description: Text(error))
+                } else if searchResults.isEmpty, let query = searchedQuery {
+                    ContentUnavailableView.search(text: query)
+                }
             }
         }
+        .onChange(of: app.workspace?.rootURL) { _, _ in
+            searchGeneration += 1
+            searching = false
+            searchedQuery = nil
+            searchResults = []
+        }
+    }
+
+    private func highlighted(_ text: String) -> AttributedString {
+        var result = AttributedString(text)
+        guard let expression = try? searchOptions.expression(for: searchedQuery ?? searchQuery) else { return result }
+        for match in expression.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let range = Range(match.range, in: text), let converted = Range(range, in: result) else { continue }
+            result[converted].backgroundColor = .yellow.opacity(0.25)
+            result[converted].font = .caption.monospaced().bold()
+        }
+        return result
     }
 
     private func fileTree(_ workspace: Workspace) -> some View {

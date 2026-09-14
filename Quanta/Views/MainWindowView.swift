@@ -22,6 +22,9 @@ struct MainWindowView: View {
         }
         .navigationTitle(windowTitle)
         .navigationSubtitle(windowSubtitle)
+        .sheet(item: $app.paletteMode) { mode in
+            CommandPalette(mode: mode).environmentObject(app)
+        }
         .onAppear { app.bootstrap() }
         .onChange(of: colorScheme) { _, _ in app.pushAppearance() }
         .onChange(of: app.sidebarRevealRequest) { _, _ in
@@ -74,7 +77,7 @@ struct DetailSplitView: View {
                     PanelResizeHandle(height: $app.consoleHeight,
                                       range: DS.Layout.consoleMinHeight...maxConsole,
                                       defaultHeight: DS.Layout.consoleDefaultHeight)
-                    ConsoleView()
+                    BottomPanel()
                         .frame(height: min(max(draggedConsoleHeight ?? app.consoleHeight,
                                                DS.Layout.consoleMinHeight), maxConsole))
                         .transition(.move(edge: .bottom))
@@ -132,7 +135,7 @@ struct DetailSplitView: View {
         Button {
             app.toggleConsole()
         } label: {
-            Label("Console", systemImage: consoleGlyph)
+            Label("Bottom Panel", systemImage: consoleGlyph)
                 .foregroundStyle(consoleTint)
         }
         .help(consoleHelp)
@@ -148,8 +151,8 @@ struct DetailSplitView: View {
     }
 
     private var consoleHelp: String {
-        if app.consoleRevealPending && !app.showConsole { return "Show Console — new output (⇧⌘Y)" }
-        return app.showConsole ? "Hide Console (⇧⌘Y)" : "Show Console (⇧⌘Y)"
+        if app.consoleRevealPending && !app.showConsole { return "Show Python Console — new output (⇧⌘Y)" }
+        return app.showConsole ? "Hide Bottom Panel (⇧⌘Y)" : "Show Bottom Panel (⇧⌘Y)"
     }
 }
 
