@@ -32,6 +32,17 @@ enum DS {
     }
 
     enum Layout {
+        static let sidebarMin: CGFloat = 240
+        static let sidebarIdeal: CGFloat = 260
+        static let sidebarMax: CGFloat = 400
+        static let editorPaneMin: CGFloat = 200
+        static let executionProgressWidth: CGFloat = 64
+        static let paletteWidth: CGFloat = 580
+        static let paletteHeight: CGFloat = 390
+        static let inspectionWidth: CGFloat = 440
+        static let inspectionHeight: CGFloat = 360
+        static let tabMinWidth: CGFloat = 96
+        static let tabMaxWidth: CGFloat = 220
         static let outputMaxWidth: CGFloat = 760
         static let outputMaxHeight: CGFloat = 620
         static let consoleMinHeight: CGFloat = 100
@@ -318,6 +329,48 @@ struct IconSegments<Value: Hashable>: View {
                 }
                 .accessibilityAddTraits(segment.value == selection ? [.isSelected] : [])
             }
+        }
+    }
+}
+
+struct PanelPicker<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let values: [Value]
+    let label: (Value) -> String
+
+    init(_ title: String, selection: Binding<Value>, values: [Value], label: @escaping (Value) -> String) {
+        self.title = title
+        self._selection = selection
+        self.values = values
+        self.label = label
+    }
+
+    var body: some View {
+        Picker(title, selection: $selection) {
+            ForEach(values, id: \.self) { value in Text(label(value)).tag(value) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .accessibilityLabel(title)
+    }
+}
+
+struct PanelSearchBar: View {
+    let prompt: String
+    @Binding var text: String
+    var onSubmit: () -> Void = {}
+    var onClose: () -> Void
+    @State private var focusRequest = 1
+    @State private var handledFocusRequest = 0
+
+    var body: some View {
+        PanelBar {
+            SearchField(text: $text, prompt: prompt, focusRequest: focusRequest,
+                        handledFocusRequest: $handledFocusRequest, onSubmit: onSubmit)
+                .accessibilityLabel(prompt)
+            IconButton("xmark", help: "Close Search") { onClose() }
         }
     }
 }

@@ -886,6 +886,84 @@ final class GitSnapshotIntegrationTests: XCTestCase {
         try notebook.serializedData().write(to: root.appendingPathComponent("a.ipynb"))
     }
 
+    func testGitScopesSeparateIndexAndWorkingTreeAndNeverHideConflicts() {
+        XCTAssertTrue(GitChangeScope.all.includes(.staged))
+        XCTAssertTrue(GitChangeScope.all.includes(.unstaged))
+        XCTAssertTrue(GitChangeScope.staged.includes(.staged))
+        XCTAssertFalse(GitChangeScope.staged.includes(.unstaged))
+        XCTAssertFalse(GitChangeScope.unstaged.includes(.staged))
+        XCTAssertTrue(GitChangeScope.unstaged.includes(.unstaged))
+        for scope in GitChangeScope.allCases { XCTAssertTrue(scope.includes(.conflicted)) }
+    }
+
+    func testRemoteDiscoveryDoesNotGuessBetweenMultiplePublishTargets() throws {
+        let local = try XCTUnwrap(GitSnapshot.load(workspace: root, hideOutputOnlyNotebooks: true)).get()
+        XCTAssertTrue(local.remotes.isEmpty)
+        XCTAssertNil(local.publishRemote)
+
+        try run(["remote", "add", "team", root.appendingPathComponent("team.git").path])
+        let single = try XCTUnwrap(GitSnapshot.load(workspace: root, hideOutputOnlyNotebooks: true)).get()
+        XCTAssertEqual(single.remotes, ["team"])
+        XCTAssertEqual(single.publishRemote, "team")
+
+        try run(["remote", "add", "backup", root.appendingPathComponent("backup.git").path])
+        let multiple = try XCTUnwrap(GitSnapshot.load(workspace: root, hideOutputOnlyNotebooks: true)).get()
+        XCTAssertNil(multiple.publishRemote)
+
+        try run(["remote", "add", "origin", root.appendingPathComponent("origin.git").path])
+        let origin = try XCTUnwrap(GitSnapshot.load(workspace: root, hideOutputOnlyNotebooks: true)).get()
+        XCTAssertEqual(origin.publishRemote, "origin")
+    }
+
+    @MainActor
+    func testUnstageBeforeFirstCommitPreservesLaterWorkingTreeEdits() throws {
+        let file = root.appendingPathComponent("draft.py")
+        try "staged = 1\n".write(to: file, atomically: true, encoding: .utf8)
+        try run(["add", "--", "draft.py"])
+        try "working = 2\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let state = SourceControlState()
+        let loaded = expectation(description: "Repository loaded")
+        state.onSnapshot = { loaded.fulfill() }
+        state.setWorkspace(root)
+        wait(for: [loaded], timeout: 10)
+        state.onSnapshot = nil
+        XCTAssertFalse(state.canPush)
+        XCTAssertFalse(state.canPull)
+
+        let unstaged = expectation(description: "Initial commit changes unstaged")
+        state.unstage(paths: ["draft.py"]) { succeeded in
+            XCTAssertTrue(succeeded)
+            unstaged.fulfill()
+        }
+        wait(for: [unstaged], timeout: 10)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "working = 2\n")
+        let snapshot = try XCTUnwrap(GitSnapshot.load(workspace: root, hideOutputOnlyNotebooks: true)).get()
+        XCTAssertTrue(snapshot.staged.isEmpty)
+        XCTAssertEqual(snapshot.unstaged.map(\.path), ["draft.py"])
+    }
+
+    @MainActor
+    func testOperationFailureRemainsVisibleUntilDismissed() throws {
+        let state = SourceControlState()
+        let loaded = expectation(description: "Repository loaded")
+        state.onSnapshot = { loaded.fulfill() }
+        state.setWorkspace(root)
+        wait(for: [loaded], timeout: 10)
+        state.onSnapshot = nil
+
+        let failed = expectation(description: "Git failure reported")
+        state.stage(paths: ["missing.py"]) { succeeded in
+            XCTAssertFalse(succeeded)
+            failed.fulfill()
+        }
+        wait(for: [failed], timeout: 10)
+        XCTAssertTrue(state.operationError?.contains("Stage failed") ?? false)
+        XCTAssertFalse(state.isBusy)
+        state.dismissError()
+        XCTAssertNil(state.operationError)
+    }
+
     func testOutputOnlyNotebookChangesAreHiddenUntilSourceChanges() throws {
         try writeNotebook(source: "x = 1", executionCount: nil, outputs: [])
         try "print('hi')\n".write(to: root.appendingPathComponent("s.py"), atomically: true, encoding: .utf8)

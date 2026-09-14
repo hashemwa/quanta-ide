@@ -2,14 +2,26 @@ import AppKit
 import SwiftUI
 
 struct SourceControlPanel: View {
-    private var app: AppState { AppState.shared }
+    @ObservedObject private var app = AppState.shared
     @ObservedObject private var git = AppState.shared.git
     @ObservedObject private var draft = AppState.shared.git.draft
     @FocusState private var messageFocused: Bool
+    @State private var scope = GitChangeScope.all
+    @State private var selectedChangeID: String?
+    @State private var conflictsExpanded = true
+    @State private var stagedExpanded = true
+    @State private var changesExpanded = true
 
     var body: some View {
-        VStack(spacing: 0) { content }
+        VStack(spacing: 0) {
+            if let error = git.operationError { errorBanner(error) }
+            content
+        }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .onChange(of: git.workspace) { _, _ in
+                scope = .all
+                selectedChangeID = nil
+            }
     }
 
     @ViewBuilder
@@ -69,25 +81,66 @@ struct SourceControlPanel: View {
     @ViewBuilder
     private func repository(_ snapshot: GitSnapshot) -> some View {
         branchRow(snapshot)
+        remoteRow(snapshot)
+        commitBox(snapshot)
+        Divider()
         if snapshot.isClean {
-            Divider()
             ContentUnavailableView {
                 Label("No Changes", systemImage: "checkmark.circle")
             } description: {
-                Text("The working tree is clean.")
+                Text(snapshot.hiddenNotebooks.isEmpty
+                     ? "Your working tree is clean."
+                     : "No source changes. Notebook output changes are hidden.")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onChange(of: draft.focusRequest, initial: true) { _, value in
-                draft.handledFocusRequest = value
-            }
         } else {
-            commitBox(snapshot)
-            Divider()
+            scopeBar
             changeList(snapshot)
         }
         if !snapshot.hiddenNotebooks.isEmpty || snapshot.truncatedCount > 0 {
             footer(snapshot)
         }
+    }
+
+    private func errorBanner(_ error: String) -> some View {
+        HStack(alignment: .top, spacing: DS.Space.s) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(DS.Git.modified)
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Text(error).lineLimit(4).help(error)
+                Button("Show Details in Console") { app.focusConsoleInput() }
+                    .buttonStyle(.link)
+            }
+            Spacer(minLength: 0)
+            IconButton("xmark", help: "Dismiss Git Error") { git.dismissError() }
+        }
+        .font(.caption)
+        .padding(DS.Space.bar)
+        .background(DS.Git.modified.opacity(0.1))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func remoteRow(_ snapshot: GitSnapshot) -> some View {
+        PanelBar(rule: .none) {
+            Text(snapshot.isDetached ? "Detached HEAD" : snapshot.upstream ?? (snapshot.remotes.isEmpty ? "Local · no remote" : "Branch not published"))
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                .help(snapshot.upstream.map { "Tracking \($0). Counts reflect the last fetch." } ?? "Create an upstream to track a remote branch")
+            Spacer(minLength: DS.Space.s)
+            if !snapshot.remotes.isEmpty {
+                IconButton("arrow.clockwise", help: "Fetch Remote Changes") { app.fetch() }.disabled(!git.canFetch)
+                if snapshot.upstream != nil {
+                    IconButton("arrow.down", help: "Pull Changes") { app.pull() }.disabled(!git.canPull)
+                }
+                IconButton("arrow.up", help: pushHelp(snapshot)) { app.push() }.disabled(!git.canPush)
+            }
+        }
+    }
+
+    private func pushHelp(_ snapshot: GitSnapshot) -> String {
+        if !snapshot.hasCommits { return "Create a commit before publishing" }
+        if let upstream = snapshot.upstream { return "Push commits to \(upstream)" }
+        if let remote = snapshot.publishRemote { return "Publish this branch to \(remote)" }
+        return "Configure an upstream or an origin remote before publishing"
     }
 
     private func branchRow(_ snapshot: GitSnapshot) -> some View {
@@ -125,6 +178,8 @@ struct SourceControlPanel: View {
             }
             .disabled(git.isBusy)
             Spacer(minLength: DS.Space.s)
+            Text(snapshot.root.lastPathComponent)
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(snapshot.root.path)
             branchTrailing(snapshot)
         }
     }
@@ -174,7 +229,7 @@ struct SourceControlPanel: View {
 
     private func commitBox(_ snapshot: GitSnapshot) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
-            TextField("Message", text: $draft.message, axis: .vertical)
+            TextField("Commit message", text: $draft.message, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.callout)
                 .lineLimit(DS.Layout.commitLines)
@@ -182,19 +237,26 @@ struct SourceControlPanel: View {
                 .padding(.vertical, DS.Space.xs)
                 .inputCard(focused: messageFocused)
                 .focused($messageFocused)
-                .onSubmit { app.commit() }
+                .accessibilityLabel("Commit message")
                 .onChange(of: draft.focusRequest, initial: true) { _, value in
                     guard value != draft.handledFocusRequest else { return }
                     draft.handledFocusRequest = value
                     DispatchQueue.main.async { messageFocused = true }
                 }
-            HStack(spacing: DS.Space.s) {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
                 Text(commitSummary(snapshot))
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                Spacer(minLength: DS.Space.s)
-                Button("Commit") { app.commit() }
+                    .foregroundStyle(snapshot.conflicted.isEmpty ? Color.secondary : DS.Git.removed)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { app.commit() } label: {
+                    HStack(spacing: DS.Space.s) {
+                        Image(systemName: "checkmark")
+                        Text(snapshot.staged.isEmpty && !snapshot.unstaged.isEmpty ? "Stage All & Commit" : "Commit Staged")
+                        Spacer(minLength: 0)
+                        Text("⌥⌘↩").foregroundStyle(.secondary).fixedSize()
+                    }
+                    .frame(maxWidth: .infinity)
+                }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(!canCommit(snapshot))
@@ -214,8 +276,10 @@ struct SourceControlPanel: View {
 
     private func commitHelp(_ snapshot: GitSnapshot) -> String {
         if !snapshot.conflicted.isEmpty { return "Resolve the conflicts before committing" }
-        if snapshot.staged.isEmpty { return "Stage and commit all changes (↩ in the message field)" }
-        return "Commit the staged changes (↩ in the message field)"
+        if snapshot.isClean { return "Make changes before committing" }
+        if draft.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Enter a commit message" }
+        if snapshot.staged.isEmpty { return "Stage and commit all changes, including unstaged files outside the selected view (⌥⌘↩)" }
+        return "Commit only the staged changes (⌥⌘↩)"
     }
 
     private func commitSummary(_ snapshot: GitSnapshot) -> String {
@@ -224,21 +288,37 @@ struct SourceControlPanel: View {
             return "\(count) conflict\(count == 1 ? "" : "s") to resolve"
         }
         if !snapshot.staged.isEmpty {
-            return "\(snapshot.staged.count) staged"
+            let staged = snapshot.staged.count
+            let remaining = snapshot.unstaged.count
+            return "\(staged) staged file\(staged == 1 ? "" : "s")"
+                + (remaining > 0 ? " · \(remaining) unstaged, excluded" : " ready to commit")
         }
         if !snapshot.unstaged.isEmpty {
             let count = snapshot.unstaged.count
-            return "all \(count) change\(count == 1 ? "" : "s")"
+            return "\(count) file\(count == 1 ? "" : "s") · stages all changes"
         }
-        return ""
+        return "No changes to commit."
+    }
+
+    private var scopeBar: some View {
+        PanelBar(rule: .none) {
+            PanelPicker("Show Changes", selection: $scope, values: GitChangeScope.allCases) { $0.rawValue }
+                .fixedSize()
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func filtered(_ changes: [GitChange]) -> [GitChange] {
+        changes.filter { scope.includes($0.area) }
     }
 
     private func changeList(_ snapshot: GitSnapshot) -> some View {
-        List {
-            if !snapshot.conflicted.isEmpty {
-                Section {
-                    ForEach(snapshot.conflicted) { change in
+        List(selection: $selectedChangeID) {
+            if !filtered(snapshot.conflicted).isEmpty {
+                Section(isExpanded: $conflictsExpanded) {
+                    ForEach(filtered(snapshot.conflicted)) { change in
                         GitChangeRow(change: change)
+                            .tag(change.id)
                     }
                 } header: {
                     ChangeSectionHeader(title: "Conflicts", count: snapshot.conflicted.count) {
@@ -249,10 +329,11 @@ struct SourceControlPanel: View {
                     }
                 }
             }
-            if !snapshot.staged.isEmpty {
-                Section {
-                    ForEach(snapshot.staged) { change in
+            if !filtered(snapshot.staged).isEmpty {
+                Section(isExpanded: $stagedExpanded) {
+                    ForEach(filtered(snapshot.staged)) { change in
                         GitChangeRow(change: change)
+                            .tag(change.id)
                     }
                 } header: {
                     ChangeSectionHeader(title: "Staged Changes", count: snapshot.staged.count) {
@@ -263,13 +344,14 @@ struct SourceControlPanel: View {
                     }
                 }
             }
-            if !snapshot.unstaged.isEmpty {
-                Section {
-                    ForEach(snapshot.unstaged) { change in
+            if !filtered(snapshot.unstaged).isEmpty {
+                Section(isExpanded: $changesExpanded) {
+                    ForEach(filtered(snapshot.unstaged)) { change in
                         GitChangeRow(change: change)
+                            .tag(change.id)
                     }
                 } header: {
-                    ChangeSectionHeader(title: "Changes", count: snapshot.unstaged.count) {
+                    ChangeSectionHeader(title: "Unstaged Changes", count: snapshot.unstaged.count) {
                         IconButton("arrow.uturn.backward", help: "Discard All Changes…") {
                             app.discardAllChanges()
                         }
@@ -284,6 +366,32 @@ struct SourceControlPanel: View {
         }
         .listStyle(.sidebar)
         .environment(\.defaultMinListRowHeight, DS.Layout.listRowMinHeight)
+        .overlay {
+            if filtered(snapshot.visibleChanges).isEmpty {
+                ContentUnavailableView {
+                    Label("No \(scope.rawValue) Changes", systemImage: "checkmark.circle")
+                } description: {
+                    Text(scope == .staged ? "Stage files to include them in your next commit." : "All your changes have been staged.")
+                } actions: {
+                    Button("Show All Changes") { scope = .all }
+                }
+            }
+        }
+        .onChange(of: selectedChangeID) { _, id in
+            guard let change = snapshot.visibleChanges.first(where: { $0.id == id }) else { return }
+            if app.activeDocument?.diffSource != DiffSource(change: change) {
+                app.openDiff(for: change)
+            }
+        }
+        .onChange(of: app.activeDocument?.diffSource, initial: true) { _, source in
+            selectedChangeID = snapshot.visibleChanges.first { DiffSource(change: $0) == source }?.id
+        }
+        .onChange(of: scope) { _, _ in
+            selectedChangeID = nil
+            conflictsExpanded = true
+            stagedExpanded = true
+            changesExpanded = true
+        }
     }
 
     private func footer(_ snapshot: GitSnapshot) -> some View {
@@ -353,22 +461,22 @@ struct SourceControlMenuItems: View {
 
     var body: some View {
         Button("Fetch") { app.fetch() }
-            .disabled(git.isBusy)
+            .disabled(!git.canFetch)
         Button("Pull") { app.pull() }
-            .disabled(git.isBusy)
+            .disabled(!git.canPull)
         Button("Push") { app.push() }
-            .disabled(git.isBusy)
+            .disabled(!git.canPush)
         Divider()
         Button("Stage All Changes") { app.stageAllChanges() }
-            .disabled(git.snapshot?.unstaged.isEmpty ?? true)
+            .disabled(git.isBusy || (git.snapshot?.unstaged.isEmpty ?? true))
         Button("Unstage All Changes") { app.unstageAllChanges() }
-            .disabled(git.snapshot?.staged.isEmpty ?? true)
+            .disabled(git.isBusy || (git.snapshot?.staged.isEmpty ?? true))
         Button("Mark All Resolved") { app.markAllResolved() }
-            .disabled(git.snapshot?.conflicted.isEmpty ?? true)
+            .disabled(git.isBusy || (git.snapshot?.conflicted.isEmpty ?? true))
         Button("Discard All Changes…", role: .destructive) { app.discardAllChanges() }
-            .disabled(git.snapshot?.unstaged.isEmpty ?? true)
+            .disabled(git.isBusy || (git.snapshot?.unstaged.isEmpty ?? true))
         Button("Discard Output-Only Changes…", role: .destructive) { app.discardOutputOnlyChanges() }
-            .disabled(git.snapshot?.hiddenNotebooks.isEmpty ?? true)
+            .disabled(git.isBusy || (git.snapshot?.hiddenNotebooks.isEmpty ?? true))
         Divider()
         Button("New Branch…") { app.createBranch() }
             .disabled(git.isBusy)
@@ -379,8 +487,7 @@ private struct ChangeSectionHeader<Actions: View>: View {
     let title: String
     let count: Int
     @ViewBuilder var actions: Actions
-    @State private var hovering = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var git = AppState.shared.git
 
     init(title: String, count: Int, @ViewBuilder actions: () -> Actions) {
         self.title = title
@@ -390,83 +497,69 @@ private struct ChangeSectionHeader<Actions: View>: View {
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
-            Text(title)
+            Text(title).lineLimit(1)
+            Text("\(count)")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, DS.Space.xs)
+                .background(.quaternary, in: Capsule())
+                .fixedSize()
             Spacer(minLength: DS.Space.xs)
-            ZStack(alignment: .trailing) {
-                Text("\(count)")
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-                    .opacity(hovering ? 0 : 1)
-                HStack(spacing: 0) { actions }
-                    .opacity(hovering ? 1 : 0)
-                    .allowsHitTesting(hovering)
-            }
-            .frame(width: DS.Layout.rowActionSlot, alignment: .trailing)
-            .animation(reduceMotion ? nil : DS.Motion.hover, value: hovering)
+            HStack(spacing: 0) { actions }
+                .disabled(git.isBusy)
         }
         .contentShape(Rectangle())
-        .scrollAwareHover($hovering)
     }
 }
 
 struct GitChangeRow: View {
     let change: GitChange
     private var app: AppState { AppState.shared }
+    @ObservedObject private var git = AppState.shared.git
     @State private var hovering = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var color: Color { DS.Git.color(for: change.status) }
 
     var body: some View {
-        Button {
-            app.openDiff(for: change)
-        } label: {
-            HStack(spacing: DS.Space.s) {
-                Label {
-                    HStack(spacing: DS.Space.xs) {
-                        Text(change.fileName)
-                            .strikethrough(change.status == .deleted)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if !change.directory.isEmpty {
-                            Text(change.directory)
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                                .truncationMode(.head)
-                        }
-                    }
-                } icon: {
-                    Image(systemName: FileNode.iconName(forExtension: change.url.pathExtension))
+        HStack(spacing: DS.Space.s) {
+            Image(systemName: FileNode.iconName(forExtension: change.url.pathExtension))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                Text(change.fileName)
+                    .strikethrough(change.status == .deleted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let original = change.originalPath {
+                    Text("\(original) → \(change.path)")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else if !change.directory.isEmpty {
+                    Text(change.directory)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
                 }
-                Spacer(minLength: DS.Space.xs)
-                trailing
             }
-            .frame(minHeight: DS.Layout.listRowMinHeight)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .hoverHighlight()
-        .scrollAwareHover($hovering)
-        .help("\(change.status.label) · \(change.path)")
-        .contextMenu { menuItems }
-    }
-
-    private var trailing: some View {
-        ZStack(alignment: .trailing) {
+            .frame(maxWidth: .infinity, alignment: .leading)
             Text(change.status.letter)
                 .font(.caption.monospaced().weight(.semibold))
                 .foregroundStyle(color)
+                .frame(width: DS.Layout.statusSlot)
                 .help(change.status.label)
-                .frame(width: DS.Layout.statusSlot, alignment: .trailing)
-                .opacity(hovering ? 0 : 1)
+                .accessibilityLabel(change.status.label)
             HStack(spacing: 0) { actions }
-                .opacity(hovering ? 1 : 0)
-                .allowsHitTesting(hovering)
+                .disabled(git.isBusy)
         }
-        .frame(width: DS.Layout.rowActionSlot, alignment: .trailing)
-        .animation(reduceMotion ? nil : DS.Motion.hover, value: hovering)
+        .frame(minHeight: DS.Layout.listRowMinHeight)
+        .contentShape(Rectangle())
+        .scrollAwareHover($hovering)
+        .help("\(change.area.label) · \(change.status.label) · \(change.path)")
+        .contextMenu { menuItems }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(change.fileName), \(change.area.label), \(change.status.label)")
     }
 
     @ViewBuilder
@@ -477,6 +570,9 @@ struct GitChangeRow: View {
                        help: change.status == .untracked ? "Move to Trash…" : "Discard Changes…") {
                 app.discardChanges(change)
             }
+            .opacity(hovering ? 1 : 0)
+            .allowsHitTesting(hovering)
+            .accessibilityHidden(!hovering)
             IconButton("plus", help: "Stage Changes") { app.stage(change) }
         case .staged:
             IconButton("minus", help: "Unstage Changes") { app.unstage(change) }

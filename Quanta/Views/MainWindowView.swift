@@ -8,7 +8,7 @@ struct MainWindowView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 180, ideal: 230, max: 400)
+                .navigationSplitViewColumnWidth(min: DS.Layout.sidebarMin, ideal: DS.Layout.sidebarIdeal, max: DS.Layout.sidebarMax)
         } detail: {
             DetailSplitView()
         }

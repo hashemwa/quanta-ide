@@ -211,23 +211,27 @@ struct QuantaCommands: Commands {
             Button("Commit…") { app.focusCommitMessage() }
                 .keyboardShortcut("c", modifiers: [.command, .control])
                 .disabled(git.availability != .ready || (git.snapshot?.isClean ?? true))
+            Button("Commit Changes") { app.commit() }
+                .keyboardShortcut(.return, modifiers: [.command, .option])
+                .disabled(git.isBusy || (git.snapshot?.isClean ?? true)
+                          || !(git.snapshot?.conflicted.isEmpty ?? true))
             Button("Stage All Changes") { app.stageAllChanges() }
-                .disabled(git.snapshot?.unstaged.isEmpty ?? true)
+                .disabled(git.isBusy || (git.snapshot?.unstaged.isEmpty ?? true))
             Button("Unstage All Changes") { app.unstageAllChanges() }
-                .disabled(git.snapshot?.staged.isEmpty ?? true)
+                .disabled(git.isBusy || (git.snapshot?.staged.isEmpty ?? true))
             Button("Mark All Resolved") { app.markAllResolved() }
-                .disabled(git.snapshot?.conflicted.isEmpty ?? true)
+                .disabled(git.isBusy || (git.snapshot?.conflicted.isEmpty ?? true))
             Button("Discard All Changes…", role: .destructive) { app.discardAllChanges() }
-                .disabled(git.snapshot?.unstaged.isEmpty ?? true)
+                .disabled(git.isBusy || (git.snapshot?.unstaged.isEmpty ?? true))
             Button("Discard Output-Only Changes…", role: .destructive) { app.discardOutputOnlyChanges() }
-                .disabled(git.snapshot?.hiddenNotebooks.isEmpty ?? true)
+                .disabled(git.isBusy || (git.snapshot?.hiddenNotebooks.isEmpty ?? true))
             Divider()
             Button("Fetch") { app.fetch() }
-                .disabled(git.availability != .ready || git.isBusy)
+                .disabled(!git.canFetch)
             Button("Pull") { app.pull() }
-                .disabled(git.availability != .ready || git.isBusy)
+                .disabled(!git.canPull)
             Button("Push") { app.push() }
-                .disabled(git.availability != .ready || git.isBusy)
+                .disabled(!git.canPush)
             Divider()
             Button("New Branch…") { app.createBranch() }
                 .disabled(git.availability != .ready || git.isBusy)

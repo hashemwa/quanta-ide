@@ -50,6 +50,7 @@ final class SourceControlState: ObservableObject {
     @Published private(set) var snapshot: GitSnapshot?
     @Published private(set) var isRefreshing = false
     @Published private(set) var activeOperation: String?
+    @Published private(set) var operationError: String?
     let draft = CommitDraft()
 
     var onFailure: ((String, String) -> Void)?
@@ -65,11 +66,18 @@ final class SourceControlState: ObservableObject {
     }
 
     var isBusy: Bool { activeOperation != nil }
+    var canFetch: Bool { !isBusy && !(snapshot?.remotes.isEmpty ?? true) }
+    var canPull: Bool { canFetch && snapshot?.upstream != nil && snapshot?.isDetached == false }
+    var canPush: Bool {
+        canFetch && snapshot?.hasCommits == true && snapshot?.isDetached == false
+            && (snapshot?.upstream != nil || snapshot?.publishRemote != nil)
+    }
 
     func setWorkspace(_ url: URL?) {
         workspace = url
         generation += 1
         snapshot = nil
+        operationError = nil
         draft.message = ""
         if url == nil {
             availability = .noWorkspace
@@ -105,7 +113,7 @@ final class SourceControlState: ObservableObject {
                         self.availability = .ready
                     case .failure(let error):
                         self.availability = self.snapshot == nil ? .failed(error.message) : .ready
-                        self.onFailure?("Refresh", error.message)
+                        self.reportFailure("Refresh", error.message)
                     }
                     self.onSnapshot?()
                 }
@@ -119,17 +127,22 @@ final class SourceControlState: ObservableObject {
 
     func perform(_ verb: String, progress: String, completion: ((Bool) -> Void)? = nil,
                  _ work: @escaping (URL) -> GitCommandResult) {
-        guard let root = snapshot?.root else {
+        guard !isBusy, let root = snapshot?.root else {
             completion?(false)
             return
         }
         beginOperation(progress)
+        let gen = generation
         GitClient.queue.async { [weak self] in
             let result = work(root)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.endOperation()
-                if !result.succeeded { self.onFailure?(verb, result.failureMessage) }
+                guard self.generation == gen else {
+                    completion?(false)
+                    return
+                }
+                if !result.succeeded { self.reportFailure(verb, result.failureMessage) }
                 self.refresh()
                 completion?(result.succeeded)
             }
@@ -137,8 +150,18 @@ final class SourceControlState: ObservableObject {
     }
 
     private func beginOperation(_ progress: String) {
+        operationError = nil
         operationsInFlight += 1
         activeOperation = progress
+    }
+
+    func dismissError() {
+        operationError = nil
+    }
+
+    private func reportFailure(_ verb: String, _ message: String) {
+        operationError = "\(verb) failed: \(message)"
+        onFailure?(verb, message)
     }
 
     private func endOperation() {
@@ -161,8 +184,10 @@ final class SourceControlState: ObservableObject {
             completion?(false)
             return
         }
+        let hasCommits = snapshot?.hasCommits ?? false
         perform("Unstage", progress: "Unstaging…", completion: completion) { root in
-            GitClient.run(["reset", "-q", "--"] + GitClient.literalPathspecs(paths), in: root)
+            let arguments = hasCommits ? ["reset", "-q", "--"] : ["rm", "--cached", "-r", "-f", "--"]
+            return GitClient.run(arguments + GitClient.literalPathspecs(paths), in: root)
         }
     }
 
@@ -183,23 +208,27 @@ final class SourceControlState: ObservableObject {
     }
 
     func fetch() {
+        guard canFetch else { return }
         perform("Fetch", progress: "Fetching…") { root in
             GitClient.run(["fetch", "--prune"], in: root)
         }
     }
 
     func pull() {
+        guard canPull else { return }
         perform("Pull", progress: "Pulling…") { root in
             GitClient.run(["pull"], in: root)
         }
     }
 
     func push() {
+        guard canPush else { return }
         let hasUpstream = snapshot?.upstream != nil
+        let remote = snapshot?.publishRemote ?? "origin"
         perform("Push", progress: "Pushing…") { root in
             hasUpstream
                 ? GitClient.run(["push"], in: root)
-                : GitClient.run(["push", "-u", "origin", "HEAD"], in: root)
+                : GitClient.run(["push", "-u", remote, "HEAD"], in: root)
         }
     }
 
@@ -216,7 +245,7 @@ final class SourceControlState: ObservableObject {
     }
 
     func initializeRepository() {
-        guard let workspace, GitClient.executable != nil else { return }
+        guard !isBusy, let workspace, GitClient.executable != nil else { return }
         let gen = generation
         beginOperation("Initializing…")
         GitClient.queue.async { [weak self] in
@@ -224,10 +253,10 @@ final class SourceControlState: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.endOperation()
-                if !result.succeeded {
-                    self.onFailure?("Initialize Repository", result.failureMessage)
-                }
                 guard self.generation == gen else { return }
+                if !result.succeeded {
+                    self.reportFailure("Initialize Repository", result.failureMessage)
+                }
                 self.refresh()
             }
         }
@@ -238,7 +267,7 @@ extension AppState {
     func configureSourceControl() {
         git.onFailure = { [weak self] verb, message in
             self?.appendConsole(.system, "\(verb) failed: \(message)")
-            self?.revealConsole()
+            if self?.sidebarPane != .sourceControl { self?.revealConsole() }
         }
         git.onSnapshot = { [weak self] in
             self?.reloadDiffDocuments()
@@ -301,6 +330,7 @@ extension AppState {
     }
 
     func discardChanges(_ change: GitChange) {
+        guard !git.isBusy else { return }
         let name = change.fileName
         let dirty = hasDirtyTab(for: [change])
         if change.status == .untracked {
@@ -324,7 +354,7 @@ extension AppState {
     }
 
     func discardAllChanges() {
-        guard let snapshot = git.snapshot, !snapshot.unstaged.isEmpty else { return }
+        guard !git.isBusy, let snapshot = git.snapshot, !snapshot.unstaged.isEmpty else { return }
         let count = snapshot.unstaged.count
         let dirty = hasDirtyTab(for: snapshot.unstaged)
         confirmDestructive(
@@ -337,7 +367,7 @@ extension AppState {
     }
 
     func discardOutputOnlyChanges() {
-        guard let snapshot = git.snapshot, !snapshot.hiddenNotebooks.isEmpty else { return }
+        guard !git.isBusy, let snapshot = git.snapshot, !snapshot.hiddenNotebooks.isEmpty else { return }
         let count = snapshot.hiddenNotebooks.count
         confirmDestructive(
             title: "Discard output changes in \(count) notebook\(count == 1 ? "" : "s")?",
@@ -348,6 +378,7 @@ extension AppState {
     }
 
     private func performDiscard(_ changes: [GitChange], reloadDirty: Bool) {
+        guard !git.isBusy else { return }
         for change in changes where change.status == .untracked {
             do {
                 try FileManager.default.trashItem(at: change.url, resultingItemURL: nil)
@@ -391,7 +422,9 @@ extension AppState {
         }
         let finish: () -> Void = { [weak self] in
             self?.git.commit(message: message) { [weak self] succeeded in
-                if succeeded { self?.git.draft.message = "" }
+                if succeeded, self?.git.draft.message.trimmingCharacters(in: .whitespacesAndNewlines) == message {
+                    self?.git.draft.message = ""
+                }
             }
         }
         if snapshot.staged.isEmpty {

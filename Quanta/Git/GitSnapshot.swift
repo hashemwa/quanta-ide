@@ -1,5 +1,16 @@
 import Foundation
 
+enum GitChangeScope: String, CaseIterable {
+    case all = "All"
+    case staged = "Staged"
+    case unstaged = "Unstaged"
+
+    func includes(_ area: GitChange.Area) -> Bool {
+        area == .conflicted || self == .all || (self == .staged && area == .staged)
+            || (self == .unstaged && area == .unstaged)
+    }
+}
+
 struct GitChange: Identifiable, Hashable {
     enum Area: Hashable {
         case staged
@@ -77,6 +88,7 @@ struct GitSnapshot {
     let behind: Int
     let hasCommits: Bool
     let branches: [String]
+    let remotes: [String]
     let staged: [GitChange]
     let unstaged: [GitChange]
     let conflicted: [GitChange]
@@ -88,6 +100,10 @@ struct GitSnapshot {
     var isClean: Bool { staged.isEmpty && unstaged.isEmpty && conflicted.isEmpty }
     var visibleChanges: [GitChange] { conflicted + staged + unstaged }
     var changedPathCount: Int { statusByPath.count }
+    var publishRemote: String? {
+        if remotes.contains("origin") { return "origin" }
+        return remotes.count == 1 ? remotes.first : nil
+    }
 
     var headDescription: String {
         if isDetached {
@@ -127,6 +143,8 @@ struct GitSnapshot {
         let branches = refs.succeeded
             ? refs.text.split(separator: "\n").map { String($0) }.filter { !$0.isEmpty }
             : []
+        let remoteResult = GitClient.run(["remote"], in: root)
+        let remotes = remoteResult.succeeded ? remoteResult.text.split(separator: "\n").map(String.init) : []
 
         func fileURL(for path: String) -> URL {
             if prefix.isEmpty { return workspace.appendingPathComponent(path) }
@@ -203,6 +221,7 @@ struct GitSnapshot {
             behind: header.behind,
             hasCommits: header.oid != nil && header.oid != "(initial)",
             branches: branches,
+            remotes: remotes,
             staged: staged,
             unstaged: unstaged,
             conflicted: conflicted,
