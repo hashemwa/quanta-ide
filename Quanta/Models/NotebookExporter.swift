@@ -25,12 +25,13 @@ enum NotebookExporter {
         return parts.joined(separator: "\n\n") + "\n"
     }
 
-    static func html(from notebook: Notebook, title: String) -> String {
+    static func html(from notebook: Notebook, title: String, baseDirectory: URL? = nil) -> String {
         var body = ""
         for cell in notebook.cells {
             switch cell.cellType {
             case .markdown:
-                body += "<div class=\"md\">\(markdownToHTML(cell.source))</div>\n"
+                let attachments = Notebook.attachmentData(cell.extraKeys["attachments"])
+                body += "<div class=\"md\">\(markdownToHTML(cell.source, attachments: attachments, baseDirectory: baseDirectory))</div>\n"
             case .code:
                 let count = cell.executionCount.map(String.init) ?? " "
                 body += "<div class=\"cell\"><div class=\"prompt\">[\(count)]</div>"
@@ -56,6 +57,7 @@ enum NotebookExporter {
         .err { color: #d70015; background: #fff1f0; margin-left: 42px; }
         img { max-width: 100%; margin: 8px 0 8px 42px; }
         .md { margin-top: 18px; line-height: 1.5; }
+        .md img { margin: 8px 0; }
         .md code { background: #f5f5f7; padding: 1px 5px; border-radius: 4px;
                    font: 12px ui-monospace, monospace; }
         h1, h2, h3 { margin: 18px 0 6px; }
@@ -93,7 +95,9 @@ enum NotebookExporter {
         }
     }
 
-    static func markdownToHTML(_ source: String) -> String {
+    static func markdownToHTML(_ source: String,
+                               attachments: [String: Data] = [:],
+                               baseDirectory: URL? = nil) -> String {
         var html = ""
         var inCodeFence = false
         var inList = false
@@ -116,6 +120,11 @@ enum NotebookExporter {
                 closeList()
                 continue
             }
+            if MarkdownView.imageMarkup(in: line, wholeLine: true) != nil {
+                closeList()
+                html += imageTag(from: line, attachments: attachments, baseDirectory: baseDirectory) + "\n"
+                continue
+            }
             var content = line
             var wrapper = "p"
             let hashes = line.prefix { $0 == "#" }.count
@@ -124,28 +133,66 @@ enum NotebookExporter {
                 content = String(line.dropFirst(hashes + 1))
             } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
                 if !inList { html += "<ul>\n"; inList = true }
-                html += "<li>\(inline(String(line.dropFirst(2))))</li>\n"
+                html += "<li>\(inline(String(line.dropFirst(2)), attachments: attachments, baseDirectory: baseDirectory))</li>\n"
                 continue
             }
             closeList()
-            html += "<\(wrapper)>\(inline(content))</\(wrapper)>\n"
+            html += "<\(wrapper)>\(inline(content, attachments: attachments, baseDirectory: baseDirectory))</\(wrapper)>\n"
         }
         closeList()
         if inCodeFence { html += "</code></pre>\n" }
         return html
     }
 
-    private static func inline(_ text: String) -> String {
+    private static func inline(_ text: String,
+                               attachments: [String: Data] = [:],
+                               baseDirectory: URL? = nil) -> String {
         var out = ""
-        var rest = Substring(escape(text))
+        var rest = Substring(text)
         while let open = rest.firstIndex(of: "`"),
               let close = rest[rest.index(after: open)...].firstIndex(of: "`") {
-            out += emphasis(String(rest[..<open]))
-            out += "<code>" + String(rest[rest.index(after: open)..<close]) + "</code>"
+            out += decorated(String(rest[..<open]), attachments: attachments, baseDirectory: baseDirectory)
+            out += "<code>" + escape(String(rest[rest.index(after: open)..<close])) + "</code>"
             rest = rest[rest.index(after: close)...]
         }
-        out += emphasis(String(rest))
+        out += decorated(String(rest), attachments: attachments, baseDirectory: baseDirectory)
         return out
+    }
+
+    private static func decorated(_ text: String,
+                                  attachments: [String: Data],
+                                  baseDirectory: URL?) -> String {
+        var out = ""
+        for segment in MarkdownView.splitInlineMath(text) {
+            switch segment {
+            case .text(let s):
+                out += emphasis(escape(s))
+            case .math(let tex):
+                out += "$" + escape(tex) + "$"
+            case .image(let alt, let url):
+                out += imageTag(alt: alt, url: url, attachments: attachments, baseDirectory: baseDirectory)
+            }
+        }
+        return out
+    }
+
+    private static func imageTag(from line: String,
+                                 attachments: [String: Data],
+                                 baseDirectory: URL?) -> String {
+        guard let markup = MarkdownView.imageMarkup(in: line, wholeLine: true) else {
+            return "<p>\(inline(line, attachments: attachments, baseDirectory: baseDirectory))</p>"
+        }
+        return imageTag(alt: markup.alt, url: markup.url, attachments: attachments, baseDirectory: baseDirectory)
+    }
+
+    private static func imageTag(alt: String, url: String,
+                                 attachments: [String: Data],
+                                 baseDirectory: URL?) -> String {
+        let altEsc = escape(alt)
+        if let data = MarkdownView.imageData(url: url, attachments: attachments, baseDirectory: baseDirectory) {
+            return "<img alt=\"\(altEsc)\" src=\"\(MarkdownView.dataURI(for: data))\">"
+        }
+        return altEsc.isEmpty ? escape(url) : altEsc
     }
 
     private static func emphasis(_ text: String) -> String {

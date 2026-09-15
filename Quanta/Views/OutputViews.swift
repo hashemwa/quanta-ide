@@ -190,11 +190,13 @@ enum MarkdownBlock: Equatable {
     case bullet(String)
     case paragraph(String)
     case math(String)
+    case image(alt: String, url: String)
 }
 
 enum InlineMarkdownSegment: Equatable {
     case text(String)
     case math(String)
+    case image(alt: String, url: String)
 }
 
 enum MathPalette {
@@ -206,6 +208,8 @@ enum MathPalette {
 struct MarkdownView: View {
     let source: String
     var selectable = true
+    var attachments: [String: Data] = [:]
+    var baseDirectory: URL? = nil
     @Environment(\.monoFontSize) private var monoSize
 
     private static var parseCache: [String: [MarkdownBlock]] = [:]
@@ -294,6 +298,11 @@ struct MarkdownView: View {
                 }
                 continue
             }
+            if let image = imageMarkup(in: trimmed, wholeLine: true) {
+                flushParagraph()
+                result.append(.image(alt: image.alt, url: image.url))
+                continue
+            }
             if trimmed.isEmpty {
                 flushParagraph()
                 continue
@@ -318,6 +327,50 @@ struct MarkdownView: View {
         return result
     }
 
+    static func imageMarkup(in text: String, wholeLine: Bool) -> (alt: String, url: String)? {
+        let chars = Array(text)
+        guard let parsed = markdownImage(in: chars, at: 0) else { return nil }
+        if wholeLine {
+            var end = parsed.end
+            while end < chars.count, chars[end].isWhitespace { end += 1 }
+            guard end == chars.count else { return nil }
+        }
+        return (parsed.alt, parsed.url)
+    }
+
+    static func markdownImage(in chars: [Character], at i: Int)
+        -> (alt: String, url: String, end: Int)? {
+        guard i + 1 < chars.count, chars[i] == "!", chars[i + 1] == "[" else { return nil }
+        var j = i + 2
+        var alt = ""
+        while j < chars.count {
+            if chars[j] == "\n" { return nil }
+            if chars[j] == "]" { break }
+            alt.append(chars[j])
+            j += 1
+        }
+        guard j < chars.count, chars[j] == "]" else { return nil }
+        j += 1
+        guard j < chars.count, chars[j] == "(" else { return nil }
+        j += 1
+        while j < chars.count, chars[j].isWhitespace { j += 1 }
+        var url = ""
+        while j < chars.count, chars[j] != ")", !chars[j].isWhitespace {
+            url.append(chars[j])
+            j += 1
+        }
+        while j < chars.count, chars[j].isWhitespace { j += 1 }
+        if j < chars.count, chars[j] == "\"" {
+            j += 1
+            while j < chars.count, chars[j] != "\"" { j += 1 }
+            guard j < chars.count else { return nil }
+            j += 1
+            while j < chars.count, chars[j].isWhitespace { j += 1 }
+        }
+        guard j < chars.count, chars[j] == ")", !url.isEmpty else { return nil }
+        return (alt, url, j + 1)
+    }
+
     static func splitInlineMath(_ text: String) -> [InlineMarkdownSegment] {
         var segments: [InlineMarkdownSegment] = []
         var current = ""
@@ -327,6 +380,15 @@ struct MarkdownView: View {
             if chars[i] == "\\", i + 1 < chars.count, chars[i + 1] == "$" {
                 current.append("$")
                 i += 2
+                continue
+            }
+            if chars[i] == "!", let parsed = markdownImage(in: chars, at: i) {
+                if !current.isEmpty {
+                    segments.append(.text(current))
+                    current = ""
+                }
+                segments.append(.image(alt: parsed.alt, url: parsed.url))
+                i = parsed.end
                 continue
             }
             if chars[i] == "$" {
@@ -361,6 +423,66 @@ struct MarkdownView: View {
         return segments
     }
 
+    static func imageData(url: String, attachments: [String: Data], baseDirectory: URL?) -> Data? {
+        let trimmed = url.trimmingCharacters(in: .whitespaces)
+        if trimmed.lowercased().hasPrefix("attachment:") {
+            let raw = String(trimmed.dropFirst("attachment:".count))
+            let name = raw.removingPercentEncoding ?? raw
+            if let data = attachments[name] { return data }
+            return attachments[URL(fileURLWithPath: name).lastPathComponent]
+        }
+        if trimmed.lowercased().hasPrefix("data:image") {
+            guard let comma = trimmed.firstIndex(of: ",") else { return nil }
+            return Data(base64Encoded: String(trimmed[trimmed.index(after: comma)...]),
+                        options: .ignoreUnknownCharacters)
+        }
+        if let parsed = URL(string: trimmed),
+           let scheme = parsed.scheme?.lowercased(),
+           scheme == "http" || scheme == "https" {
+            return nil
+        }
+        let fileURL: URL
+        if trimmed.hasPrefix("/") {
+            fileURL = URL(fileURLWithPath: trimmed)
+        } else if let parsed = URL(string: trimmed), parsed.isFileURL {
+            fileURL = parsed
+        } else if let baseDirectory {
+            fileURL = baseDirectory.appendingPathComponent(trimmed)
+        } else {
+            return nil
+        }
+        return try? Data(contentsOf: fileURL)
+    }
+
+    static func loadImage(url: String, attachments: [String: Data],
+                          baseDirectory: URL?) -> (Data, NSImage)? {
+        guard let data = imageData(url: url, attachments: attachments, baseDirectory: baseDirectory),
+              let image = NSImage(data: data) else { return nil }
+        return (data, image)
+    }
+
+    static func dataURI(for data: Data) -> String {
+        let mime: String
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+            mime = "image/png"
+        } else if data.starts(with: [0xFF, 0xD8]) {
+            mime = "image/jpeg"
+        } else if data.starts(with: [0x47, 0x49, 0x46]) {
+            mime = "image/gif"
+        } else {
+            mime = "image/png"
+        }
+        return "data:\(mime);base64,\(data.base64EncodedString())"
+    }
+
+    static func fileName(for url: String) -> String {
+        if url.lowercased().hasPrefix("attachment:") {
+            let raw = String(url.dropFirst("attachment:".count))
+            return URL(fileURLWithPath: raw.removingPercentEncoding ?? raw).lastPathComponent
+        }
+        return URL(fileURLWithPath: url).lastPathComponent
+    }
+
     static func inlineAttributed(_ text: String) -> AttributedString {
         (try? AttributedString(
             markdown: text,
@@ -384,12 +506,27 @@ struct MarkdownView: View {
         case .bullet(let text):
             HStack(alignment: .top, spacing: 6) {
                 Text("•")
-                InlineMathText(source: text)
+                InlineMathText(source: text, attachments: attachments, baseDirectory: baseDirectory)
             }
         case .paragraph(let text):
-            InlineMathText(source: text)
+            InlineMathText(source: text, attachments: attachments, baseDirectory: baseDirectory)
         case .math(let tex):
             DisplayMathView(tex: tex)
+        case .image(let alt, let url):
+            markdownImageView(alt: alt, url: url)
+        }
+    }
+
+    @ViewBuilder
+    private func markdownImageView(alt: String, url: String) -> some View {
+        if let (data, image) = MarkdownView.loadImage(url: url, attachments: attachments,
+                                                      baseDirectory: baseDirectory) {
+            ImageOutputView(data: data, image: image, fileName: MarkdownView.fileName(for: url))
+                .accessibilityLabel(alt.isEmpty ? MarkdownView.fileName(for: url) : alt)
+        } else {
+            Text(alt.isEmpty ? url : alt)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -406,6 +543,8 @@ struct MarkdownView: View {
 struct InlineMathText: View {
     @ObservedObject private var latex = AppState.shared.latex
     let source: String
+    var attachments: [String: Data] = [:]
+    var baseDirectory: URL? = nil
     private var app: AppState { AppState.shared }
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.monoFontSize) private var monoSize
@@ -435,6 +574,14 @@ struct InlineMathText: View {
                 } else {
                     out = out + Text(verbatim: "$\(tex)$")
                         .font(.system(size: monoSize, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            case .image(let alt, let url):
+                if let (_, image) = MarkdownView.loadImage(url: url, attachments: attachments,
+                                                           baseDirectory: baseDirectory) {
+                    out = out + Text(Image(nsImage: image))
+                } else {
+                    out = out + Text(verbatim: alt.isEmpty ? url : alt)
                         .foregroundStyle(.secondary)
                 }
             }
