@@ -673,11 +673,11 @@ def _traceback_frames(e):
     return frames
 
 _NOOP_MAGIC = re.compile(
-    r"(?m)^[ \t]*%{1,2}(?:matplotlib|config|pylab|gui|precision|automagic)\b[^\n]*\n?"
+    r"(?m)^[ \t]*%{1,2}(?:matplotlib|config|pylab|gui|precision|automagic)\b[^\n]*"
 )
 
 
-def _strip_noop_magics(code):
+def _blank_noop_magics(code):
     return _NOOP_MAGIC.sub("", code)
 
 
@@ -685,7 +685,7 @@ def run_code(msg):
     global _current_id, _exec_count, _stream_budget, _interruptible
     _current_id = msg.get("id")
     _stream_budget = MAX_STREAM_BYTES
-    code = _strip_noop_magics(msg.get("code", ""))
+    code = _blank_noop_magics(msg.get("code", ""))
     _exec_count += 1
 
     filename = msg.get("filename") or f"<cell {_exec_count}>"
