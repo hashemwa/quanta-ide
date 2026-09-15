@@ -88,6 +88,8 @@ final class NotebookTests: XCTestCase {
         let saved = try JSONSerialization.jsonObject(with: notebook.serializedData()) as? [String: Any]
         let cells = saved?["cells"] as? [[String: Any]]
         XCTAssertNotNil(cells?.first?["attachments"])
+        let data = Notebook.attachmentData(notebook.cells[0].extraKeys["attachments"])
+        XCTAssertEqual(data["pic.png"], Data(base64Encoded: "aGVsbG8="))
     }
 
     func testAttachmentsAreDroppedWhenAMarkdownCellBecomesCode() throws {
@@ -327,6 +329,53 @@ final class MarkdownMathTests: XCTestCase {
             [.paragraph("intro"), .math("\\frac{a}{b}"), .paragraph("after")])
         XCTAssertEqual(MarkdownView.parse("```\n$$not math$$\n```"),
                        [.code("$$not math$$")])
+    }
+
+    func testStandaloneMarkdownImageParses() {
+        XCTAssertEqual(
+            MarkdownView.parse("intro\n\n![plot](attachment:fig.png)\n\nafter"),
+            [.paragraph("intro"), .image(alt: "plot", url: "attachment:fig.png"), .paragraph("after")])
+        XCTAssertEqual(
+            MarkdownView.parse("![x](y.png \"title\")"),
+            [.image(alt: "x", url: "y.png")])
+        XCTAssertEqual(
+            MarkdownView.parse("```\n![not](an.png)\n```"),
+            [.code("![not](an.png)")])
+    }
+
+    func testInlineImageSplitting() {
+        XCTAssertEqual(
+            MarkdownView.splitInlineMath("a ![x](y.png) b"),
+            [.text("a "), .image(alt: "x", url: "y.png"), .text(" b")])
+        XCTAssertEqual(
+            MarkdownView.splitInlineMath("see $x$ and ![y](z.png)"),
+            [.text("see "), .math("x"), .text(" and "), .image(alt: "y", url: "z.png")])
+    }
+
+    func testImageDataFromAttachmentAndDataURI() {
+        let png = Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+        let attachments = ["fig.png": png]
+        XCTAssertEqual(MarkdownView.imageData(url: "attachment:fig.png",
+                                              attachments: attachments, baseDirectory: nil), png)
+        XCTAssertEqual(MarkdownView.imageData(url: "attachment:./fig.png",
+                                              attachments: attachments, baseDirectory: nil), png)
+        let uri = "data:image/png;base64," + png.base64EncodedString()
+        XCTAssertEqual(MarkdownView.imageData(url: uri, attachments: [:], baseDirectory: nil), png)
+        XCTAssertNil(MarkdownView.imageData(url: "https://example.com/x.png",
+                                            attachments: [:], baseDirectory: nil))
+    }
+
+    func testHTMLExportEmbedsMarkdownAttachments() {
+        let png = Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+        let cell = NotebookCell(type: .markdown, source: "See ![plot](attachment:fig.png)")
+        cell.extraKeys["attachments"] = ["fig.png": ["image/png": png.base64EncodedString()]]
+        let html = NotebookExporter.html(from: Notebook(cells: [cell], metadata: [:]), title: "t")
+        XCTAssertTrue(html.contains("<img alt=\"plot\" src=\"data:image/png;base64,"))
+        XCTAssertTrue(html.contains(png.base64EncodedString()))
+        XCTAssertEqual(NotebookExporter.markdownToHTML("![missing](attachment:gone.png)"),
+                       "missing\n")
     }
 }
 

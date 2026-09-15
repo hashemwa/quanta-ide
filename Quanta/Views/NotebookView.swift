@@ -378,7 +378,9 @@ struct CellView: View {
             MarkdownView(source: cell.source.isEmpty
                          ? "*Empty markdown cell — double-click to edit*"
                          : cell.source,
-                         selectable: false)
+                         selectable: false,
+                         attachments: Notebook.attachmentData(cell.extraKeys["attachments"]),
+                         baseDirectory: document.url?.deletingLastPathComponent())
                 .padding(.vertical, 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())

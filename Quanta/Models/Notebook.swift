@@ -117,6 +117,31 @@ final class Notebook: ObservableObject {
         return ""
     }
 
+    static func attachmentData(_ value: Any?) -> [String: Data] {
+        guard let dict = value as? [String: Any] else { return [:] }
+        var out: [String: Data] = [:]
+        let preferred = ["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"]
+        for (name, raw) in dict {
+            guard let mimes = raw as? [String: Any] else { continue }
+            var encoded = ""
+            for mime in preferred {
+                encoded = joinedText(mimes[mime])
+                if !encoded.isEmpty { break }
+            }
+            if encoded.isEmpty {
+                for (key, payload) in mimes where key.hasPrefix("image/") {
+                    encoded = joinedText(payload)
+                    if !encoded.isEmpty { break }
+                }
+            }
+            guard !encoded.isEmpty,
+                  let data = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters)
+            else { continue }
+            out[name] = data
+        }
+        return out
+    }
+
     private static func parseOutput(_ dict: [String: Any]) -> CellOutput {
         CellOutput(kind: displayKind(for: dict), raw: dict)
     }

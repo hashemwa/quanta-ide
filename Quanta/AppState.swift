@@ -1991,7 +1991,8 @@ final class AppState: ObservableObject {
 
     func exportActiveNotebookAsHTML() {
         guard let document = activeDocument, let notebook = document.notebook else { return }
-        let html = NotebookExporter.html(from: notebook, title: document.displayName)
+        let html = NotebookExporter.html(from: notebook, title: document.displayName,
+                                         baseDirectory: document.url?.deletingLastPathComponent())
         savePanelWrite(data: Data(html.utf8),
                        suggested: document.displayName.replacingOccurrences(of: ".ipynb", with: ".html"),
                        type: .html)
@@ -1999,7 +2000,8 @@ final class AppState: ObservableObject {
 
     func exportActiveNotebookAsPDF() {
         guard let document = activeDocument, let notebook = document.notebook else { return }
-        let html = NotebookExporter.html(from: notebook, title: document.displayName)
+        let html = NotebookExporter.html(from: notebook, title: document.displayName,
+                                         baseDirectory: document.url?.deletingLastPathComponent())
         NotebookExporter.renderPDF(html: html) { [weak self] data in
             guard let data else {
                 self?.appendConsole(.system, "PDF export failed.")
