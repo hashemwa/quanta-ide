@@ -76,6 +76,26 @@ class NotebookCompatTests(unittest.TestCase):
         self.assertEqual(statuses["magic_only"], "ok")
         self.assertEqual(statuses["config"], "ok")
 
+    def test_magic_text_inside_a_string_is_left_alone(self):
+        messages = exchange([
+            {"id": "literal", "op": "execute",
+             "code": 'payload = """before\n%precision 3\nafter"""\nprint(repr(payload))\n'},
+            {"id": "indented", "op": "execute",
+             "code": 'def f():\n    return """\n%matplotlib inline\n"""\nprint(repr(f()))\n'},
+        ])
+        printed = [m["text"].strip() for m in messages if m.get("type") == "stream"]
+        self.assertEqual(printed[0], repr("before\n%precision 3\nafter"))
+        self.assertEqual(printed[1], repr("\n%matplotlib inline\n"))
+
+    def test_magic_beside_a_single_line_string_is_still_ignored(self):
+        messages = exchange([
+            {"id": "cfg", "op": "execute",
+             "code": "%config InlineBackend.figure_format = 'svg'\nvalue = 'kept'\nprint(value)\n"},
+        ])
+        done = next(m for m in messages if m.get("type") == "done")
+        self.assertEqual(done["status"], "ok")
+        self.assertEqual([m["text"].strip() for m in messages if m.get("type") == "stream"], ["kept"])
+
     def test_ignored_magic_keeps_traceback_line_numbers(self):
         messages = exchange([
             {"id": "err", "op": "execute",

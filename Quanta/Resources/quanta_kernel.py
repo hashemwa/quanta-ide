@@ -15,6 +15,7 @@ import signal
 import sys
 import threading
 import time
+import tokenize
 import traceback
 import types
 import warnings
@@ -673,12 +674,39 @@ def _traceback_frames(e):
     return frames
 
 _NOOP_MAGIC = re.compile(
-    r"(?m)^[ \t]*%{1,2}(?:matplotlib|config|pylab|gui|precision|automagic)\b[^\n]*"
+    r"^[ \t]*%{1,2}(?:matplotlib|config|pylab|gui|precision|automagic)\b"
+)
+
+_STRING_TOKENS = frozenset(
+    getattr(tokenize, name) for name in (
+        "STRING", "FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END",
+        "TSTRING_START", "TSTRING_MIDDLE", "TSTRING_END",
+    ) if hasattr(tokenize, name)
 )
 
 
+def _rows_inside_multiline_strings(code):
+    rows = set()
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(code).readline):
+            if token.type in _STRING_TOKENS and token.end[0] > token.start[0]:
+                rows.update(range(token.start[0] + 1, token.end[0] + 1))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        pass
+    return rows
+
+
 def _blank_noop_magics(code):
-    return _NOOP_MAGIC.sub("", code)
+    lines = code.splitlines(True)
+    hits = [i for i, line in enumerate(lines) if _NOOP_MAGIC.match(line)]
+    if not hits:
+        return code
+    protected = _rows_inside_multiline_strings(code)
+    for i in hits:
+        if i + 1 in protected:
+            continue
+        lines[i] = lines[i][len(lines[i].rstrip("\r\n")):]
+    return "".join(lines)
 
 
 def run_code(msg):
