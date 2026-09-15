@@ -76,6 +76,16 @@ class NotebookCompatTests(unittest.TestCase):
         self.assertEqual(statuses["magic_only"], "ok")
         self.assertEqual(statuses["config"], "ok")
 
+    def test_ignored_magic_keeps_traceback_line_numbers(self):
+        messages = exchange([
+            {"id": "err", "op": "execute",
+             "code": "import math\n%matplotlib inline\nvalue = math.sqrt(4)\nboom = value + undefined_name\n"},
+        ])
+        error = next(m for m in messages if m.get("type") == "error")
+        frame = error["frames"][-1]
+        self.assertEqual(frame["line"], 4)
+        self.assertEqual(frame["code"], "boom = value + undefined_name")
+
     def test_unknown_magic_still_fails(self):
         messages = exchange([
             {"id": "time", "op": "execute", "code": "%time x = 1\n"},
