@@ -672,11 +672,20 @@ def _traceback_frames(e):
         tb = tb.tb_next
     return frames
 
+_NOOP_MAGIC = re.compile(
+    r"(?m)^[ \t]*%{1,2}(?:matplotlib|config|pylab|gui|precision|automagic)\b[^\n]*\n?"
+)
+
+
+def _strip_noop_magics(code):
+    return _NOOP_MAGIC.sub("", code)
+
+
 def run_code(msg):
     global _current_id, _exec_count, _stream_budget, _interruptible
     _current_id = msg.get("id")
     _stream_budget = MAX_STREAM_BYTES
-    code = msg.get("code", "")
+    code = _strip_noop_magics(msg.get("code", ""))
     _exec_count += 1
 
     filename = msg.get("filename") or f"<cell {_exec_count}>"
@@ -889,10 +898,13 @@ def handle_df(msg):
 
 _TEX_REWRITES = [
     (re.compile(r"\\[bB]igg?[lrm]?(?=\s*[\[\](){}|.])"), ""),
+    (re.compile(r"\\textnormal\b"), r"\\mathrm"),
     (re.compile(r"\\textrm\b"), r"\\mathrm"),
     (re.compile(r"\\textbf\b"), r"\\mathbf"),
     (re.compile(r"\\textit\b"), r"\\mathit"),
     (re.compile(r"\\text\b"), r"\\mathrm"),
+    (re.compile(r"\\mbox\b"), r"\\mathrm"),
+    (re.compile(r"\\hbox\b"), r"\\mathrm"),
     (re.compile(r"\\dfrac\b"), r"\\frac"),
     (re.compile(r"\\tfrac\b"), r"\\frac"),
     (re.compile(r"\\boldsymbol\b"), r"\\mathbf"),

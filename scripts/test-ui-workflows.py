@@ -57,5 +57,53 @@ class InspectionTests(unittest.TestCase):
         self.assertEqual(results["invalid"]["type"], "df_error")
 
 
+class NotebookCompatTests(unittest.TestCase):
+    def test_matplotlib_magic_is_ignored(self):
+        messages = exchange([
+            {"id": "imports", "op": "execute",
+             "code": "import math\n%matplotlib inline\nvalue = math.sqrt(4)\n"},
+        ])
+        done = next(m for m in messages if m.get("id") == "imports" and m.get("type") == "done")
+        self.assertEqual(done["status"], "ok")
+        self.assertFalse(any(m.get("type") == "error" for m in messages))
+
+        follow = exchange([
+            {"id": "magic_only", "op": "execute", "code": "%matplotlib notebook\n"},
+            {"id": "config", "op": "execute",
+             "code": "%config InlineBackend.figure_format = 'svg'\nx = 3\n"},
+        ])
+        statuses = {m["id"]: m["status"] for m in follow if m.get("type") == "done"}
+        self.assertEqual(statuses["magic_only"], "ok")
+        self.assertEqual(statuses["config"], "ok")
+
+    def test_unknown_magic_still_fails(self):
+        messages = exchange([
+            {"id": "time", "op": "execute", "code": "%time x = 1\n"},
+        ])
+        errors = [m for m in messages if m.get("type") == "error"]
+        self.assertEqual(errors[0]["ename"], "SyntaxError")
+
+    def test_mbox_and_textnormal_latex_render(self):
+        try:
+            import matplotlib
+        except ImportError:
+            self.skipTest("matplotlib is not installed in this interpreter")
+        messages = exchange([
+            {"id": "t0", "op": "latex", "fontsize": 13, "color": "#000000",
+             "tex": r"||x_k - x_{k-1}||_2<\mbox{ tolerance}"},
+            {"id": "t1", "op": "latex", "fontsize": 13, "color": "#000000",
+             "tex": r"\sqrt{(x_k - x_{k-1})^2+(y_k - y_{k-1})^2}<\mbox{ tolerance}"},
+            {"id": "t2", "op": "latex", "fontsize": 13, "color": "#000000",
+             "tex": r"\textnormal{tolerance}"},
+            {"id": "t3", "op": "latex", "fontsize": 13, "color": "#000000",
+             "tex": r"\hbox{tolerance}"},
+        ])
+        kinds = {m["id"]: m["type"] for m in messages
+                 if m.get("id") in ("t0", "t1", "t2", "t3")
+                 and m.get("type") in ("latex", "latex_error")}
+        for key in ("t0", "t1", "t2", "t3"):
+            self.assertEqual(kinds.get(key), "latex", kinds)
+
+
 if __name__ == "__main__":
     unittest.main()
