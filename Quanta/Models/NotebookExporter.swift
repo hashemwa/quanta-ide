@@ -188,11 +188,10 @@ enum NotebookExporter {
     private static func imageTag(alt: String, url: String,
                                  attachments: [String: Data],
                                  baseDirectory: URL?) -> String {
-        let altEsc = escape(alt)
         if let data = MarkdownView.imageData(url: url, attachments: attachments, baseDirectory: baseDirectory) {
-            return "<img alt=\"\(altEsc)\" src=\"\(MarkdownView.dataURI(for: data))\">"
+            return "<img alt=\"\(escapeAttribute(alt))\" src=\"\(MarkdownView.dataURI(for: data))\">"
         }
-        return altEsc.isEmpty ? escape(url) : altEsc
+        return alt.isEmpty ? escape(url) : escape(alt)
     }
 
     private static func emphasis(_ text: String) -> String {
@@ -212,6 +211,12 @@ enum NotebookExporter {
         text.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    private static func escapeAttribute(_ text: String) -> String {
+        escape(text)
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
     }
 
     private static var activePDFExports: [ObjectIdentifier: PDFRenderer] = [:]

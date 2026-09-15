@@ -377,6 +377,17 @@ final class MarkdownMathTests: XCTestCase {
         XCTAssertEqual(NotebookExporter.markdownToHTML("![missing](attachment:gone.png)"),
                        "missing\n")
     }
+
+    func testImageAltTextCannotInjectHTMLAttributes() {
+        let png = Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+        let cell = NotebookCell(type: .markdown,
+                                source: "![\" onload=\"alert(1)](attachment:fig.png)")
+        cell.extraKeys["attachments"] = ["fig.png": ["image/png": png.base64EncodedString()]]
+        let html = NotebookExporter.html(from: Notebook(cells: [cell], metadata: [:]), title: "t")
+        XCTAssertFalse(html.contains("onload=\"alert(1)\""))
+        XCTAssertTrue(html.contains("&quot; onload=&quot;alert(1)"))
+    }
 }
 
 final class PythonLocatorTests: XCTestCase {
