@@ -103,7 +103,7 @@ struct StreamOutputView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 4)
+        .padding(.leading, DS.Layout.cellTextInset)
     }
 
     private static let maximumChunkLength = 50_000

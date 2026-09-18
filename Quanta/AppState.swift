@@ -13,6 +13,7 @@ final class AppState: ObservableObject {
     @Published var splitDocumentID: UUID?
     @Published var primarySplitDocumentID: UUID?
     @Published var userNotice: String?
+    @Published var externallyChangedDocumentID: UUID?
     @Published var changedVariables: Set<String> = []
     @Published var workspace: Workspace?
     @Published var openDocuments: [Document] = []
@@ -23,16 +24,32 @@ final class AppState: ObservableObject {
                 primarySplitDocumentID = activeDocumentID
             }
             rebindCellSelection(from: oldValue)
+            recordNavigation(activeDocumentID)
             persistSession()
         }
     }
+    @Published private(set) var canNavigateBack = false
+    @Published private(set) var canNavigateForward = false
+    private var navigationHistory: [UUID] = []
+    private var navigationIndex = -1
+    private var isNavigatingHistory = false
     @Published var variables: [VariableInfo] = []
     let console = ConsoleModel()
     @Published var kernelStatus: KernelStatus = .stopped
     let selection = CellSelection()
     var selectedCellID: UUID? {
         get { selection.selectedCellID }
-        set { if selection.selectedCellID != newValue { selection.selectedCellID = newValue } }
+        set {
+            guard selection.selectedCellID != newValue else { return }
+            selection.selectedCellID = newValue
+            if let newValue, !selection.selectedCellIDs.contains(newValue) {
+                selection.selectedCellIDs = [newValue]
+                selection.anchorCellID = newValue
+            } else if newValue == nil {
+                selection.selectedCellIDs = []
+                selection.anchorCellID = nil
+            }
+        }
     }
     var isCommandMode: Bool {
         get { selection.isCommandMode }
@@ -65,6 +82,18 @@ final class AppState: ObservableObject {
     }
     @Published var sidebarRevealRequest = 0
     @Published var fileSearchFocusRequest = 0
+    @Published var showsHiddenFiles = QuantaDefaults.store.bool(forKey: "QuantaShowsHiddenFiles") {
+        didSet {
+            QuantaDefaults.store.set(showsHiddenFiles, forKey: "QuantaShowsHiddenFiles")
+            refreshWorkspace()
+        }
+    }
+    @Published var showsLineNumbers = QuantaDefaults.store.object(forKey: "QuantaShowsLineNumbers") as? Bool ?? true {
+        didSet { QuantaDefaults.store.set(showsLineNumbers, forKey: "QuantaShowsLineNumbers") }
+    }
+    @Published var wrapsCode = QuantaDefaults.store.object(forKey: "QuantaWrapsCode") as? Bool ?? true {
+        didSet { QuantaDefaults.store.set(wrapsCode, forKey: "QuantaWrapsCode") }
+    }
     @Published private(set) var cellRevision = 0
     var handledFileSearchFocusRequest = 0
 
@@ -91,6 +120,11 @@ final class AppState: ObservableObject {
     func bootstrap() {
         guard !bootstrapped, !QuantaDefaults.isRunningTests else { return }
         bootstrapped = true
+        if let preview = QuantaDefaults.previewDirectory {
+            openWorkspace(preview.appendingPathComponent("Workspace", isDirectory: true))
+            openFile(preview.appendingPathComponent("Workspace/Example.ipynb"))
+            return
+        }
         loadRecents()
         EditorTheme.fontSize = editorFontSize
         if let path = QuantaDefaults.store.string(forKey: "QuantaLastWorkspace") {
@@ -186,6 +220,15 @@ final class AppState: ObservableObject {
 
     func toggleVariables() { setVariablesVisible(!showVariables) }
 
+    func resetLayout() {
+        showVariables = true
+        setConsoleVisible(false, animated: false)
+        consoleHeight = DS.Layout.consoleDefaultHeight
+        splitDocumentID = nil
+        primarySplitDocumentID = nil
+        sidebarRevealRequest += 1
+    }
+
     func revealConsole(force: Bool = false) {
         if force { bottomPane = .console }
         if showConsole { return }
@@ -241,6 +284,40 @@ final class AppState: ObservableObject {
         activeDocumentID = openDocuments[next].id
     }
 
+    private func recordNavigation(_ id: UUID?) {
+        guard !isNavigatingHistory, let id else { return }
+        if navigationIndex >= 0, navigationIndex < navigationHistory.count,
+           navigationHistory[navigationIndex] == id { return }
+        if navigationIndex + 1 < navigationHistory.count {
+            navigationHistory.removeSubrange((navigationIndex + 1)...)
+        }
+        navigationHistory.append(id)
+        if navigationHistory.count > 100 { navigationHistory.removeFirst() }
+        navigationIndex = navigationHistory.count - 1
+        updateNavigationAvailability()
+    }
+
+    func navigateHistory(_ delta: Int) {
+        var target = navigationIndex + delta
+        while target >= 0, target < navigationHistory.count {
+            let id = navigationHistory[target]
+            if openDocuments.contains(where: { $0.id == id }) {
+                isNavigatingHistory = true
+                navigationIndex = target
+                activeDocumentID = id
+                isNavigatingHistory = false
+                updateNavigationAvailability()
+                return
+            }
+            target += delta
+        }
+    }
+
+    private func updateNavigationAvailability() {
+        canNavigateBack = navigationIndex > 0
+        canNavigateForward = navigationIndex >= 0 && navigationIndex + 1 < navigationHistory.count
+    }
+
     func closeOtherDocuments(except document: Document) {
         for other in openDocuments where other.id != document.id && !other.isPinned {
             guard closeDocument(other, persist: false) else { break }
@@ -253,6 +330,8 @@ final class AppState: ObservableObject {
            let document = openDocuments.first(where: { $0.id == id }) {
             endRunChain(in: document)
         }
+        pausedRunDocumentID = nil
+        pausedRunCellIDs = []
         kernel.interrupt()
     }
 
@@ -388,9 +467,10 @@ final class AppState: ObservableObject {
         workspace = Workspace(rootURL: url, root: FileNode(url: url, name: url.lastPathComponent,
                                                              isDirectory: true, children: []))
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let loaded = Workspace.load(url: url)
+            guard let self else { return }
+            let loaded = Workspace.load(url: url, showsHiddenFiles: self.showsHiddenFiles)
             DispatchQueue.main.async {
-                guard let self, self.workspace?.rootURL == url else { return }
+                guard self.workspace?.rootURL == url else { return }
                 self.workspace = loaded
             }
         }
@@ -472,7 +552,7 @@ final class AppState: ObservableObject {
     }
 
     func focusFileSearch() {
-        showSidebarPane(.files)
+        showSidebarPane(.search)
         fileSearchFocusRequest += 1
     }
 
@@ -484,7 +564,7 @@ final class AppState: ObservableObject {
             self.workspaceRefreshScheduled = false
             guard self.workspace?.rootURL == url else { return }
             DispatchQueue.global(qos: .userInitiated).async {
-                let loaded = Workspace.load(url: url)
+                let loaded = Workspace.load(url: url, showsHiddenFiles: self.showsHiddenFiles)
                 DispatchQueue.main.async {
                     guard self.workspace?.rootURL == url else { return }
                     self.workspace = loaded
@@ -994,7 +1074,11 @@ final class AppState: ObservableObject {
               !notebook.cells.contains(where: { $0.isRunning }) else { return }
         notebook.cells.forEach { $0.isQueued = $0.cellType == .code }
         runningChainDocumentID = document.id
-        runChain(after: nil, in: document)
+        runningChainCellIDs = notebook.cells.filter { $0.cellType == .code }.map(\.id)
+        runningChainIndex = 0
+        pausedRunDocumentID = nil
+        pausedRunCellIDs = []
+        runNextQueuedCell(in: document)
     }
 
     func setSourceCollapsed(_ collapsed: Bool, for cell: NotebookCell, in document: Document) {
@@ -1011,44 +1095,84 @@ final class AppState: ObservableObject {
 
     private func endRunChain(in document: Document) {
         if runningChainDocumentID == document.id { runningChainDocumentID = nil }
+        runningChainCellIDs = []
+        runningChainIndex = 0
         document.notebook?.cells.forEach { $0.isQueued = false }
     }
 
-    private func runChain(after cellID: UUID?, in document: Document) {
+    private func runNextQueuedCell(in document: Document) {
         guard runningChainDocumentID == document.id,
               openDocuments.contains(where: { $0.id == document.id }),
               let notebook = document.notebook else {
             endRunChain(in: document)
             return
         }
-        let cells = notebook.cells
-        let startIndex: Int
-        if let cellID {
-            guard let previous = cells.firstIndex(where: { $0.id == cellID }) else {
-                endRunChain(in: document)
-                return
-            }
-            startIndex = previous + 1
-        } else {
-            startIndex = 0
-        }
-        guard startIndex < cells.count else {
+        guard runningChainIndex < runningChainCellIDs.count else {
             endRunChain(in: document)
             return
         }
-        let cell = cells[startIndex]
-        guard cell.cellType == .code else {
-            runChain(after: cell.id, in: document)
+        let cellID = runningChainCellIDs[runningChainIndex]
+        runningChainIndex += 1
+        guard let cell = notebook.cells.first(where: { $0.id == cellID }) else {
+            runNextQueuedCell(in: document)
             return
         }
         runCell(cell, in: document, advance: false) { [weak self] ok in
             guard let self else { return }
             guard ok else {
+                self.pausedRunDocumentID = document.id
+                self.pausedRunCellIDs = Array(self.runningChainCellIDs.dropFirst(self.runningChainIndex))
+                self.selectedCellID = cell.id
+                self.scrollRequest = cell.id
+                self.userNotice = "Run All stopped at a cell error. Fix the error or continue the remaining cells."
                 self.endRunChain(in: document)
                 return
             }
-            self.runChain(after: cell.id, in: document)
+            self.runNextQueuedCell(in: document)
         }
+    }
+
+    func continueRemainingCells() {
+        guard let id = pausedRunDocumentID,
+              let document = openDocuments.first(where: { $0.id == id }),
+              let notebook = document.notebook, !pausedRunCellIDs.isEmpty else { return }
+        runningChainDocumentID = id
+        runningChainCellIDs = pausedRunCellIDs
+        runningChainIndex = 0
+        pausedRunDocumentID = nil
+        pausedRunCellIDs = []
+        let queued = Set(runningChainCellIDs)
+        notebook.cells.forEach { $0.isQueued = queued.contains($0.id) }
+        runNextQueuedCell(in: document)
+    }
+
+    func runCells(above cell: NotebookCell, in document: Document) {
+        guard let notebook = document.notebook,
+              let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        runCellSequence(Array(notebook.cells.prefix(index)).filter { $0.cellType == .code }, in: document)
+    }
+
+    func runCells(below cell: NotebookCell, in document: Document) {
+        guard let notebook = document.notebook,
+              let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        runCellSequence(Array(notebook.cells.dropFirst(index + 1)).filter { $0.cellType == .code }, in: document)
+    }
+
+    func runSelectedCells() {
+        guard let document = activeDocument, let notebook = document.notebook else { return }
+        let ids = selection.selectedCellIDs
+        runCellSequence(notebook.cells.filter { ids.contains($0.id) && $0.cellType == .code },
+                        in: document)
+    }
+
+    private func runCellSequence(_ cells: [NotebookCell], in document: Document) {
+        guard !cells.isEmpty, runningChainDocumentID == nil else { return }
+        runningChainDocumentID = document.id
+        runningChainCellIDs = cells.map(\.id)
+        runningChainIndex = 0
+        let queued = Set(runningChainCellIDs)
+        document.notebook?.cells.forEach { $0.isQueued = queued.contains($0.id) }
+        runNextQueuedCell(in: document)
     }
 
     private func advanceSelection(after cell: NotebookCell, in document: Document) {
@@ -1098,6 +1222,10 @@ final class AppState: ObservableObject {
     }
 
     func deleteCell(_ cell: NotebookCell, in notebook: Notebook, document: Document) {
+        guard runningChainDocumentID != document.id else {
+            userNotice = "Stop the current Run All before deleting or reordering cells."
+            return
+        }
         guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
         document.deletedCells.append((dict: notebook.serializeCell(cell), index: index,
                                       restoreSource: nil))
@@ -1111,10 +1239,30 @@ final class AppState: ObservableObject {
     }
 
     func moveCell(_ cell: NotebookCell, direction: Int, in notebook: Notebook, document: Document) {
+        guard runningChainDocumentID != document.id else {
+            userNotice = "Stop the current Run All before deleting or reordering cells."
+            return
+        }
         guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
         let target = index + direction
         guard target >= 0, target < notebook.cells.count else { return }
         notebook.cells.swapAt(index, target)
+        document.isDirty = true
+        cellRevision += 1
+    }
+
+    func reorderCells(draggedID: UUID, before targetID: UUID,
+                      in notebook: Notebook, document: Document) {
+        guard runningChainDocumentID != document.id, draggedID != targetID else { return }
+        let ids = selection.selectedCellIDs.contains(draggedID)
+            ? selection.selectedCellIDs : Set([draggedID])
+        let moving = notebook.cells.filter { ids.contains($0.id) }
+        guard !moving.isEmpty, !ids.contains(targetID) else { return }
+        notebook.cells.removeAll { ids.contains($0.id) }
+        guard let target = notebook.cells.firstIndex(where: { $0.id == targetID }) else { return }
+        notebook.cells.insert(contentsOf: moving, at: target)
+        selection.selectedCellIDs = ids
+        selectedCellID = moving.last?.id
         document.isDirty = true
         cellRevision += 1
     }
@@ -1464,13 +1612,14 @@ final class AppState: ObservableObject {
 
     func commandCopy() {
         guard let ctx = selectionContext else { return }
-        copyCell(ctx.cell, in: ctx.notebook)
+        copyCells(selectedCells(in: ctx.notebook), in: ctx.notebook)
     }
 
     func commandCut() {
         guard let ctx = selectionContext else { return }
-        copyCell(ctx.cell, in: ctx.notebook)
-        deleteCell(ctx.cell, in: ctx.notebook, document: ctx.document)
+        let cells = selectedCells(in: ctx.notebook)
+        copyCells(cells, in: ctx.notebook)
+        deleteCells(cells, in: ctx.notebook, document: ctx.document)
     }
 
     func commandPaste() {
@@ -1480,12 +1629,12 @@ final class AppState: ObservableObject {
 
     func commandDuplicate() {
         guard let ctx = selectionContext else { return }
-        duplicateCell(ctx.cell, in: ctx.notebook, document: ctx.document)
+        duplicateCells(selectedCells(in: ctx.notebook), in: ctx.notebook, document: ctx.document)
     }
 
     func commandDelete() {
         guard let ctx = selectionContext else { return }
-        deleteCell(ctx.cell, in: ctx.notebook, document: ctx.document)
+        deleteCells(selectedCells(in: ctx.notebook), in: ctx.notebook, document: ctx.document)
     }
 
     func commandConvert(to type: CellType) {
@@ -1524,34 +1673,88 @@ final class AppState: ObservableObject {
         scrollRequest = selectedCellID
     }
 
-    private var cellClipboard: [String: Any]?
+    private var cellClipboard: [[String: Any]] = []
+
+    private func selectedCells(in notebook: Notebook) -> [NotebookCell] {
+        let ids = selection.selectedCellIDs
+        let result = notebook.cells.filter { ids.contains($0.id) }
+        return result.isEmpty ? notebook.cells.filter { $0.id == selectedCellID } : result
+    }
+
+    func selectCell(_ cell: NotebookCell, in notebook: Notebook,
+                    modifiers: NSEvent.ModifierFlags = []) {
+        activeDocumentID = activeDocument?.id
+        if modifiers.contains(.shift), let anchor = selection.anchorCellID,
+           let start = notebook.cells.firstIndex(where: { $0.id == anchor }),
+           let end = notebook.cells.firstIndex(where: { $0.id == cell.id }) {
+            let range = min(start, end)...max(start, end)
+            selection.selectedCellIDs = Set(range.map { notebook.cells[$0].id })
+            selection.selectedCellID = cell.id
+        } else if modifiers.contains(.command) {
+            if selection.selectedCellIDs.contains(cell.id) {
+                selection.selectedCellIDs.remove(cell.id)
+                selection.selectedCellID = selection.selectedCellIDs.first
+            } else {
+                selection.selectedCellIDs.insert(cell.id)
+                selection.selectedCellID = cell.id
+                selection.anchorCellID = cell.id
+            }
+        } else {
+            selection.selectedCellIDs = [cell.id]
+            selection.selectedCellID = cell.id
+            selection.anchorCellID = cell.id
+        }
+        enterCommandMode()
+    }
 
     func copyCell(_ cell: NotebookCell, in notebook: Notebook) {
-        cellClipboard = notebook.serializeCell(cell)
+        copyCells([cell], in: notebook)
+    }
+
+    func copyCells(_ cells: [NotebookCell], in notebook: Notebook) {
+        cellClipboard = cells.map { notebook.serializeCell($0) }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(cell.source, forType: .string)
+        NSPasteboard.general.setString(cells.map(\.source).joined(separator: "\n\n"), forType: .string)
     }
 
     func pasteCell(after cell: NotebookCell, in notebook: Notebook, document: Document) {
-        guard var dict = cellClipboard else { return }
-        dict["id"] = NotebookCell.makeNBID()
+        guard !cellClipboard.isEmpty else { return }
         guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
-        let restored = Notebook.parseCell(dict)
-        notebook.cells.insert(restored, at: index + 1)
-        selectedCellID = restored.id
-        scrollRequest = restored.id
+        let restored = cellClipboard.map { source -> NotebookCell in
+            var dict = source
+            dict["id"] = NotebookCell.makeNBID()
+            return Notebook.parseCell(dict)
+        }
+        notebook.cells.insert(contentsOf: restored, at: index + 1)
+        selection.selectedCellIDs = Set(restored.map(\.id))
+        selectedCellID = restored.last?.id
+        scrollRequest = restored.last?.id
         document.isDirty = true
     }
 
     func duplicateCell(_ cell: NotebookCell, in notebook: Notebook, document: Document) {
-        var dict = notebook.serializeCell(cell)
-        dict["id"] = NotebookCell.makeNBID()
-        guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
-        let copy = Notebook.parseCell(dict)
-        notebook.cells.insert(copy, at: index + 1)
-        selectedCellID = copy.id
-        scrollRequest = copy.id
+        duplicateCells([cell], in: notebook, document: document)
+    }
+
+    func duplicateCells(_ cells: [NotebookCell], in notebook: Notebook, document: Document) {
+        guard let last = cells.last,
+              let index = notebook.cells.firstIndex(where: { $0.id == last.id }) else { return }
+        let copies = cells.map { cell -> NotebookCell in
+            var dict = notebook.serializeCell(cell)
+            dict["id"] = NotebookCell.makeNBID()
+            return Notebook.parseCell(dict)
+        }
+        notebook.cells.insert(contentsOf: copies, at: index + 1)
+        selection.selectedCellIDs = Set(copies.map(\.id))
+        selectedCellID = copies.last?.id
+        scrollRequest = copies.last?.id
         document.isDirty = true
+    }
+
+    func deleteCells(_ cells: [NotebookCell], in notebook: Notebook, document: Document) {
+        let ordered = cells.compactMap { cell in notebook.cells.firstIndex(where: { $0.id == cell.id }).map { ($0, cell) } }
+            .sorted { $0.0 > $1.0 }
+        for (_, cell) in ordered { deleteCell(cell, in: notebook, document: document) }
     }
 
     func undoCellDeletion(in document: Document) {
@@ -1604,6 +1807,9 @@ final class AppState: ObservableObject {
     func clearAllOutputs(in document: Document?) {
         guard let document, let notebook = document.notebook else { return }
         for cell in notebook.cells {
+            if !cell.outputs.isEmpty {
+                document.clearedOutputs.append((cell.id, cell.outputs, cell.executionCount, cell.lastDuration))
+            }
             cell.outputs = []
             cell.executionCount = nil
             cell.lastDuration = nil
@@ -1611,8 +1817,39 @@ final class AppState: ObservableObject {
         document.isDirty = true
     }
 
+    func clearOutput(for cell: NotebookCell, in document: Document) {
+        guard !cell.outputs.isEmpty else { return }
+        document.clearedOutputs.append((cell.id, cell.outputs, cell.executionCount, cell.lastDuration))
+        if document.clearedOutputs.count > 100 { document.clearedOutputs.removeFirst() }
+        cell.outputs = []
+        cell.executionCount = nil
+        cell.lastDuration = nil
+        document.isDirty = true
+    }
+
+    func undoClearedOutput(in document: Document) {
+        guard let notebook = document.notebook,
+              let record = document.clearedOutputs.popLast(),
+              let cell = notebook.cells.first(where: { $0.id == record.cellID }) else { return }
+        cell.outputs = record.outputs
+        cell.executionCount = record.executionCount
+        cell.lastDuration = record.duration
+        selectedCellID = cell.id
+        scrollRequest = cell.id
+        document.isDirty = true
+    }
+
     private var pendingRunAllDocumentID: UUID?
     private var runningChainDocumentID: UUID?
+    private var runningChainCellIDs: [UUID] = []
+    private var runningChainIndex = 0
+    @Published private(set) var pausedRunDocumentID: UUID?
+    private var pausedRunCellIDs: [UUID] = []
+
+    var runQueueProgress: (completed: Int, total: Int)? {
+        guard runningChainDocumentID != nil, !runningChainCellIDs.isEmpty else { return nil }
+        return (min(runningChainIndex, runningChainCellIDs.count), runningChainCellIDs.count)
+    }
 
     func restartAndRunAll() {
         guard let document = activeDocument, document.kind == .notebook else { return }
@@ -1829,7 +2066,7 @@ final class AppState: ObservableObject {
 
     private var draftsDirectory: URL {
         QuantaStorage.draftsDirectory(applicationSupport:
-            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
+            QuantaDefaults.previewDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
     }
 
     func draftURL(for document: Document) -> URL {
@@ -2050,25 +2287,33 @@ final class AppState: ObservableObject {
                                        initial: "untitled.py") else { return }
         let url = directory.appendingPathComponent(name)
         guard !FileManager.default.fileExists(atPath: url.path) else {
-            appendConsole(.system, "\(name) already exists.")
+            userNotice = "“\(name)” already exists. Choose a different name."
             return
         }
-        if url.pathExtension.lowercased() == "ipynb" {
-            try? (try? Notebook.empty().serializedData())?.write(to: url)
-        } else {
-            FileManager.default.createFile(atPath: url.path, contents: Data())
+        do {
+            if url.pathExtension.lowercased() == "ipynb" {
+                try Notebook.empty().serializedData().write(to: url)
+            } else if !FileManager.default.createFile(atPath: url.path, contents: Data()) {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            refreshWorkspace()
+            openFile(url)
+        } catch {
+            userNotice = "Could not create \(name): \(error.localizedDescription)"
         }
-        refreshWorkspace()
-        openFile(url)
     }
 
     func createFolder(in directory: URL) {
         guard let name = promptForName(title: "New Folder",
                                        message: "Name for the new folder:",
                                        initial: "folder") else { return }
-        try? FileManager.default.createDirectory(
-            at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
-        refreshWorkspace()
+        do {
+            try FileManager.default.createDirectory(
+                at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
+            refreshWorkspace()
+        } catch {
+            userNotice = "Could not create \(name): \(error.localizedDescription)"
+        }
     }
 
     func renameNode(_ node: FileNode) {
@@ -2090,27 +2335,138 @@ final class AppState: ObservableObject {
         }
     }
 
-    func trashNode(_ node: FileNode) {
-        let affected = openDocuments.filter { Self.relativePath(of: $0.url, under: node.url) != nil }
-        if affected.contains(where: { $0.isDirty }) {
+    func duplicateNodes(at urls: [URL]) {
+        finishFileOperation(FileOperations.duplicate(urls), moved: false)
+    }
+
+    func copyNodes(at urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects(urls as [NSURL])
+    }
+
+    func pasteNodes(into directory: URL) {
+        let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: [
+            .urlReadingFileURLsOnly: true,
+        ]) as? [URL] ?? []
+        transferNodes(at: urls, to: directory, copying: true)
+    }
+
+    func chooseDestinationAndMoveNodes(at urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Move"
+        panel.message = "Choose a destination for \(urls.count == 1 ? urls[0].lastPathComponent : "\(urls.count) items")"
+        panel.directoryURL = workspace?.rootURL
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        transferNodes(at: urls, to: destination, copying: false)
+    }
+
+    func transferNodes(at urls: [URL], to directory: URL, copying: Bool) {
+        guard !urls.isEmpty else { return }
+        let report = FileOperations.transfer(urls, to: directory, copying: copying) { target in
             let alert = NSAlert()
-            alert.messageText = "Move \(node.name) to the Trash?"
-            alert.informativeText = "Unsaved changes in its open tabs will be lost."
+            alert.messageText = "“\(target.lastPathComponent)” already exists"
+            alert.informativeText = "Choose a new automatic name, skip this item, or cancel the remaining operation."
+            alert.addButton(withTitle: "Keep Both")
+            alert.addButton(withTitle: "Skip")
+            alert.addButton(withTitle: "Cancel")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn: return .keepBoth
+            case .alertSecondButtonReturn: return .skip
+            default: return .cancel
+            }
+        }
+        finishFileOperation(report, moved: !copying)
+    }
+
+    private func finishFileOperation(_ report: FileOperationReport, moved: Bool) {
+        if moved {
+            for pair in report.completed {
+                for document in openDocuments {
+                    guard let relative = Self.relativePath(of: document.url, under: pair.source) else { continue }
+                    document.url = relative.isEmpty ? pair.destination : pair.destination.appendingPathComponent(relative)
+                }
+            }
+            persistSession()
+            if !report.completed.isEmpty {
+                NSApp.keyWindow?.undoManager?.registerUndo(withTarget: self) { target in
+                    target.restoreMovedItems(report.completed)
+                }
+                NSApp.keyWindow?.undoManager?.setActionName("Move Files")
+            }
+        }
+        refreshWorkspace()
+        guard let summary = report.summary else { return }
+        let details = report.failures.prefix(3).map { "\($0.0.lastPathComponent): \($0.1)" }.joined(separator: "\n")
+        userNotice = details.isEmpty ? summary : "\(summary)\n\(details)"
+    }
+
+    private func restoreMovedItems(_ pairs: [(source: URL, destination: URL)]) {
+        var failures: [String] = []
+        for pair in pairs.reversed() {
+            guard !FileManager.default.fileExists(atPath: pair.source.path) else {
+                failures.append("\(pair.source.lastPathComponent): the original location is occupied")
+                continue
+            }
+            do { try FileManager.default.moveItem(at: pair.destination, to: pair.source) }
+            catch { failures.append("\(pair.destination.lastPathComponent): \(error.localizedDescription)") }
+        }
+        for document in openDocuments {
+            for pair in pairs {
+                guard let relative = Self.relativePath(of: document.url, under: pair.destination) else { continue }
+                document.url = relative.isEmpty ? pair.source : pair.source.appendingPathComponent(relative)
+            }
+        }
+        persistSession()
+        refreshWorkspace()
+        if !failures.isEmpty { userNotice = failures.joined(separator: "\n") }
+    }
+
+    func trashNodes(at urls: [URL]) {
+        let nodes = urls.map { FileNode(url: $0, name: $0.lastPathComponent,
+                                       isDirectory: $0.hasDirectoryPath, children: nil) }
+        let affected = openDocuments.filter { document in
+            nodes.contains { Self.relativePath(of: document.url, under: $0.url) != nil }
+        }
+        if affected.contains(where: \.isDirty) {
+            let alert = NSAlert()
+            alert.messageText = "Move selected items to the Trash?"
+            alert.informativeText = "Unsaved changes in affected open tabs will be lost."
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
-        do {
-            try FileManager.default.trashItem(at: node.url, resultingItemURL: nil)
-            for document in affected {
-                document.isDirty = false
-                closeDocument(document)
+        var failures: [String] = []
+        var trashed: [(source: URL, destination: URL)] = []
+        for node in nodes {
+            do {
+                var result: NSURL?
+                try FileManager.default.trashItem(at: node.url, resultingItemURL: &result)
+                if let result = result as URL? { trashed.append((node.url, result)) }
             }
-            refreshWorkspace()
-        } catch {
-            appendConsole(.system, "Could not move \(node.name) to Trash: \(error.localizedDescription)")
+            catch { failures.append("\(node.name): \(error.localizedDescription)") }
         }
+        for document in affected {
+            document.isDirty = false
+            closeDocument(document)
+        }
+        if !trashed.isEmpty {
+            NSApp.keyWindow?.undoManager?.registerUndo(withTarget: self) { target in
+                target.restoreMovedItems(trashed)
+            }
+            NSApp.keyWindow?.undoManager?.setActionName("Move to Trash")
+        }
+        refreshWorkspace()
+        if !failures.isEmpty { userNotice = failures.joined(separator: "\n") }
+    }
+
+    func trashNode(_ node: FileNode) {
+        trashNodes(at: [node.url])
     }
 
     static func relativePath(of url: URL?, under base: URL) -> String? {
@@ -2212,5 +2568,7 @@ final class LatexState: ObservableObject {
 
 final class CellSelection: ObservableObject {
     @Published var selectedCellID: UUID?
+    @Published var selectedCellIDs: Set<UUID> = []
+    var anchorCellID: UUID?
     @Published var isCommandMode = false
 }

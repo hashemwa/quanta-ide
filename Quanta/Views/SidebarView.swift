@@ -3,11 +3,13 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject var app: AppState
+    @ObservedObject private var git = AppState.shared.git
     @State private var searchQuery = ""
     @State private var searchResults: [AppState.FileSearchResult] = []
     @State private var searching = false
     @State private var searchedQuery: String?
-    @State private var selectedFile: URL?
+    @State private var selectedFiles: Set<URL> = []
+    @State private var fileFilter = ""
     @State private var searchGeneration = 0
     @State private var searchOptions = WorkspaceSearchOptions()
     @State private var searchReport = WorkspaceSearchReport()
@@ -21,6 +23,8 @@ struct SidebarView: View {
             switch app.sidebarPane {
             case .files:
                 filesPane
+            case .search:
+                searchPane
             case .sourceControl:
                 SourceControlPanel()
             }
@@ -28,33 +32,47 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private static let paneSegments: [IconSegments<SidebarPane>.Segment] =
-        SidebarPane.allCases.map { .init(value: $0, icon: $0.icon, help: $0.help) }
+    private static let paneSegments: [IconSegmentedControl<SidebarPane>.Segment] =
+        SidebarPane.allCases.map { .init(value: $0, icon: $0.icon, title: $0.title, help: $0.help) }
 
     private var navigatorBar: some View {
         PanelBar(height: DS.Bar.primary, rule: .below) {
-            IconSegments(segments: Self.paneSegments,
-                         selection: Binding(get: { app.sidebarPane },
-                                            set: { app.showSidebarPane($0) }))
-            Spacer(minLength: DS.Space.xs)
-            switch app.sidebarPane {
-            case .files:
-                FilesPaneActions(searching: searching)
-            case .sourceControl:
-                SourceControlActions()
-            }
+            IconSegmentedControl(segments: Self.paneSegments,
+                                 selection: Binding(get: { app.sidebarPane },
+                                                    set: { app.showSidebarPane($0) }))
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("Navigator")
         }
     }
 
     @ViewBuilder
     private var filesPane: some View {
         if let workspace = app.workspace {
+            fileTree(workspace)
+            filesFooter(workspace)
+        } else {
+            emptyState
+        }
+    }
+
+    @ViewBuilder
+    private var searchPane: some View {
+        if app.workspace != nil {
             searchRow
-            if showSearchOptions { searchOptionsView }
+            if showSearchOptions {
+                searchOptionsView
+                Divider()
+            }
             if showsSearch {
                 searchList
+                searchFooter
             } else {
-                fileTree(workspace)
+                ContentUnavailableView {
+                    Label("Search Workspace", systemImage: "magnifyingglass")
+                } description: {
+                    Text("Find text in scripts, notebooks, and project files.")
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
             emptyState
@@ -62,7 +80,7 @@ struct SidebarView: View {
     }
 
     private var searchRow: some View {
-        PanelBar(rule: .none) {
+        PanelBar(rule: .below) {
             SearchField(text: $searchQuery,
                         prompt: "Search in files",
                         focusRequest: app.fileSearchFocusRequest,
@@ -71,7 +89,6 @@ struct SidebarView: View {
                             set: { app.handledFileSearchFocusRequest = $0 }),
                         onSubmit: runSearch)
                 .frame(maxWidth: .infinity)
-                .frame(height: DS.Layout.slot)
             IconButton("slider.horizontal.3", help: "Search Options", isActive: showSearchOptions) { showSearchOptions.toggle() }
         }
         .onChange(of: searchQuery) { _, value in
@@ -84,57 +101,33 @@ struct SidebarView: View {
         }
     }
 
-    private struct FilesPaneActions: View {
-        let searching: Bool
-        private var app: AppState { AppState.shared }
-        @ObservedObject private var git = AppState.shared.git
-
-        private var changeCount: Int {
-            guard git.availability == .ready else { return 0 }
-            return git.snapshot?.changedPathCount ?? 0
-        }
-
-        var body: some View {
-            HStack(spacing: DS.Space.xxs) {
-                if changeCount > 0 { changesPill }
-                ActivitySlot(active: searching)
-                IconMenu("plus", help: "New notebook, file or folder (⌘N)") {
-                    Button("New Notebook") { app.newNotebook() }
-                    Button("New Python File") { app.newScript() }
-                    Divider()
-                    Button("New File…") {
-                        if let root = app.workspace?.rootURL { app.createFile(in: root) }
-                    }
-                    .disabled(app.workspace == nil)
-                    Button("New Folder…") {
-                        if let root = app.workspace?.rootURL { app.createFolder(in: root) }
-                    }
-                    .disabled(app.workspace == nil)
-                }
-                IconMenu("ellipsis", help: "Show more actions") {
-                    Button("Refresh File Tree") { app.refreshWorkspace() }
-                        .disabled(app.workspace == nil)
-                    Divider()
-                    Button("Open Folder…") { app.openFolderPanel() }
-                    Button("Reveal in Finder") {
-                        guard let root = app.workspace?.rootURL else { return }
-                        NSWorkspace.shared.activateFileViewerSelecting([root])
-                    }
-                    .disabled(app.workspace == nil)
+    private func filesFooter(_ workspace: Workspace) -> some View {
+        PanelBar(height: DS.Bar.footer, rule: .above) {
+            IconMenu("plus", help: "New notebook, file or folder (⌘N)") {
+                Button("New Notebook") { app.newNotebook() }
+                Button("New Python File") { app.newScript() }
+                Divider()
+                Button("New File…") { app.createFile(in: workspace.rootURL) }
+                Button("New Folder…") { app.createFolder(in: workspace.rootURL) }
+            }
+            FilterField(text: $fileFilter)
+            IconMenu("ellipsis", help: "Show more actions") {
+                Toggle("Show Hidden Files", isOn: $app.showsHiddenFiles)
+                Button("Refresh File Tree") { app.refreshWorkspace() }
+                Divider()
+                Button("Move To…") { app.chooseDestinationAndMoveNodes(at: Array(selectedFiles)) }
+                    .disabled(selectedFiles.isEmpty)
+                Button("Duplicate") { app.duplicateNodes(at: Array(selectedFiles)) }
+                    .disabled(selectedFiles.isEmpty)
+                Button("Copy") { app.copyNodes(at: Array(selectedFiles)) }
+                    .disabled(selectedFiles.isEmpty)
+                Button("Paste") { app.pasteNodes(into: workspace.rootURL) }
+                Divider()
+                Button("Open Folder…") { app.openFolderPanel() }
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([workspace.rootURL])
                 }
             }
-        }
-
-        private var changesPill: some View {
-            Button {
-                app.showSidebarPane(.sourceControl)
-            } label: {
-                Pill(changeCount > 999 ? "999+" : "\(changeCount)")
-            }
-            .buttonStyle(IconButtonStyle(shape: AnyShape(Capsule())))
-            .help("Show Source Control — \(changeCount) change\(changeCount == 1 ? "" : "s") (⌘2)")
-            .accessibilityLabel(
-                "Show Source Control, \(changeCount) change\(changeCount == 1 ? "" : "s")")
         }
     }
 
@@ -170,49 +163,42 @@ struct SidebarView: View {
                 Toggle("Aa", isOn: $searchOptions.caseSensitive).help("Match Case")
                 Toggle("Word", isOn: $searchOptions.wholeWord).help("Match Whole Word")
                 Toggle(".*", isOn: $searchOptions.regularExpression).help("Use Regular Expression")
-            }.toggleStyle(.button).controlSize(.small)
+            }
+            .toggleStyle(.button)
             TextField("Include: *.py, **/*.ipynb", text: $searchOptions.include).onSubmit(runSearch)
             TextField("Exclude: tests/**", text: $searchOptions.exclude).onSubmit(runSearch)
         }
-        .font(.caption)
-        .padding(.horizontal, DS.Space.bar).padding(.bottom, DS.Space.s)
+        .controlSize(.small)
+        .padding(.horizontal, DS.Space.bar)
+        .padding(.vertical, DS.Space.s)
         .onChange(of: searchOptions) { _, _ in if !searchQuery.isEmpty { runSearch() } }
     }
 
     private var searchList: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(searchReport.truncated ? "First 400 matching lines" : "\(searchResults.count) matching lines")
-                Spacer()
-                if searchReport.skippedFiles > 0 {
-                    Text("\(searchReport.skippedFiles) skipped").help("Unreadable files or files larger than 8 MB were skipped")
-                }
-            }.font(.caption).foregroundStyle(.secondary).padding(DS.Space.bar)
-            List {
-                ForEach(Array(Set(searchResults.map(\.fileURL))).sorted { $0.path < $1.path }, id: \.self) { url in
-                    Section {
-                        ForEach(searchResults.filter { $0.fileURL == url }) { result in
-                            Button { app.openSearchResult(result) } label: {
-                                VStack(alignment: .leading, spacing: DS.Space.xxs) {
-                                    Text(result.cellIndex.map { "Cell \($0 + 1) · line \(result.line)" } ?? "Line \(result.line)")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                    Text(highlighted(result.preview)).font(.caption.monospaced()).lineLimit(2)
-                                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                            }.buttonStyle(.plain).help("\(url.path):\(result.line)")
-                        }
-                    } header: {
-                        Text(app.relativePath(url)).lineLimit(1).truncationMode(.middle).help(url.path)
+        List {
+            ForEach(Array(Set(searchResults.map(\.fileURL))).sorted { $0.path < $1.path }, id: \.self) { url in
+                Section {
+                    ForEach(searchResults.filter { $0.fileURL == url }) { result in
+                        Button { app.openSearchResult(result) } label: {
+                            VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                                Text(result.cellIndex.map { "Cell \($0 + 1) · line \(result.line)" } ?? "Line \(result.line)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Text(highlighted(result.preview)).font(.caption.monospaced()).lineLimit(2)
+                            }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        }.buttonStyle(.plain).help("\(url.path):\(result.line)")
                     }
+                } header: {
+                    Text(app.relativePath(url)).lineLimit(1).truncationMode(.middle).help(url.path)
                 }
             }
-            .listStyle(.sidebar)
-            .overlay {
-                if searching { ProgressView() }
-                else if let error = searchReport.error {
-                    ContentUnavailableView("Search Error", systemImage: "exclamationmark.triangle", description: Text(error))
-                } else if searchResults.isEmpty, let query = searchedQuery {
-                    ContentUnavailableView.search(text: query)
-                }
+        }
+        .listStyle(.sidebar)
+        .overlay {
+            if searching { ProgressView() }
+            else if let error = searchReport.error {
+                ContentUnavailableView("Search Error", systemImage: "exclamationmark.triangle", description: Text(error))
+            } else if searchResults.isEmpty, let query = searchedQuery {
+                ContentUnavailableView.search(text: query)
             }
         }
         .onChange(of: app.workspace?.rootURL) { _, _ in
@@ -221,6 +207,28 @@ struct SidebarView: View {
             searchedQuery = nil
             searchResults = []
         }
+    }
+
+    private var searchFooter: some View {
+        PanelBar(height: DS.Bar.footer, rule: .above) {
+            Text(searchSummary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if searchReport.skippedFiles > 0 {
+                Text("\(searchReport.skippedFiles) skipped")
+                    .help("Unreadable files or files larger than 8 MB were skipped")
+            }
+            ActivitySlot(active: searching)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    private var searchSummary: String {
+        if searching { return "Searching…" }
+        if searchReport.truncated { return "First 400 matching lines" }
+        let files = Set(searchResults.map(\.fileURL)).count
+        return "\(searchResults.count) matching line\(searchResults.count == 1 ? "" : "s") in \(files) file\(files == 1 ? "" : "s")"
     }
 
     private func highlighted(_ text: String) -> AttributedString {
@@ -235,18 +243,17 @@ struct SidebarView: View {
     }
 
     private func fileTree(_ workspace: Workspace) -> some View {
-        List(selection: $selectedFile) {
-            Section(workspace.rootURL.lastPathComponent) {
-                OutlineGroup(workspace.root.children ?? [], children: \.children) { node in
-                    FileRowView(node: node)
-                        .tag(node.url)
-                }
-            }
-        }
-        .listStyle(.sidebar)
-        .environment(\.defaultMinListRowHeight, DS.Layout.listRowMinHeight)
-        .onChange(of: selectedFile) { _, url in
-            guard let url, url != app.activeDocument?.url else { return }
+        let nodes = filteredNodes(workspace.root.children ?? [])
+        let snapshot = git.availability == .ready ? git.snapshot : nil
+        return NavigatorOutline(root: workspace.root,
+                                children: nodes,
+                                selection: $selectedFiles,
+                                filtering: !fileFilter.isEmpty,
+                                statusByPath: snapshot?.statusByPath ?? [:],
+                                directoriesWithChanges: snapshot?.directoriesWithChanges ?? [])
+        .onChange(of: selectedFiles) { old, selection in
+            guard selection.count == 1, let url = selection.first,
+                  old != selection, url.resolvingSymlinksInPath() != app.activeDocument?.url?.resolvingSymlinksInPath() else { return }
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
                   !isDirectory.boolValue else { return }
@@ -254,83 +261,18 @@ struct SidebarView: View {
         }
         .onChange(of: app.activeDocumentID, initial: true) { _, _ in
             let active = app.activeDocument?.url
-            if selectedFile != active { selectedFile = active }
-        }
-        .contextMenu {
-            Button("New File…") { app.createFile(in: workspace.rootURL) }
-            Button("New Folder…") { app.createFolder(in: workspace.rootURL) }
-            Divider()
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([workspace.rootURL])
-            }
+            if let active, selectedFiles.count <= 1 { selectedFiles = [active] }
         }
     }
-}
 
-struct FileRowView: View {
-    private var app: AppState { AppState.shared }
-    @ObservedObject private var git = AppState.shared.git
-    let node: FileNode
-
-    private var status: GitChange.Status? {
-        git.snapshot?.statusByPath[node.url.path]
-    }
-
-    private var containsChanges: Bool {
-        node.isDirectory && (git.snapshot?.directoriesWithChanges.contains(node.url.path) ?? false)
-    }
-
-    var body: some View {
-        HStack(spacing: DS.Space.s) {
-            Label {
-                Text(node.name)
-                    .strikethrough(status == .deleted)
-                    .foregroundStyle(status.map { DS.Git.color(for: $0) } ?? Color.primary)
-            } icon: {
-                Image(systemName: node.iconName)
-            }
-            .lineLimit(1)
-            .truncationMode(.middle)
-            Spacer(minLength: DS.Space.xs)
-            Group {
-                if let status {
-                    Text(status.letter)
-                        .font(.caption.monospaced().weight(.semibold))
-                        .foregroundStyle(DS.Git.color(for: status))
-                        .help(status.label)
-                } else if containsChanges {
-                    Circle()
-                        .fill(.secondary)
-                        .frame(width: DS.Layout.statusDot, height: DS.Layout.statusDot)
-                        .accessibilityLabel("Contains changes")
-                }
-            }
-            .frame(width: DS.Layout.statusSlot, alignment: .trailing)
-        }
-        .help(node.url.path)
-        .contextMenu {
-            if !node.isDirectory {
-                Button("Open") { app.openFile(node.url) }
-                if status != nil {
-                    Button("Show Changes") { app.openDiff(forFileAt: node.url) }
-                }
-                Divider()
-            }
-            if node.isDirectory {
-                Button("New File…") { app.createFile(in: node.url) }
-                Button("New Folder…") { app.createFolder(in: node.url) }
-                Divider()
-            }
-            Button("Rename…") { app.renameNode(node) }
-            Button("Move to Trash", role: .destructive) { app.trashNode(node) }
-            Divider()
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([node.url])
-            }
-            Button("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(node.url.path, forType: .string)
-            }
+    private func filteredNodes(_ nodes: [FileNode]) -> [FileNode] {
+        guard !fileFilter.isEmpty else { return nodes }
+        return nodes.compactMap { node in
+            let children = filteredNodes(node.children ?? [])
+            guard node.name.localizedStandardContains(fileFilter) || !children.isEmpty else { return nil }
+            var copy = node
+            if node.isDirectory { copy.children = children }
+            return copy
         }
     }
 }

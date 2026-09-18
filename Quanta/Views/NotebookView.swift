@@ -23,7 +23,7 @@ struct NotebookView: View {
             }
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: DS.Space.l) {
                         ForEach(notebook.cells) { cell in
                             CellView(cell: cell, document: document, notebook: notebook)
                                 .id(cell.id)
@@ -46,8 +46,8 @@ struct NotebookView: View {
                         .padding(.leading, DS.Space.m + DS.Layout.cellGutterWidth + DS.Space.m)
                         .padding(.top, DS.Space.xs)
                     }
-                    .padding(.vertical, 14)
-                    .padding(.trailing, 16)
+                    .padding(.vertical, DS.Space.l)
+                    .padding(.trailing, DS.Space.xl)
                     .background(NotebookScrollMarker())
                 }
                 .onChange(of: app.scrollRequest) { _, target in
@@ -277,13 +277,12 @@ struct CellView: View {
     @Environment(\.monoFontSize) private var monoFontSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var isSelected: Bool { selection.selectedCellID == cell.id }
-    private var isCommandSelected: Bool { isSelected && selection.isCommandMode }
+    private var isSelected: Bool { selection.selectedCellIDs.contains(cell.id) || selection.selectedCellID == cell.id }
 
     var body: some View {
         HStack(alignment: .top, spacing: DS.Space.m) {
             gutter
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
                 content
                 if cell.cellType == .code && !cell.outputs.isEmpty {
                     outputs
@@ -292,18 +291,13 @@ struct CellView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, DS.Space.m)
-        .background(alignment: .leading) {
-            if isCommandSelected {
-                HStack(spacing: 0) {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(Color.accentColor)
-                        .frame(width: 3)
-                    Color.accentColor.opacity(0.05)
-                }
-                .padding(.trailing, 6)
-            }
+        .draggable(cell.id.uuidString)
+        .dropDestination(for: String.self) { values, _ in
+            guard let raw = values.first, let draggedID = UUID(uuidString: raw) else { return false }
+            app.reorderCells(draggedID: draggedID, before: cell.id,
+                             in: notebook, document: document)
+            return true
         }
-        .overlay(alignment: .topTrailing) { cellToolbar }
         .scrollAwareHover($hovering)
         .contextMenu { menuItems }
     }
@@ -352,12 +346,11 @@ struct CellView: View {
             }
         }
         .frame(width: DS.Layout.cellGutterWidth)
-        .padding(.top, cell.cellType == .code ? DS.Space.xs + DS.Space.s : DS.Space.xxs)
+        .padding(.top, DS.Space.m)
         .contentShape(Rectangle())
         .onTapGesture {
             app.activeDocumentID = document.id
-            app.selectedCellID = cell.id
-            app.enterCommandMode()
+            app.selectCell(cell, in: notebook, modifiers: NSEvent.modifierFlags)
         }
     }
 
@@ -378,12 +371,14 @@ struct CellView: View {
             MarkdownView(source: cell.source.isEmpty
                          ? "*Empty markdown cell — double-click to edit*"
                          : cell.source,
-                         selectable: false,
+                         selectable: true,
                          attachments: Notebook.attachmentData(cell.extraKeys["attachments"]),
                          baseDirectory: document.url?.deletingLastPathComponent())
-                .padding(.vertical, 2)
+                .padding(.horizontal, DS.Space.m)
+                .padding(.vertical, DS.Space.s)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
+                .selectionOutline(isSelected)
                 .onTapGesture(count: 2) {
                     cell.isEditingMarkdown = true
                     app.selectedCellID = cell.id
@@ -411,14 +406,11 @@ struct CellView: View {
                     .font(.subheadline)
             }
             .foregroundStyle(.secondary)
-            .padding(.horizontal, DS.Space.bar)
-            .padding(.vertical, 5)
+            .padding(.horizontal, DS.Space.m)
+            .padding(.vertical, DS.Space.s)
             .frame(maxWidth: .infinity, alignment: .leading)
             .hoverHighlight(radius: DS.Radius.card)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.card).fill(Color(nsColor: .textBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.card)
-                .stroke(isSelected ? Color.accentColor.opacity(0.7) : Color(nsColor: .separatorColor),
-                        lineWidth: 1))
+            .inputCard(focused: isSelected)
         }
         .buttonStyle(.plain)
         .help("Expand source (\(max(1, cell.source.components(separatedBy: "\n").count)) lines)")
@@ -447,14 +439,8 @@ struct CellView: View {
             onFocus: { app.activeDocumentID = document.id; app.selectedCellID = cell.id },
             onEscape: { app.enterCommandMode() })
         .frame(height: cell.editorHeight)
-        .padding(DS.Space.xs)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.card)
-                .fill(Color(nsColor: .textBackgroundColor)))
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.card)
-                .stroke(isSelected ? Color.accentColor.opacity(0.7) : Color(nsColor: .separatorColor),
-                        lineWidth: isSelected ? 1.5 : 1))
+        .padding(.horizontal, DS.Space.xs)
+        .inputCard(focused: isSelected)
     }
 
     @ViewBuilder
@@ -494,34 +480,14 @@ struct CellView: View {
         }
     }
 
-    private var cellToolbar: some View {
-        FloatingToolbar(visible: hovering || isSelected) {
-            IconButton("plus", help: "Insert code cell below (B)") {
-                app.insertCell(type: .code, nextTo: cell, offset: 1, in: notebook, document: document)
-            }
-            IconButton(cell.isSourceCollapsed ? "chevron.down" : "chevron.up.chevron.down",
-                              help: cell.isSourceCollapsed ? "Expand source" : "Collapse source",
-                              isActive: cell.isSourceCollapsed) {
-                app.setSourceCollapsed(!cell.isSourceCollapsed, for: cell, in: document)
-            }
-            ToolbarDivider()
-            IconButton("chevron.up", help: "Move up") {
-                app.moveCell(cell, direction: -1, in: notebook, document: document)
-            }
-            IconButton("chevron.down", help: "Move down") {
-                app.moveCell(cell, direction: 1, in: notebook, document: document)
-            }
-            IconButton("trash", help: "Delete cell (DD; Z restores)") {
-                app.deleteCell(cell, in: notebook, document: document)
-            }
-        }
-        .padding(.trailing, 6)
-        .offset(y: -6)
-    }
-
     @ViewBuilder
     private var menuItems: some View {
         Button("Run Cell") { app.runCell(cell, in: document, advance: false) }
+        if selection.selectedCellIDs.count > 1 {
+            Button("Run Selected Cells") { app.runSelectedCells() }
+        }
+        Button("Run Cells Above") { app.runCells(above: cell, in: document) }
+        Button("Run Cells Below") { app.runCells(below: cell, in: document) }
         Button("Run All Cells") { app.runAllCells(in: document) }
         Divider()
         Button("Copy Cell") { app.copyCell(cell, in: notebook) }
@@ -555,8 +521,10 @@ struct CellView: View {
                 app.setOutputCollapsed(!cell.isOutputCollapsed, for: cell, in: document)
             }
             Button("Clear Output") {
-                cell.outputs = []
-                document.isDirty = true
+                app.clearOutput(for: cell, in: document)
+            }
+            if !document.clearedOutputs.isEmpty {
+                Button("Undo Clear Output") { app.undoClearedOutput(in: document) }
             }
         }
         Divider()

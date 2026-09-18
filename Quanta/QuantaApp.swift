@@ -59,7 +59,12 @@ private struct WindowFrameSaver: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async {
-            view.window?.setFrameAutosaveName("QuantaMainWindow")
+            if QuantaDefaults.previewDirectory != nil {
+                let width = Double(ProcessInfo.processInfo.environment["QUANTA_UI_PREVIEW_WIDTH"] ?? "1280") ?? 1280
+                view.window?.setContentSize(NSSize(width: width, height: width < 1280 ? 700 : 800))
+            } else {
+                view.window?.setFrameAutosaveName("QuantaMainWindow")
+            }
         }
         return view
     }
@@ -74,6 +79,13 @@ struct QuantaCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Navigate") {
+            Button("Back") { app.navigateHistory(-1) }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(!app.canNavigateBack)
+            Button("Forward") { app.navigateHistory(1) }
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(!app.canNavigateForward)
+            Divider()
             Button("Quick Open…") { app.paletteMode = .files }
                 .keyboardShortcut("p", modifiers: .command)
             Button("Command Palette…") { app.paletteMode = .commands }
@@ -234,7 +246,10 @@ struct QuantaCommands: Commands {
                 .disabled(git.availability != .ready || (git.snapshot?.isClean ?? true))
             Button("Commit Changes") { app.commit() }
                 .keyboardShortcut(.return, modifiers: [.command, .option])
-                .disabled(git.isBusy || (git.snapshot?.isClean ?? true)
+                .disabled(git.isBusy || (git.snapshot?.staged.isEmpty ?? true)
+                          || !(git.snapshot?.conflicted.isEmpty ?? true))
+            Button("Stage All and Commit…") { app.stageAllAndCommit() }
+                .disabled(git.isBusy || (git.snapshot?.unstaged.isEmpty ?? true)
                           || !(git.snapshot?.conflicted.isEmpty ?? true))
             Button("Stage All Changes") { app.stageAllChanges() }
                 .disabled(git.isBusy || (git.snapshot?.unstaged.isEmpty ?? true))
@@ -266,6 +281,8 @@ struct QuantaCommands: Commands {
         CommandGroup(after: .sidebar) {
             Button("Show \(SidebarPane.files.title)") { app.showSidebarPane(.files) }
                 .keyboardShortcut("1", modifiers: .command)
+            Button("Show \(SidebarPane.search.title)") { app.showSidebarPane(.search) }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
             Button("Show \(SidebarPane.sourceControl.title)") { app.showSidebarPane(.sourceControl) }
                 .keyboardShortcut("2", modifiers: .command)
             Button("Refresh File Tree") { app.refreshWorkspace() }
@@ -353,6 +370,14 @@ struct SettingsView: View {
                 } footer: {
                     Text("Running a notebook changes outputs, execution counts and metadata. With this on, the Source Control panel only lists a notebook when its cell sources differ.")
                 }
+                Section("Navigator") {
+                    Toggle("Show hidden files", isOn: $app.showsHiddenFiles)
+                }
+                Section("Window") {
+                    LabeledContent("Sidebar, inspector and panel sizes") {
+                        Button("Reset Layout") { app.resetLayout() }
+                    }
+                }
             }
             .formStyle(.grouped)
             .frame(width: 480)
@@ -371,6 +396,8 @@ struct SettingsView: View {
                                 .disabled(app.editorFontSize == 13)
                         }
                     }
+                    Toggle("Show line numbers", isOn: $app.showsLineNumbers)
+                    Toggle("Wrap long lines", isOn: $app.wrapsCode)
                 } footer: {
                     Text("⌘+ and ⌘− adjust the size from the keyboard; outputs, tables and the console follow.")
                 }

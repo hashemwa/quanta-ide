@@ -23,6 +23,7 @@ struct NotebookNavigator: View {
     @State private var showOutline = false
     @State private var query = ""
     private var app: AppState { AppState.shared }
+    @ObservedObject private var selection = AppState.shared.selection
 
     init(document: Document, notebook: Notebook) {
         self.document = document
@@ -33,6 +34,7 @@ struct NotebookNavigator: View {
     private var code: [NotebookCell] { cells.filter { $0.cellType == .code } }
     private var running: NotebookCell? { code.first(where: \.isRunning) }
     private var queued: Int { code.filter(\.isQueued).count }
+    private var selectedCell: NotebookCell? { cells.first { $0.id == selection.selectedCellID } }
 
     var body: some View {
         PanelBar(rule: .below) {
@@ -62,6 +64,36 @@ struct NotebookNavigator: View {
                 let stale = code.filter(\.hasStaleOutput).count
                 if stale > 0 { Text("\(stale) stale").foregroundStyle(.orange).help("Cell source changed since its output was produced") }
             }
+            Divider().frame(height: DS.Layout.tabDividerHeight)
+            IconMenu("plus", help: "Insert Cell") {
+                Button("Code Below") {
+                    if let cell = selectedCell { app.insertCell(type: .code, nextTo: cell, offset: 1, in: activity.notebook, document: document) }
+                }
+                Button("Markdown Below") {
+                    if let cell = selectedCell { app.insertCell(type: .markdown, nextTo: cell, offset: 1, in: activity.notebook, document: document) }
+                }
+            }
+            .disabled(selectedCell == nil)
+            IconButton("chevron.up", help: "Move Selected Cell Up") {
+                if let cell = selectedCell { app.moveCell(cell, direction: -1, in: activity.notebook, document: document) }
+            }
+            .disabled(selectedCell == nil || selectedCell?.id == cells.first?.id)
+            IconButton("chevron.down", help: "Move Selected Cell Down") {
+                if let cell = selectedCell { app.moveCell(cell, direction: 1, in: activity.notebook, document: document) }
+            }
+            .disabled(selectedCell == nil || selectedCell?.id == cells.last?.id)
+            IconMenu("ellipsis", help: "Selected Cell Actions") {
+                if let cell = selectedCell {
+                    Button("Run Cell") { app.runCell(cell, in: document, advance: false) }
+                    Button(cell.isSourceCollapsed ? "Expand Source" : "Collapse Source") {
+                        app.setSourceCollapsed(!cell.isSourceCollapsed, for: cell, in: document)
+                    }
+                    Button("Duplicate Cell") { app.duplicateCell(cell, in: activity.notebook, document: document) }
+                    Divider()
+                    Button("Delete Cell", role: .destructive) { app.deleteCell(cell, in: activity.notebook, document: document) }
+                }
+            }
+            .disabled(selectedCell == nil)
         }
         .font(.caption)
     }

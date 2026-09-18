@@ -22,6 +22,12 @@ struct VariablesPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             PanelHeader("Variables", systemImage: "list.bullet.rectangle", height: DS.Bar.primary) {
+                if app.kernelStatus != .idle {
+                    Text(app.kernelStatus == .busy ? "Running…" : "Kernel \(app.kernelStatus.label.lowercased())")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("Values may be stale until the kernel is idle")
+                }
                 IconMenu(typeFilter == "All Types" ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill",
                          help: "Filter and Sort Variables") {
                     Picker("Type", selection: $typeFilter) {

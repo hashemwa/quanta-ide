@@ -11,11 +11,32 @@ struct EditorAreaView: View {
             } else {
                 TabBarView()
                 Divider()
+                if app.externallyChangedDocumentID != nil {
+                    HStack(spacing: DS.Space.s) {
+                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                        Text("This file changed on disk while you have unsaved edits.")
+                            .font(.callout)
+                        Spacer(minLength: DS.Space.s)
+                        Button("Compare") { app.compareExternalVersion() }
+                        Button("Keep My Version") { app.keepCurrentVersionAfterExternalChange() }
+                        Button("Reload from Disk") { app.reloadExternalVersion() }
+                    }
+                    .controlSize(.small)
+                    .padding(DS.Space.bar)
+                    Divider()
+                }
                 if let notice = app.userNotice {
                     HStack(alignment: .top, spacing: DS.Space.s) {
                         Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                         Text(notice).font(.callout).textSelection(.enabled)
                         Spacer()
+                        if app.pausedRunDocumentID != nil {
+                            Button("Continue Remaining") {
+                                app.userNotice = nil
+                                app.continueRemainingCells()
+                            }
+                            .controlSize(.small)
+                        }
                         IconButton("xmark", help: "Dismiss Message") { app.userNotice = nil }
                     }.padding(DS.Space.bar)
                 }
@@ -113,6 +134,8 @@ struct ScriptEditorView: View {
                         if !document.isDirty { document.isDirty = true }
                     }
                 }),
+            showsLineNumbers: app.showsLineNumbers,
+            wrapsLines: app.wrapsCode,
             documentID: document.id,
             onCommand: { command in
                 if command == .runCellAndAdvance {

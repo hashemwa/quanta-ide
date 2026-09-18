@@ -28,9 +28,8 @@ struct OutputItemView: View {
             Text(text.trimmingTrailingNewlines)
                 .font(.system(size: monoSize, design: .monospaced))
                 .textSelection(.enabled)
-                .padding(6)
+                .padding(.leading, DS.Layout.cellTextInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .outputCard()
                 .contextMenu {
                     Button("Copy Text") {
                         NSPasteboard.general.clearContents()
@@ -82,15 +81,35 @@ struct ImageOutputView: View {
     let image: NSImage
     var fileName = "output.png"
     @State private var hovering = false
+    @State private var actualSize = false
+    @State private var saveError: String?
 
     var body: some View {
-        Image(nsImage: image)
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-            .frame(maxWidth: displayWidth, maxHeight: DS.Layout.outputMaxHeight,
-                   alignment: .leading)
+        Group {
+            if actualSize {
+                ScrollView([.horizontal, .vertical]) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .frame(width: image.size.width, height: image.size.height)
+                }
+                .frame(maxWidth: DS.Layout.outputMaxWidth,
+                       maxHeight: DS.Layout.outputMaxHeight, alignment: .leading)
+            } else {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: displayWidth, maxHeight: DS.Layout.outputMaxHeight,
+                           alignment: .leading)
+            }
+        }
             .accessibilityLabel(accessibilityDescription)
             .overlay(alignment: .topTrailing) { controls }
+            .overlay(alignment: .bottomLeading) {
+                if let saveError {
+                    Label(saveError, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange).padding(DS.Space.s)
+                }
+            }
             .padding(.vertical, 2)
             .scrollAwareHover($hovering)
     }
@@ -113,6 +132,11 @@ struct ImageOutputView: View {
 
     private var controls: some View {
         FloatingToolbar(visible: hovering) {
+            IconButton(actualSize ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                       help: actualSize ? "Fit to Width" : "Actual Size",
+                       isActive: actualSize) {
+                actualSize.toggle()
+            }
             IconButton("doc.on.doc", help: "Copy image") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.writeObjects([image])
@@ -130,7 +154,12 @@ struct ImageOutputView: View {
         panel.nameFieldStringValue = fileName
         panel.allowedContentTypes = [.png]
         if panel.runModal() == .OK, let url = panel.url {
-            try? pngData.write(to: url)
+            do {
+                try pngData.write(to: url)
+                saveError = nil
+            } catch {
+                saveError = "Couldn’t save image: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -191,6 +220,7 @@ enum MarkdownBlock: Equatable {
     case paragraph(String)
     case math(String)
     case image(alt: String, url: String)
+    case table([[String]])
 }
 
 enum InlineMarkdownSegment: Equatable {
@@ -302,6 +332,27 @@ struct MarkdownView: View {
                 flushParagraph()
                 result.append(.image(alt: image.alt, url: image.url))
                 continue
+            }
+            if trimmed.contains("|") {
+                var cells = trimmed.split(separator: "|", omittingEmptySubsequences: false)
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                if cells.first?.isEmpty == true { cells.removeFirst() }
+                if cells.last?.isEmpty == true { cells.removeLast() }
+                if cells.count >= 2 {
+                    flushParagraph()
+                    let separator = cells.allSatisfy {
+                        !$0.isEmpty && $0.trimmingCharacters(in: CharacterSet(charactersIn: "-: ")).isEmpty
+                    }
+                    if !separator {
+                        if case .table(var rows)? = result.last {
+                            rows.append(Array(cells))
+                            result[result.count - 1] = .table(rows)
+                        } else {
+                            result.append(.table([Array(cells)]))
+                        }
+                    }
+                    continue
+                }
             }
             if trimmed.isEmpty {
                 flushParagraph()
@@ -502,7 +553,7 @@ struct MarkdownView: View {
                 .font(.system(size: monoSize, design: .monospaced))
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .outputCard()
+                .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(.quaternary))
         case .bullet(let text):
             HStack(alignment: .top, spacing: 6) {
                 Text("•")
@@ -514,6 +565,24 @@ struct MarkdownView: View {
             DisplayMathView(tex: tex)
         case .image(let alt, let url):
             markdownImageView(alt: alt, url: url)
+        case .table(let rows):
+            ScrollView(.horizontal) {
+                Grid(alignment: .leading, horizontalSpacing: DS.Space.l, verticalSpacing: DS.Space.xs) {
+                    ForEach(rows.indices, id: \.self) { rowIndex in
+                        GridRow {
+                            ForEach(rows[rowIndex].indices, id: \.self) { columnIndex in
+                                Text(MarkdownView.inlineAttributed(rows[rowIndex][columnIndex]))
+                                    .font(rowIndex == 0 ? .callout.weight(.semibold) : .callout)
+                                    .padding(.horizontal, DS.Space.xs)
+                                    .padding(.vertical, DS.Space.xxs)
+                            }
+                        }
+                        if rowIndex == 0 { Divider() }
+                    }
+                }
+                .padding(DS.Space.s)
+            }
+            .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(.quaternary.opacity(0.5)))
         }
     }
 
@@ -532,9 +601,9 @@ struct MarkdownView: View {
 
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: return .system(size: 24, weight: .bold)
-        case 2: return .system(size: 20, weight: .semibold)
-        case 3: return .system(size: 16, weight: .semibold)
+        case 1: return .system(size: 22, weight: .bold)
+        case 2: return .system(size: 18, weight: .semibold)
+        case 3: return .system(size: 15, weight: .semibold)
         default: return .system(size: 14, weight: .semibold)
         }
     }

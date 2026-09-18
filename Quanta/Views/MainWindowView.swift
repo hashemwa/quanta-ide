@@ -3,12 +3,16 @@ import SwiftUI
 struct MainWindowView: View {
     @EnvironmentObject var app: AppState
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
+                .frame(minWidth: DS.Layout.sidebarMin, idealWidth: DS.Layout.sidebarIdeal)
                 .navigationSplitViewColumnWidth(min: DS.Layout.sidebarMin, ideal: DS.Layout.sidebarIdeal, max: DS.Layout.sidebarMax)
+                .toolbar(removing: .sidebarToggle)
+                .toolbar { navigatorToolbar }
         } detail: {
             DetailSplitView()
         }
@@ -28,7 +32,9 @@ struct MainWindowView: View {
         .onAppear { app.bootstrap() }
         .onChange(of: colorScheme) { _, _ in app.pushAppearance() }
         .onChange(of: app.sidebarRevealRequest) { _, _ in
-            if columnVisibility == .detailOnly { columnVisibility = .all }
+            if columnVisibility == .detailOnly {
+                withAnimation(reduceMotion ? nil : DS.Motion.quick) { columnVisibility = .all }
+            }
         }
     }
 
@@ -44,17 +50,69 @@ struct MainWindowView: View {
     }
 
     @ToolbarContentBuilder
+    private var navigatorToolbar: some ToolbarContent {
+        ToolbarItem(placement: .automatic) { NavigatorToggle(columnVisibility: $columnVisibility) }
+    }
+
+    @ToolbarContentBuilder
     private var inspectorToolbar: some ToolbarContent {
-        ToolbarItem {
-            Button {
-                app.toggleVariables()
-            } label: {
+        if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
+        ToolbarItem(placement: .primaryAction) {
+            Button { app.toggleVariables() } label: {
                 Label("Variables", systemImage: "sidebar.trailing")
-                    .foregroundStyle(app.showVariables ? AnyShapeStyle(Color.accentColor)
-                                                       : AnyShapeStyle(.primary))
             }
             .help(app.showVariables ? "Hide Variables (⌥⌘0)" : "Show Variables (⌥⌘0)")
         }
+    }
+}
+
+struct NavigatorToggle: View {
+    @Binding var columnVisibility: NavigationSplitViewVisibility
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Button {
+            withAnimation(reduceMotion ? nil : DS.Motion.quick) {
+                columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+            }
+        } label: {
+            Label("Navigator", systemImage: "sidebar.leading")
+        }
+        .help(columnVisibility == .detailOnly ? "Show Navigator (⌃⌘S)" : "Hide Navigator (⌃⌘S)")
+    }
+}
+
+struct RunControls: View {
+    @EnvironmentObject var app: AppState
+
+    var body: some View {
+        Button { app.runActiveDocument() } label: {
+            Label(app.runCommandTitle, systemImage: app.runCommandIcon)
+        }
+        .help(app.runCommandHelp)
+        .disabled(app.activeDocument == nil)
+        Button { app.interruptKernel() } label: {
+            Label("Stop", systemImage: "stop.fill")
+        }
+        .help("Interrupt execution (⌘.)")
+        .disabled(app.kernelStatus != .busy)
+    }
+}
+
+struct HistoryControls: View {
+    @EnvironmentObject var app: AppState
+
+    var body: some View {
+        Button { app.navigateHistory(-1) } label: {
+            Label("Back", systemImage: "chevron.left")
+        }
+        .help("Go Back")
+        .disabled(!app.canNavigateBack)
+        Button { app.navigateHistory(1) } label: {
+            Label("Forward", systemImage: "chevron.right")
+        }
+        .help("Go Forward")
+        .disabled(!app.canNavigateForward)
     }
 }
 
@@ -91,63 +149,42 @@ struct DetailSplitView: View {
     @ToolbarContentBuilder
     private var editorToolbar: some ToolbarContent {
         if #available(macOS 26.0, *) {
-            ToolbarItemGroup { runControls }
+            ToolbarItemGroup(placement: .navigation) { HistoryControls() }
             ToolbarSpacer(.fixed)
-            ToolbarItem { KernelStatusMenu() }
+            ToolbarItem(placement: .principal) { KernelStatusMenu() }
+            ToolbarSpacer(.flexible)
+            ToolbarItemGroup(placement: .primaryAction) { RunControls() }
             ToolbarSpacer(.fixed)
-            ToolbarItem { consoleButton }
+            ToolbarItemGroup(placement: .primaryAction) {
+                splitButton
+                consoleButton
+            }
         } else {
             ToolbarItemGroup {
-                runControls
+                HistoryControls()
                 KernelStatusMenu()
+                RunControls()
+                splitButton
                 consoleButton
             }
         }
     }
 
-    @ViewBuilder
-    private var runControls: some View {
+    private var splitButton: some View {
         Button {
-            app.runActiveDocument()
+            app.toggleSplitEditor()
         } label: {
-            Label(app.runCommandTitle, systemImage: app.runCommandIcon)
+            Label("Split Editor", systemImage: "rectangle.split.2x1")
         }
-        .help(app.runCommandHelp)
+        .help(app.splitDocumentID == nil ? "Split Editor" : "Close Split Editor")
         .disabled(app.activeDocument == nil)
-
-        Button {
-            app.interruptKernel()
-        } label: {
-            Label("Stop", systemImage: "stop.fill")
-        }
-        .help("Interrupt execution (⌘.)")
-        .disabled(app.kernelStatus != .busy)
-
-        Button {
-            app.restartKernel()
-        } label: {
-            Label("Restart Kernel", systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
-        }
-        .help("Restart kernel (⌃⌘R)")
     }
 
     private var consoleButton: some View {
-        Button {
-            app.toggleConsole()
-        } label: {
-            Label("Bottom Panel", systemImage: consoleGlyph)
-                .foregroundStyle(consoleTint)
+        Button { app.toggleConsole() } label: {
+            Label("Bottom Panel", systemImage: "terminal")
         }
         .help(consoleHelp)
-    }
-
-    private var consoleGlyph: String {
-        app.showConsole ? "terminal.fill" : "terminal"
-    }
-
-    private var consoleTint: AnyShapeStyle {
-        if app.showConsole || app.consoleRevealPending { return AnyShapeStyle(Color.accentColor) }
-        return AnyShapeStyle(.primary)
     }
 
     private var consoleHelp: String {
@@ -242,14 +279,26 @@ struct KernelStatusMenu: View {
         } label: {
             HStack(spacing: DS.Space.s) {
                 indicator
+                    .font(.system(size: DS.Layout.kernelGlyph, weight: .semibold))
                     .frame(width: DS.Layout.statusSlot, height: DS.Layout.statusSlot)
                 Text(title)
                     .font(.callout)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(width: DS.Layout.kernelLabelWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let progress = app.runQueueProgress {
+                    Text("\(progress.completed)/\(progress.total)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding(.horizontal, DS.Space.bar)
+            .frame(width: DS.Layout.kernelLabelWidth, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .menuIndicator(.hidden)
+        .frame(width: DS.Layout.kernelLabelWidth)
+        .modifier(KernelMenuSizing())
         .help(tooltip)
         .accessibilityLabel("Interpreter: \(title)")
     }
@@ -258,38 +307,41 @@ struct KernelStatusMenu: View {
     private var indicator: some View {
         switch app.kernelStatus {
         case .idle:
-            Circle()
-                .fill(.green)
-                .frame(width: DS.Layout.statusDot, height: DS.Layout.statusDot)
+            Image(systemName: "memorychip")
+                .foregroundStyle(.secondary)
         case .busy:
-            Image(systemName: "circle.dotted")
-                .font(.system(size: DS.Layout.symbolGlyph, weight: .bold))
+            Image(systemName: "memorychip")
                 .foregroundStyle(.yellow)
                 .symbolEffect(.pulse, options: .repeating)
         case .starting:
-            Image(systemName: "circle.dotted")
-                .font(.system(size: DS.Layout.symbolGlyph, weight: .bold))
+            Image(systemName: "memorychip")
                 .foregroundStyle(.orange)
                 .symbolEffect(.pulse, options: .repeating)
         case .dead:
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: DS.Layout.symbolGlyph))
                 .foregroundStyle(.red)
         case .stopped:
-            Circle()
-                .strokeBorder(Color.secondary, lineWidth: 1)
-                .frame(width: DS.Layout.statusDot, height: DS.Layout.statusDot)
+            Image(systemName: "memorychip")
+                .foregroundStyle(.tertiary)
         }
     }
 
     private var title: String {
         let name = app.environmentName
+        let version = app.kernelPythonVersion
+            ?? app.pythonPath.flatMap { app.environmentVersions[$0] }
+        let base: String
+        if let version, !version.isEmpty {
+            base = "\(name) — Python \(version)"
+        } else {
+            base = name
+        }
         switch app.kernelStatus {
-        case .idle: return name
-        case .busy: return "\(name) · Running"
-        case .starting: return "\(name) · Starting"
-        case .dead: return "\(name) · Crashed"
-        case .stopped: return "\(name) · Off"
+        case .idle: return base
+        case .busy: return "\(base) · Running"
+        case .starting: return "\(base) · Starting"
+        case .dead: return "\(base) · Crashed"
+        case .stopped: return "\(base) · Off"
         }
     }
 
@@ -311,3 +363,12 @@ struct KernelStatusMenu: View {
     }
 }
 
+private struct KernelMenuSizing: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.buttonSizing(.flexible)
+        } else {
+            content
+        }
+    }
+}

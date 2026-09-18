@@ -35,6 +35,7 @@ final class Document: ObservableObject, Identifiable {
 
     var deletedCells: [(dict: [String: Any], index: Int,
                         restoreSource: (cellID: UUID, source: String)?)] = []
+    var clearedOutputs: [(cellID: UUID, outputs: [CellOutput], executionCount: Int?, duration: Double?)] = []
 
     var lastSelectedCellID: UUID?
 

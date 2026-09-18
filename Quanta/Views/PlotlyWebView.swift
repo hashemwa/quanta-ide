@@ -16,13 +16,23 @@ struct PlotlyFigureView: View {
 
     var body: some View {
         if !jsPath.isEmpty, FileManager.default.fileExists(atPath: jsPath) {
-            PlotlyWebView(html: html, jsPath: jsPath, cacheKey: cacheKey,
-                          controller: controller)
-                .frame(maxWidth: DS.Layout.outputMaxWidth)
-                .frame(height: CGFloat(height) + 16)
-                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card))
-                .overlay(alignment: .topTrailing) { controls }
-                .scrollAwareHover($hovering)
+            VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                PlotlyWebView(html: html, jsPath: jsPath, cacheKey: cacheKey,
+                              controller: controller)
+                    .frame(maxWidth: DS.Layout.outputMaxWidth)
+                    .frame(height: CGFloat(height) + 16)
+                    .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card))
+                HStack {
+                    if let error = controller.exportError {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    controls
+                }
+                .frame(maxWidth: DS.Layout.outputMaxWidth, minHeight: DS.Bar.strip)
+            }
+            .scrollAwareHover($hovering)
         } else if let image {
             ImageOutputView(data: imageData, image: image, fileName: "figure.png")
                 .help("Static preview — plotly.js was not found in this environment; install the plotly package for interactive figures")
@@ -60,12 +70,12 @@ struct PlotlyFigureView: View {
                 controller.savePNG()
             }
         }
-        .padding(8)
     }
 }
 
 final class PlotlyController: ObservableObject {
     weak var webView: WKWebView?
+    @Published var exportError: String?
 
     private static let target = "document.querySelector('.plotly-graph-div')"
 
@@ -116,6 +126,7 @@ final class PlotlyController: ObservableObject {
     }
 
     func savePNG() {
+        exportError = nil
         webView?.callAsyncJavaScript(
             "return await Plotly.toImage(\(Self.target), {format: 'png', scale: 2});",
             arguments: [:], in: nil, in: .page) { result in
@@ -123,6 +134,7 @@ final class PlotlyController: ObservableObject {
                   let dataURL = value as? String,
                   let comma = dataURL.firstIndex(of: ","),
                   let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])) else {
+                DispatchQueue.main.async { self.exportError = "Couldn’t export this plot." }
                 return
             }
             DispatchQueue.main.async {

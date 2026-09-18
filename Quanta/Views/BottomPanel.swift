@@ -9,17 +9,23 @@ struct BottomPanel: View {
     @State private var consoleScope = "All"
     @State private var showingSearch = false
 
+    private static let paneSegments: [IconSegmentedControl<BottomPane>.Segment] = [
+        .init(value: .console, title: BottomPane.console.rawValue, help: "Python Console"),
+        .init(value: .terminal, title: BottomPane.terminal.rawValue, help: "Terminal"),
+    ]
+
     var body: some View {
         VStack(spacing: 0) {
             PanelBar(rule: .below) {
-                PanelPicker("Panel", selection: $app.bottomPane, values: BottomPane.allCases) { $0.rawValue }
+                IconSegmentedControl(segments: Self.paneSegments, selection: $app.bottomPane, fillsWidth: false)
                     .fixedSize()
+                    .accessibilityLabel("Panel")
                 Spacer(minLength: DS.Space.s)
                 if app.bottomPane == .terminal {
                     Text(terminal.running ? "Shell" : terminal.exitStatus.map { "Exited (\($0))" } ?? "Not started")
                         .font(.caption).foregroundStyle(.secondary)
                         .help(terminal.directory.map { "Session started in \($0.path)" } ?? "Shell session")
-                    IconButton("plus", help: "New Terminal Session…") { app.newTerminalSession() }
+                    IconButton("arrow.clockwise", help: "Restart Terminal Session…") { app.newTerminalSession() }
                     IconButton("trash", help: "Clear Terminal Scrollback") { terminal.clear() }
                 } else {
                     if consoleScope != "All" {
@@ -59,7 +65,7 @@ struct BottomPanel: View {
                     HStack {
                         Text("Shell exited. Start a new session to continue.")
                         Spacer()
-                        Button("New Session") { app.showTerminal() }
+                        Button("Restart Session") { app.showTerminal() }
                     }.font(.caption).padding(DS.Space.s)
                 }
             }
@@ -93,9 +99,9 @@ extension AppState {
     func newTerminalSession() {
         let directory = workspace?.rootURL ?? FileManager.default.homeDirectoryForCurrentUser
         guard terminal.running else { showTerminal(); return }
-        confirmDestructive(title: "Replace the terminal session?",
+        confirmDestructive(title: "Restart the terminal session?",
                            message: "The current shell and its foreground command will be stopped. A new shell will start in \(directory.path).",
-                           button: "New Session") {
+                           button: "Restart Session") {
             self.terminal.restart(in: directory)
             self.bottomPane = .terminal
             self.setConsoleVisible(true)

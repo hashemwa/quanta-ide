@@ -5,6 +5,38 @@ import XCTest
 @testable import Quanta
 
 final class IDEWorkflowTests: XCTestCase {
+    func testWorkspaceHiddenFilesAreOptional() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "visible".write(to: root.appendingPathComponent("visible.py"), atomically: true, encoding: .utf8)
+        try "hidden".write(to: root.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(Workspace.load(url: root).root.children?.map(\.name), ["visible.py"])
+        XCTAssertEqual(Set(Workspace.load(url: root, showsHiddenFiles: true).root.children?.map(\.name) ?? []),
+                       Set([".env", "visible.py"]))
+    }
+
+    func testFileOperationsKeepBothAndRejectMovingFolderIntoItself() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let file = source.appendingPathComponent("data.txt")
+        try "one".write(to: file, atomically: true, encoding: .utf8)
+        try "existing".write(to: destination.appendingPathComponent("data.txt"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let copied = FileOperations.transfer([file], to: destination, copying: true) { _ in .keepBoth }
+        XCTAssertEqual(copied.completed.count, 1)
+        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("data 1.txt")), "one")
+
+        let rejected = FileOperations.transfer([source], to: source.appendingPathComponent("nested"),
+                                               copying: false) { _ in .cancel }
+        XCTAssertEqual(rejected.failures.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+    }
+
     func testQuickOpenRanksDirectMatchesAndSupportsSubsequences() {
         XCTAssertLessThan(WorkspaceIndex.score("notebook.py", query: "note")!, WorkspaceIndex.score("notebook.py", query: "nbpy")!)
         XCTAssertNotNil(WorkspaceIndex.score("SourceControlPanel.swift", query: "scpsw"))
@@ -26,6 +58,13 @@ final class IDEWorkflowTests: XCTestCase {
         XCTAssertEqual(regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).count, 1)
         options.regularExpression = true
         XCTAssertThrowsError(try options.expression(for: "["))
+    }
+
+    func testMarkdownParserGroupsTablesAndSkipsSeparatorRow() {
+        let blocks = MarkdownView.parse("| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n| beta | 2 |")
+        XCTAssertEqual(blocks, [.table([
+            ["Name", "Value"], ["alpha", "1"], ["beta", "2"],
+        ])])
     }
 
     func testWorkspaceSearchMapsNotebookMatchesToCellsAndReportsTruncation() throws {
@@ -57,6 +96,24 @@ final class IDEWorkflowTests: XCTestCase {
         cell.source = "x = 3"
         cell.outputs = []
         XCTAssertFalse(cell.hasStaleOutput)
+    }
+
+    @MainActor
+    func testNotebookCellRangeAndToggleSelection() {
+        let app = AppState()
+        let cells = [NotebookCell(type: .code), NotebookCell(type: .markdown), NotebookCell(type: .code)]
+        let notebook = Notebook(cells: cells, metadata: [:])
+        let document = Document(notebook: notebook, url: nil)
+        app.openDocuments = [document]
+        app.activeDocumentID = document.id
+
+        app.selectCell(cells[0], in: notebook)
+        app.selectCell(cells[2], in: notebook, modifiers: .shift)
+        XCTAssertEqual(app.selection.selectedCellIDs, Set(cells.map(\.id)))
+
+        app.selectCell(cells[1], in: notebook, modifiers: .command)
+        XCTAssertFalse(app.selection.selectedCellIDs.contains(cells[1].id))
+        XCTAssertEqual(app.selection.selectedCellIDs.count, 2)
     }
 
     func testTracebackLocationsAndUnicodeLineNavigation() {

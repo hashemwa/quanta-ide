@@ -32,11 +32,12 @@ struct Workspace {
         "__pycache__", "node_modules", "venv", "build", "dist",
     ]
 
-    static func load(url: URL) -> Workspace {
-        Workspace(rootURL: url, root: buildNode(url: url, depth: 0))
+    static func load(url: URL, showsHiddenFiles: Bool = false) -> Workspace {
+        Workspace(rootURL: url, root: buildNode(url: url, depth: 0,
+                                                showsHiddenFiles: showsHiddenFiles))
     }
 
-    private static func buildNode(url: URL, depth: Int) -> FileNode {
+    private static func buildNode(url: URL, depth: Int, showsHiddenFiles: Bool) -> FileNode {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         fm.fileExists(atPath: url.path, isDirectory: &isDir)
@@ -48,10 +49,11 @@ struct Workspace {
            let items = try? fm.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]) {
+            options: showsHiddenFiles ? [] : [.skipsHiddenFiles]) {
             for item in items where !ignored.contains(item.lastPathComponent)
                 && !item.lastPathComponent.hasSuffix(".egg-info") {
-                children.append(buildNode(url: item, depth: depth + 1))
+                children.append(buildNode(url: item, depth: depth + 1,
+                                          showsHiddenFiles: showsHiddenFiles))
             }
         }
         children.sort { a, b in

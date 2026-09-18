@@ -22,6 +22,7 @@ enum DS {
     enum Bar {
         static let primary: CGFloat = 32
         static let secondary: CGFloat = 28
+        static let footer: CGFloat = 32
         static let strip: CGFloat = 28
     }
 
@@ -32,8 +33,8 @@ enum DS {
     }
 
     enum Layout {
-        static let sidebarMin: CGFloat = 240
-        static let sidebarIdeal: CGFloat = 260
+        static let sidebarMin: CGFloat = 260
+        static let sidebarIdeal: CGFloat = 290
         static let sidebarMax: CGFloat = 400
         static let editorPaneMin: CGFloat = 200
         static let executionProgressWidth: CGFloat = 64
@@ -51,13 +52,18 @@ enum DS {
         static let inspectorIdeal: CGFloat = 280
         static let inspectorMax: CGFloat = 480
         static let statusDot: CGFloat = 6
-        static let listRowMinHeight: CGFloat = 22
+        static let listRowMinHeight: CGFloat = 24
         static let slot: CGFloat = 22
+        static let iconSlot: CGFloat = 16
+        static let segmentHeight: CGFloat = 22
+        static let segmentGlyph: CGFloat = 13
         static let statusSlot: CGFloat = 14
-        static let kernelLabelWidth: CGFloat = 150
+        static let kernelLabelWidth: CGFloat = 244
         static let symbolGlyph: CGFloat = 10
+        static let kernelGlyph: CGFloat = 12
         static let tabDividerHeight: CGFloat = 16
         static let cellGutterWidth: CGFloat = 42
+        static let cellTextInset: CGFloat = Space.xs + Space.xs + 5
         static let hairline: CGFloat = 1
         static let rowActionSlot: CGFloat = slot * 2
         static let commitLines = 1...5
@@ -86,6 +92,14 @@ enum DS {
             case .modified, .typeChanged: return modified
             case .added, .untracked, .renamed, .copied: return added
             case .deleted, .conflicted: return removed
+            }
+        }
+
+        static func nsColor(for status: GitChange.Status) -> NSColor {
+            switch status {
+            case .modified, .typeChanged: return .systemOrange
+            case .added, .untracked, .renamed, .copied: return .systemGreen
+            case .deleted, .conflicted: return .systemRed
             }
         }
     }
@@ -309,51 +323,78 @@ struct PanelHeader<Trailing: View>: View {
     }
 }
 
-struct IconSegments<Value: Hashable>: View {
+struct IconSegmentedControl<Value: Hashable>: View {
     struct Segment: Identifiable {
         let value: Value
-        let icon: String
+        let icon: String?
+        let title: String
         let help: String
         var id: Value { value }
+
+        init(value: Value, icon: String? = nil, title: String, help: String) {
+            self.value = value
+            self.icon = icon
+            self.title = title
+            self.help = help
+        }
     }
 
     let segments: [Segment]
     @Binding var selection: Value
+    var fillsWidth = true
+    @Namespace private var indicator
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: DS.Space.xxs) {
+        HStack(spacing: 0) {
             ForEach(segments) { segment in
-                IconButton(segment.icon, help: segment.help,
-                           isActive: segment.value == selection) {
-                    selection = segment.value
+                let selected = segment.value == selection
+                Button {
+                    withAnimation(reduceMotion ? nil : DS.Motion.quick) { selection = segment.value }
+                } label: {
+                    HStack(spacing: DS.Space.xs) {
+                        if let icon = segment.icon {
+                            Image(systemName: icon)
+                                .font(.system(size: DS.Layout.segmentGlyph, weight: .medium))
+                        }
+                        if segment.icon == nil {
+                            Text(segment.title)
+                                .font(.callout)
+                        }
+                    }
+                    .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .padding(.horizontal, fillsWidth ? 0 : DS.Space.m)
+                    .frame(maxWidth: fillsWidth ? .infinity : nil)
+                    .frame(height: DS.Layout.segmentHeight)
+                    .contentShape(Rectangle())
                 }
-                .accessibilityAddTraits(segment.value == selection ? [.isSelected] : [])
+                .buttonStyle(.plain)
+                .background {
+                    if selected {
+                        SegmentIndicator()
+                            .matchedGeometryEffect(id: "indicator", in: indicator)
+                    }
+                }
+                .help(segment.help)
+                .accessibilityLabel(segment.title)
+                .accessibilityAddTraits(selected ? [.isSelected] : [])
             }
         }
+        .padding(DS.Space.xxs)
+        .background(Capsule().fill(.quaternary))
+        .accessibilityElement(children: .contain)
     }
 }
 
-struct PanelPicker<Value: Hashable>: View {
-    let title: String
-    @Binding var selection: Value
-    let values: [Value]
-    let label: (Value) -> String
-
-    init(_ title: String, selection: Binding<Value>, values: [Value], label: @escaping (Value) -> String) {
-        self.title = title
-        self._selection = selection
-        self.values = values
-        self.label = label
-    }
-
+private struct SegmentIndicator: View {
     var body: some View {
-        Picker(title, selection: $selection) {
-            ForEach(values, id: \.self) { value in Text(label(value)).tag(value) }
+        let shape = Capsule()
+        if #available(macOS 26.0, *) {
+            shape.fill(.clear).glassEffect(.regular, in: shape)
+        } else {
+            shape.fill(Color(nsColor: .controlColor))
+                .shadow(color: .black.opacity(0.12), radius: 1, y: 1)
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .controlSize(.small)
-        .accessibilityLabel(title)
     }
 }
 
@@ -474,6 +515,11 @@ extension View {
         modifier(InputCard(focused: focused))
     }
 
+    func selectionOutline(_ selected: Bool) -> some View {
+        overlay(RoundedRectangle(cornerRadius: DS.Radius.card)
+            .stroke(selected ? Color.accentColor : Color.clear, lineWidth: DS.Layout.hairline))
+    }
+
     func stderrRule(_ active: Bool) -> some View {
         padding(.leading, active ? DS.Space.s : 0)
             .overlay(alignment: .leading) {
@@ -501,9 +547,23 @@ struct InputCard: ViewModifier {
     }
 }
 
+struct FilterField: View {
+    @Binding var text: String
+    var prompt = "Filter"
+
+    var body: some View {
+        SearchField(text: $text, prompt: prompt, style: .filter,
+                    focusRequest: 0, handledFocusRequest: .constant(0), onSubmit: {})
+            .accessibilityLabel(prompt)
+    }
+}
+
 struct SearchField: NSViewRepresentable {
+    enum Style { case search, filter }
+
     @Binding var text: String
     let prompt: String
+    var style: Style = .search
     var focusRequest: Int
     @Binding var handledFocusRequest: Int
     let onSubmit: () -> Void
@@ -511,19 +571,33 @@ struct SearchField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSSearchField {
         let field = NSSearchField()
         field.placeholderString = prompt
-        field.controlSize = .regular
         field.delegate = context.coordinator
         field.target = context.coordinator
         field.action = #selector(Coordinator.submit(_:))
         field.sendsWholeSearchString = true
-        field.sendsSearchStringImmediately = false
+        field.sendsSearchStringImmediately = style == .filter
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        applyStyle(to: field)
         return field
     }
 
+    private func applyStyle(to field: NSSearchField) {
+        field.controlSize = .regular
+        guard style == .filter else { return }
+        let cell = field.cell as? NSSearchFieldCell
+        if cell?.searchButtonCell?.image !== Self.filterIcon {
+            cell?.searchButtonCell?.image = Self.filterIcon
+            cell?.searchButtonCell?.alternateImage = Self.filterIcon
+        }
+    }
+
+    private static let filterIcon = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle",
+                                            accessibilityDescription: "Filter") ?? NSImage()
+
     func updateNSView(_ field: NSSearchField, context: Context) {
         context.coordinator.parent = self
+        applyStyle(to: field)
         if field.placeholderString != prompt { field.placeholderString = prompt }
         if field.stringValue != text { field.stringValue = text }
         guard handledFocusRequest != focusRequest else { return }

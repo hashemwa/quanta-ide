@@ -40,6 +40,8 @@ enum CodeEditorFactory {
 
 struct ScrollingCodeEditor: NSViewRepresentable {
     @Binding var text: String
+    var showsLineNumbers = true
+    var wrapsLines = true
     var documentID: UUID? = nil
     var onCommand: ((EditorCommand) -> Bool)? = nil
     var onFocus: (() -> Void)? = nil
@@ -49,8 +51,10 @@ struct ScrollingCodeEditor: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let tv = CodeEditorFactory.makeTextView()
         tv.isVerticallyResizable = true
-        tv.isHorizontallyResizable = false
-        tv.autoresizingMask = [.width]
+        tv.isHorizontallyResizable = !wrapsLines
+        tv.autoresizingMask = wrapsLines ? [.width] : []
+        tv.textContainer?.widthTracksTextView = wrapsLines
+        if !wrapsLines { tv.textContainer?.containerSize.width = CGFloat.greatestFiniteMagnitude }
         tv.minSize = NSSize(width: 0, height: 0)
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                             height: CGFloat.greatestFiniteMagnitude)
@@ -64,13 +68,14 @@ struct ScrollingCodeEditor: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.documentView = tv
         scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = !wrapsLines
         scroll.drawsBackground = true
         scroll.backgroundColor = EditorTheme.background
 
         let ruler = LineNumberRulerView(textView: tv, scrollView: scroll)
         scroll.verticalRulerView = ruler
-        scroll.hasVerticalRuler = true
-        scroll.rulersVisible = true
+        scroll.hasVerticalRuler = showsLineNumbers
+        scroll.rulersVisible = showsLineNumbers
 
         let coordinator = context.coordinator
         coordinator.textView = tv
@@ -87,6 +92,13 @@ struct ScrollingCodeEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let tv = context.coordinator.textView else { return }
+        scrollView.hasHorizontalScroller = !wrapsLines
+        scrollView.hasVerticalRuler = showsLineNumbers
+        scrollView.rulersVisible = showsLineNumbers
+        tv.isHorizontallyResizable = !wrapsLines
+        tv.autoresizingMask = wrapsLines ? [.width] : []
+        tv.textContainer?.widthTracksTextView = wrapsLines
+        tv.textContainer?.containerSize.width = wrapsLines ? scrollView.contentSize.width : CGFloat.greatestFiniteMagnitude
         tv.onCommand = onCommand
         if tv.string != text, !tv.hasMarkedText() {
             let sel = tv.selectedRange()

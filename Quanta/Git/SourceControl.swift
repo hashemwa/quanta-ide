@@ -4,11 +4,13 @@ import Foundation
 
 enum SidebarPane: String, CaseIterable {
     case files
+    case search
     case sourceControl
 
     var title: String {
         switch self {
         case .files: return "Files"
+        case .search: return "Search"
         case .sourceControl: return "Source Control"
         }
     }
@@ -16,6 +18,7 @@ enum SidebarPane: String, CaseIterable {
     var icon: String {
         switch self {
         case .files: return "folder"
+        case .search: return "magnifyingglass"
         case .sourceControl: return "arrow.triangle.branch"
         }
     }
@@ -23,6 +26,7 @@ enum SidebarPane: String, CaseIterable {
     var help: String {
         switch self {
         case .files: return "Show Files (⌘1)"
+        case .search: return "Search in Workspace (⇧⌘F)"
         case .sourceControl: return "Show Source Control (⌘2)"
         }
     }
@@ -420,21 +424,26 @@ extension AppState {
             revealConsole()
             return
         }
-        let finish: () -> Void = { [weak self] in
-            self?.git.commit(message: message) { [weak self] succeeded in
-                if succeeded, self?.git.draft.message.trimmingCharacters(in: .whitespacesAndNewlines) == message {
-                    self?.git.draft.message = ""
-                }
+        guard !snapshot.staged.isEmpty else {
+            userNotice = "Nothing is staged. Stage the changes you want to commit, or use Stage All and Commit."
+            return
+        }
+        git.commit(message: message) { [weak self] succeeded in
+            if succeeded, self?.git.draft.message.trimmingCharacters(in: .whitespacesAndNewlines) == message {
+                self?.git.draft.message = ""
             }
         }
-        if snapshot.staged.isEmpty {
-            let paths = snapshot.unstaged.map(\.path)
-            guard !paths.isEmpty else { return }
-            git.stage(paths: paths) { succeeded in
-                if succeeded { finish() }
-            }
-        } else {
-            finish()
+    }
+
+    func stageAllAndCommit() {
+        guard let snapshot = git.snapshot, !git.isBusy else { return }
+        let message = git.draft.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { focusCommitMessage(); return }
+        guard snapshot.conflicted.isEmpty else { return }
+        let paths = snapshot.unstaged.map(\.path)
+        guard !paths.isEmpty else { commit(); return }
+        git.stage(paths: paths) { [weak self] succeeded in
+            if succeeded { self?.commit() }
         }
     }
 
@@ -590,11 +599,58 @@ extension AppState {
     }
 
     func reloadExternallyChangedDocuments() {
-        for document in openDocuments where document.isFileBacked && !document.isDirty {
+        for document in openDocuments where document.isFileBacked {
             guard let url = document.url, let known = document.fileModificationDate,
                   let current = fileModificationDate(of: url), current > known else { continue }
-            reloadFromDisk(document)
+            if document.isDirty {
+                externallyChangedDocumentID = document.id
+                if activeDocumentID != document.id { activeDocumentID = document.id }
+            } else {
+                reloadFromDisk(document)
+            }
         }
+    }
+
+    func keepCurrentVersionAfterExternalChange() {
+        guard let id = externallyChangedDocumentID,
+              let document = openDocuments.first(where: { $0.id == id }),
+              let url = document.url else { return }
+        document.fileModificationDate = fileModificationDate(of: url)
+        externallyChangedDocumentID = nil
+    }
+
+    func reloadExternalVersion() {
+        guard let id = externallyChangedDocumentID,
+              let document = openDocuments.first(where: { $0.id == id }) else { return }
+        reloadFromDisk(document)
+        externallyChangedDocumentID = nil
+    }
+
+    func compareExternalVersion() {
+        guard let id = externallyChangedDocumentID,
+              let sourceDocument = openDocuments.first(where: { $0.id == id }),
+              let url = sourceDocument.url,
+              let diskData = try? Data(contentsOf: url) else { return }
+        let disk: String
+        let current: String
+        if sourceDocument.kind == .notebook,
+           let diskNotebook = try? Notebook.load(from: diskData),
+           let memoryNotebook = sourceDocument.notebook,
+           let diskJSON = try? diskNotebook.serializedData(),
+           let memoryJSON = try? memoryNotebook.serializedData() {
+            disk = String(decoding: diskJSON, as: UTF8.self)
+            current = String(decoding: memoryJSON, as: UTF8.self)
+        } else {
+            disk = String(decoding: diskData, as: UTF8.self)
+            current = sourceDocument.text
+        }
+        let source = DiffSource(path: relativePath(url), url: url, area: .unstaged, status: .modified)
+        let comparison = Document(diff: source)
+        comparison.diff = DiffDocument.compare(oldText: disk, newText: current,
+                                               oldLabel: "Disk", newLabel: "Your Edits",
+                                               isNotebook: sourceDocument.kind == .notebook)
+        openDocuments.append(comparison)
+        activeDocumentID = comparison.id
     }
 
     func confirmDestructive(title: String, message: String, button: String,
