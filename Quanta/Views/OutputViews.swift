@@ -80,12 +80,22 @@ struct ImageOutputView: View {
     let data: Data
     let image: NSImage
     var fileName = "output.png"
-    @State private var hovering = false
     @State private var actualSize = false
     @State private var saveError: String?
 
     var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: DS.Space.xxs) {
+            plot
+                .accessibilityLabel(accessibilityDescription)
+            controls
+            if let saveError { PlotErrorMessage(message: saveError) }
+        }
+        .frame(maxWidth: actualSize ? DS.Layout.outputMaxWidth : max(displayWidth, DS.Layout.plotControlsMinWidth), alignment: .leading)
+        .padding(.vertical, DS.Space.xxs)
+    }
+
+    @ViewBuilder
+    private var plot: some View {
             if actualSize {
                 ScrollView([.horizontal, .vertical]) {
                     Image(nsImage: image)
@@ -101,23 +111,15 @@ struct ImageOutputView: View {
                     .frame(maxWidth: displayWidth, maxHeight: DS.Layout.outputMaxHeight,
                            alignment: .leading)
             }
-        }
-            .accessibilityLabel(accessibilityDescription)
-            .overlay(alignment: .topTrailing) { controls }
-            .overlay(alignment: .bottomLeading) {
-                if let saveError {
-                    Label(saveError, systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange).padding(DS.Space.s)
-                }
-            }
-            .padding(.vertical, 2)
-            .scrollAwareHover($hovering)
     }
 
     private var accessibilityDescription: String {
+        if let bitmap = NSBitmapImageRep(data: data) {
+            return "Plot output, \(bitmap.pixelsWide) by \(bitmap.pixelsHigh) pixels"
+        }
         let natural = image.size
         guard natural.width > 0, natural.height > 0 else { return "Plot output" }
-        return "Plot output, \(Int(natural.width)) by \(Int(natural.height)) pixels"
+        return "Plot output, \(Int(natural.width)) by \(Int(natural.height)) points"
     }
 
     private var displayWidth: CGFloat {
@@ -131,7 +133,7 @@ struct ImageOutputView: View {
     }
 
     private var controls: some View {
-        FloatingToolbar(visible: hovering) {
+        PlotControlBar {
             IconButton(actualSize ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                        help: actualSize ? "Fit to Width" : "Actual Size",
                        isActive: actualSize) {
@@ -146,7 +148,6 @@ struct ImageOutputView: View {
             }
             IconButton("square.and.arrow.down", help: "Save as PNG…") { savePNG() }
         }
-        .padding(DS.Space.m)
     }
 
     private func savePNG() {
@@ -155,7 +156,7 @@ struct ImageOutputView: View {
         panel.allowedContentTypes = [.png]
         if panel.runModal() == .OK, let url = panel.url {
             do {
-                try pngData.write(to: url)
+                try PlotImageExport.pngData(image: image, original: data).write(to: url, options: .atomic)
                 saveError = nil
             } catch {
                 saveError = "Couldn’t save image: \(error.localizedDescription)"
@@ -163,12 +164,20 @@ struct ImageOutputView: View {
         }
     }
 
-    private var pngData: Data {
-        if !data.isEmpty { return data }
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:])
-        else { return data }
+}
+
+enum PlotImageExport {
+    enum Failure: LocalizedError {
+        case encoding
+        var errorDescription: String? { "The image could not be encoded as PNG." }
+    }
+
+    static func pngData(image: NSImage, original: Data) throws -> Data {
+        let representation = NSBitmapImageRep(data: original)
+            ?? image.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0) }
+        guard let png = representation?.representation(using: .png, properties: [:]) else {
+            throw Failure.encoding
+        }
         return png
     }
 }

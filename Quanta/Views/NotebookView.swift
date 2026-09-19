@@ -69,9 +69,7 @@ struct FindBarView: View {
     @ObservedObject var document: Document
     @ObservedObject var find: FindState
     @EnvironmentObject var app: AppState
-    @FocusState private var searchFocused: Bool
-
-    private let replaceInset: CGFloat = DS.Layout.slot + DS.Space.m
+    @State private var handledFocusRequest = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -82,18 +80,13 @@ struct FindBarView: View {
                     find.showReplace.toggle()
                 }
 
-                Image(systemName: "magnifyingglass")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                TextField("Find in notebook", text: $find.query)
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                    .frame(width: 260)
-                    .focused($searchFocused)
-                    .onSubmit {
+                SearchField(text: $find.query, prompt: "Find in notebook",
+                            focusRequest: find.focusRequest,
+                            handledFocusRequest: $handledFocusRequest) {
                         let backwards = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
                         app.findAdvance(in: document, delta: backwards ? -1 : 1)
                     }
+                    .frame(minWidth: DS.Layout.findFieldMinWidth, idealWidth: DS.Layout.findFieldIdealWidth, maxWidth: .infinity)
                     .onChange(of: find.query) { _, _ in app.findQueryChanged(in: document) }
 
                 Text(countLabel)
@@ -108,8 +101,6 @@ struct FindBarView: View {
                     app.findAdvance(in: document, delta: 1)
                 }
 
-                Spacer()
-
                 IconButton("xmark", help: "Close find bar (Esc)", symbolWeight: .semibold) {
                     app.closeFind(in: document)
                 }
@@ -120,17 +111,16 @@ struct FindBarView: View {
                     Image(systemName: "arrow.2.squarepath")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .padding(.leading, replaceInset)
+                        .frame(width: DS.Layout.slot)
                     TextField("Replace with", text: $find.replacement)
                         .textFieldStyle(.roundedBorder)
                         .controlSize(.small)
-                        .frame(width: 260)
+                        .frame(minWidth: DS.Layout.findFieldMinWidth, idealWidth: DS.Layout.findFieldIdealWidth, maxWidth: .infinity)
                         .onSubmit { app.replaceCurrentMatch(in: document) }
                     Button("Replace") { app.replaceCurrentMatch(in: document) }
                         .disabled(find.matches.isEmpty)
                     Button("Replace All") { app.replaceAllMatches(in: document) }
                         .disabled(find.matches.isEmpty)
-                    Spacer()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -139,8 +129,6 @@ struct FindBarView: View {
         }
         .padding(.horizontal, DS.Space.bar)
         .background(.bar)
-        .onAppear { searchFocused = true }
-        .onChange(of: find.focusRequest) { _, _ in searchFocused = true }
         .onExitCommand { app.closeFind(in: document) }
     }
 
@@ -374,7 +362,7 @@ struct CellView: View {
                          selectable: true,
                          attachments: Notebook.attachmentData(cell.extraKeys["attachments"]),
                          baseDirectory: document.url?.deletingLastPathComponent())
-                .padding(.horizontal, DS.Space.m)
+                .padding(.horizontal, DS.Layout.cellTextInset)
                 .padding(.vertical, DS.Space.s)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())

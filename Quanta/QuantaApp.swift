@@ -42,6 +42,7 @@ struct QuantaApp: App {
                 .environmentObject(appState)
                 .frame(minWidth: 800, minHeight: 520)
                 .background(WindowFrameSaver())
+                .preferredColorScheme(previewColorScheme)
         }
         .windowToolbarStyle(.unified)
         .commands {
@@ -52,6 +53,12 @@ struct QuantaApp: App {
             SettingsView()
                 .environmentObject(appState)
         }
+    }
+
+    private var previewColorScheme: ColorScheme? {
+        guard QuantaDefaults.previewDirectory != nil,
+              let appearance = ProcessInfo.processInfo.environment["QUANTA_UI_PREVIEW_APPEARANCE"] else { return nil }
+        return appearance == "light" ? .light : .dark
     }
 }
 

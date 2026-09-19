@@ -50,7 +50,10 @@ struct CommandPalette: View {
             var seen = Set<String>()
             let ordered = app.openDocuments.compactMap(\.url)
                 + app.recentFiles.map { URL(fileURLWithPath: $0) } + files
-            candidates = ordered.filter { seen.insert($0.path).inserted && FileManager.default.fileExists(atPath: $0.path) }.map { url in
+            candidates = ordered.filter {
+                seen.insert($0.resolvingSymlinksInPath().standardizedFileURL.path).inserted
+                    && FileManager.default.fileExists(atPath: $0.path)
+            }.map { url in
                 Entry(id: url.path, title: url.lastPathComponent, detail: app.relativePath(url),
                       icon: FileNode.iconName(forExtension: url.pathExtension), enabled: true) { app.openFile(url) }
             }
@@ -130,8 +133,10 @@ struct CommandPalette: View {
 
 extension AppState {
     func relativePath(_ url: URL) -> String {
-        guard let root = workspace?.rootURL.path, url.path.hasPrefix(root + "/") else { return url.path }
-        return String(url.path.dropFirst(root.count + 1))
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        guard let root = workspace?.rootURL.resolvingSymlinksInPath().standardizedFileURL.path,
+              path.hasPrefix(root + "/") else { return url.path }
+        return String(path.dropFirst(root.count + 1))
     }
 
     var ideCommands: [IDECommand] {

@@ -52,6 +52,8 @@ struct MainWindowView: View {
     @ToolbarContentBuilder
     private var navigatorToolbar: some ToolbarContent {
         ToolbarItem(placement: .automatic) { NavigatorToggle(columnVisibility: $columnVisibility) }
+        if #available(macOS 26.0, *) { ToolbarSpacer(.fixed) }
+        ToolbarItemGroup(placement: .primaryAction) { RunControls() }
     }
 
     @ToolbarContentBuilder
@@ -153,8 +155,6 @@ struct DetailSplitView: View {
             ToolbarSpacer(.fixed)
             ToolbarItem(placement: .principal) { KernelStatusMenu() }
             ToolbarSpacer(.flexible)
-            ToolbarItemGroup(placement: .primaryAction) { RunControls() }
-            ToolbarSpacer(.fixed)
             ToolbarItemGroup(placement: .primaryAction) {
                 splitButton
                 consoleButton
@@ -163,7 +163,6 @@ struct DetailSplitView: View {
             ToolbarItemGroup {
                 HistoryControls()
                 KernelStatusMenu()
-                RunControls()
                 splitButton
                 consoleButton
             }
@@ -293,11 +292,12 @@ struct KernelStatusMenu: View {
                 }
             }
             .padding(.horizontal, DS.Space.bar)
-            .frame(width: DS.Layout.kernelLabelWidth, alignment: .leading)
             .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)
-        .frame(width: DS.Layout.kernelLabelWidth)
+        .frame(minWidth: DS.Layout.kernelLabelMinWidth,
+               idealWidth: DS.Layout.kernelLabelWidth,
+               maxWidth: DS.Layout.kernelLabelWidth)
         .modifier(KernelMenuSizing())
         .help(tooltip)
         .accessibilityLabel("Interpreter: \(title)")

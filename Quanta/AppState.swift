@@ -586,7 +586,10 @@ final class AppState: ObservableObject {
     }
 
     func openFile(_ url: URL, recordSession: Bool = true) {
-        if let existing = openDocuments.first(where: { $0.url == url }) {
+        let resolvedURL = url.resolvingSymlinksInPath().standardizedFileURL
+        if let existing = openDocuments.first(where: {
+            $0.url?.resolvingSymlinksInPath().standardizedFileURL == resolvedURL
+        }) {
             activeDocumentID = existing.id
             return
         }

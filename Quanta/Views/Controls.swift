@@ -42,10 +42,13 @@ enum DS {
         static let paletteHeight: CGFloat = 390
         static let inspectionWidth: CGFloat = 440
         static let inspectionHeight: CGFloat = 360
+        static let findFieldMinWidth: CGFloat = 80
+        static let findFieldIdealWidth: CGFloat = 260
         static let tabMinWidth: CGFloat = 96
         static let tabMaxWidth: CGFloat = 220
         static let outputMaxWidth: CGFloat = 760
         static let outputMaxHeight: CGFloat = 620
+        static let plotControlsMinWidth: CGFloat = 96
         static let consoleMinHeight: CGFloat = 100
         static let consoleDefaultHeight: CGFloat = 180
         static let inspectorMin: CGFloat = 220
@@ -59,6 +62,7 @@ enum DS {
         static let segmentGlyph: CGFloat = 13
         static let statusSlot: CGFloat = 14
         static let kernelLabelWidth: CGFloat = 244
+        static let kernelLabelMinWidth: CGFloat = 140
         static let symbolGlyph: CGFloat = 10
         static let kernelGlyph: CGFloat = 12
         static let tabDividerHeight: CGFloat = 16
@@ -134,6 +138,36 @@ struct FloatingToolbar<Content: View>: View {
             .padding(.vertical, 3)
             .frame(height: DS.Bar.strip)
             .environment(\.iconButtonSize, .strip)
+    }
+}
+
+struct PlotControlBar<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(spacing: DS.Space.xxs) {
+            Spacer(minLength: 0)
+            content
+        }
+        .frame(minHeight: DS.Bar.strip)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Plot controls")
+    }
+}
+
+struct PlotErrorMessage: View {
+    let message: String
+
+    var body: some View {
+        Label(message, systemImage: "exclamationmark.triangle")
+            .font(.caption)
+            .foregroundStyle(.primary)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(DS.Space.s)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .accessibilityLabel("Plot error: \(message)")
     }
 }
 
@@ -569,7 +603,11 @@ struct SearchField: NSViewRepresentable {
     let onSubmit: () -> Void
 
     func makeNSView(context: Context) -> NSSearchField {
-        let field = NSSearchField()
+        let field = FocusableSearchField()
+        field.onWindowAvailable = { [weak coordinator = context.coordinator, weak field] in
+            guard let field else { return }
+            coordinator?.scheduleFocus(field)
+        }
         field.placeholderString = prompt
         field.delegate = context.coordinator
         field.target = context.coordinator
@@ -599,21 +637,46 @@ struct SearchField: NSViewRepresentable {
         context.coordinator.parent = self
         applyStyle(to: field)
         if field.placeholderString != prompt { field.placeholderString = prompt }
-        if field.stringValue != text { field.stringValue = text }
-        guard handledFocusRequest != focusRequest else { return }
-        handledFocusRequest = focusRequest
-        DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+        if field.stringValue != text, (field.currentEditor() as? NSTextView)?.hasMarkedText() != true {
+            field.stringValue = text
+        }
+        context.coordinator.scheduleFocus(field)
+    }
+
+    static func dismantleNSView(_ field: NSSearchField, coordinator: Coordinator) {
+        coordinator.isDismantled = true
+        (field as? FocusableSearchField)?.onWindowAvailable = nil
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         var parent: SearchField
+        var isDismantled = false
+        private var scheduledFocusRequest: Int?
 
         init(_ parent: SearchField) { self.parent = parent }
 
+        func scheduleFocus(_ field: NSSearchField) {
+            let request = parent.focusRequest
+            guard !isDismantled, parent.handledFocusRequest != request,
+                  scheduledFocusRequest != request, field.window != nil else { return }
+            scheduledFocusRequest = request
+            DispatchQueue.main.async { [weak self, weak field] in
+                guard let self else { return }
+                self.scheduledFocusRequest = nil
+                guard !self.isDismantled, self.parent.focusRequest == request,
+                      self.parent.handledFocusRequest != request,
+                      let field, let window = field.window,
+                      !field.isHiddenOrHasHiddenAncestor,
+                      window.makeFirstResponder(field) else { return }
+                self.parent.handledFocusRequest = request
+            }
+        }
+
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSSearchField else { return }
+            guard (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
             parent.text = field.stringValue
         }
 
@@ -622,6 +685,15 @@ struct SearchField: NSViewRepresentable {
             guard !sender.stringValue.isEmpty else { return }
             parent.onSubmit()
         }
+    }
+}
+
+final class FocusableSearchField: NSSearchField {
+    var onWindowAvailable: (() -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { onWindowAvailable?() }
     }
 }
 

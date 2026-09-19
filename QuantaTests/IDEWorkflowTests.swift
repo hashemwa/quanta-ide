@@ -5,6 +5,30 @@ import XCTest
 @testable import Quanta
 
 final class IDEWorkflowTests: XCTestCase {
+    @MainActor
+    func testAliasedFileReusesDirtyDocumentAndRelativeLabel() throws {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let actual = root.appendingPathComponent("actual", isDirectory: true)
+        let alias = root.appendingPathComponent("alias", isDirectory: true)
+        try manager.createDirectory(at: actual, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: root) }
+        try manager.createSymbolicLink(at: alias, withDestinationURL: actual)
+        let file = actual.appendingPathComponent("example.py")
+        try "original".write(to: file, atomically: true, encoding: .utf8)
+        let document = Document(script: file, text: "unsaved edits")
+        document.isDirty = true
+        let app = AppState()
+        app.workspace = Workspace.load(url: alias)
+        app.openDocuments = [document]
+        app.openFile(alias.appendingPathComponent("example.py"), recordSession: false)
+        XCTAssertEqual(app.openDocuments.count, 1)
+        XCTAssertEqual(app.activeDocumentID, document.id)
+        XCTAssertEqual(document.text, "unsaved edits")
+        XCTAssertTrue(document.isDirty)
+        XCTAssertEqual(app.relativePath(file), "example.py")
+    }
+
     func testWorkspaceHiddenFilesAreOptional() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

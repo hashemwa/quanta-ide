@@ -12,7 +12,6 @@ struct PlotlyFigureView: View {
     let cacheKey: UUID
     @StateObject private var controller = PlotlyController()
     @State private var panMode = false
-    @State private var hovering = false
 
     var body: some View {
         if !jsPath.isEmpty, FileManager.default.fileExists(atPath: jsPath) {
@@ -22,17 +21,13 @@ struct PlotlyFigureView: View {
                     .frame(maxWidth: DS.Layout.outputMaxWidth)
                     .frame(height: CGFloat(height) + 16)
                     .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card))
-                HStack {
-                    if let error = controller.exportError {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.orange).lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    controls
+                controls
+                    .frame(maxWidth: DS.Layout.outputMaxWidth)
+                if let error = controller.exportError {
+                    PlotErrorMessage(message: error)
+                        .frame(maxWidth: DS.Layout.outputMaxWidth)
                 }
-                .frame(maxWidth: DS.Layout.outputMaxWidth, minHeight: DS.Bar.strip)
             }
-            .scrollAwareHover($hovering)
         } else if let image {
             ImageOutputView(data: imageData, image: image, fileName: "figure.png")
                 .help("Static preview — plotly.js was not found in this environment; install the plotly package for interactive figures")
@@ -47,7 +42,7 @@ struct PlotlyFigureView: View {
     }
 
     private var controls: some View {
-        FloatingToolbar(visible: hovering) {
+        PlotControlBar {
             IconButton("plus.magnifyingglass", help: "Zoom in") {
                 controller.zoom(0.75)
             }
@@ -63,12 +58,20 @@ struct PlotlyFigureView: View {
             }
             IconButton("house", help: "Reset view") { controller.resetView() }
             ToolbarDivider()
+            if controller.isExporting {
+                ProgressView().controlSize(.small)
+                    .frame(width: DS.Layout.slot)
+                    .accessibilityLabel("Exporting plot")
+            }
+            IconButton("doc.on.doc", help: "Copy Image") { controller.copyPNG() }
+                .disabled(controller.isExporting)
             IconButton("macwindow.badge.plus", help: "Open in separate window (⌥⌘P)") {
                 PlotWindow.open(html: html, jsPath: jsPath)
             }
             IconButton("square.and.arrow.down", help: "Save as PNG…") {
                 controller.savePNG()
             }
+            .disabled(controller.isExporting)
         }
     }
 }
@@ -76,6 +79,7 @@ struct PlotlyFigureView: View {
 final class PlotlyController: ObservableObject {
     weak var webView: WKWebView?
     @Published var exportError: String?
+    @Published private(set) var isExporting = false
 
     private static let target = "document.querySelector('.plotly-graph-div')"
 
@@ -126,29 +130,56 @@ final class PlotlyController: ObservableObject {
     }
 
     func savePNG() {
-        exportError = nil
-        webView?.callAsyncJavaScript(
-            "return await Plotly.toImage(\(Self.target), {format: 'png', scale: 2});",
-            arguments: [:], in: nil, in: .page) { result in
-            guard case .success(let value) = result,
-                  let dataURL = value as? String,
-                  let comma = dataURL.firstIndex(of: ","),
-                  let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])) else {
-                DispatchQueue.main.async { self.exportError = "Couldn’t export this plot." }
-                return
-            }
-            DispatchQueue.main.async {
-                let panel = NSSavePanel()
-                panel.nameFieldStringValue = "plot.png"
-                if let png = UTType.png as UTType? {
-                    panel.allowedContentTypes = [png]
-                }
-                if panel.runModal() == .OK, let url = panel.url {
-                    try? data.write(to: url)
+        exportPNG { data in
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "plot.png"
+            panel.allowedContentTypes = [.png]
+            if panel.runModal() == .OK, let url = panel.url {
+                do {
+                    try data.write(to: url, options: .atomic)
+                } catch {
+                    self.exportError = "Couldn’t save plot: \(error.localizedDescription)"
                 }
             }
         }
     }
+
+    func copyPNG() {
+        exportPNG { data in
+            NSPasteboard.general.clearContents()
+            if !NSPasteboard.general.setData(data, forType: .png) {
+                self.exportError = "Couldn’t copy the plot to the clipboard."
+            }
+        }
+    }
+
+    private func exportPNG(_ completion: @escaping (Data) -> Void) {
+        guard !isExporting else { return }
+        exportError = nil
+        guard let webView else {
+            exportError = "The plot renderer is unavailable. Reopen the output and try again."
+            return
+        }
+        isExporting = true
+        webView.callAsyncJavaScript(
+            "return await Plotly.toImage(\(Self.target), {format: 'png', scale: 2});",
+            arguments: [:], in: nil, in: .page) { result in
+            DispatchQueue.main.async {
+                self.isExporting = false
+                guard case .success(let value) = result,
+                      let dataURL = value as? String,
+                      dataURL.hasPrefix("data:image/png;base64,"),
+                      let comma = dataURL.firstIndex(of: ","),
+                      let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])),
+                      !data.isEmpty else {
+                    self.exportError = "Couldn’t export this plot. Wait for it to finish loading and try again."
+                    return
+                }
+                completion(data)
+            }
+        }
+    }
+
 }
 
 struct PlotlyWebView: NSViewRepresentable {
