@@ -9,7 +9,7 @@ private func spawnPTY(_ master: UnsafeMutablePointer<Int32>, _ shell: UnsafePoin
 private func resizePTY(_ master: Int32, _ rows: UInt16, _ columns: UInt16)
 
 enum BottomPane: String, CaseIterable {
-    case console = "Python Console"
+    case console = "Console"
     case terminal = "Terminal"
 }
 
@@ -140,6 +140,7 @@ final class TerminalSession: NSObject, ObservableObject {
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = bridge
         view.setValue(false, forKey: "drawsBackground")
+        view.underPageBackgroundColor = .clear
         browser = view
         guard let resource = Bundle.main.url(forResource: "terminal", withExtension: "html", subdirectory: "Terminal")
             ?? Bundle.main.url(forResource: "terminal", withExtension: "html", subdirectory: "Resources/Terminal")

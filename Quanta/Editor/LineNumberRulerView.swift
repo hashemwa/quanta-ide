@@ -13,6 +13,8 @@ final class LineNumberRulerView: NSRulerView {
         self.textView = textView
         super.init(scrollView: scrollView, orientation: .verticalRuler)
         clientView = textView
+        reservedThicknessForMarkers = 0
+        reservedThicknessForAccessoryView = 0
         NotificationCenter.default.addObserver(
             self, selector: #selector(textChanged), name: NSText.didChangeNotification,
             object: textView)
@@ -63,6 +65,10 @@ final class LineNumberRulerView: NSRulerView {
 
     required init(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        drawHashMarksAndLabels(in: dirtyRect)
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {

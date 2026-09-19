@@ -71,6 +71,8 @@ struct ScrollingCodeEditor: NSViewRepresentable {
         scroll.hasHorizontalScroller = !wrapsLines
         scroll.drawsBackground = true
         scroll.backgroundColor = EditorTheme.background
+        scroll.borderType = .noBorder
+        scroll.focusRingType = .none
 
         let ruler = LineNumberRulerView(textView: tv, scrollView: scroll)
         scroll.verticalRulerView = ruler

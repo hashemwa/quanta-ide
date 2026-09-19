@@ -37,7 +37,7 @@ struct NotebookNavigator: View {
     private var selectedCell: NotebookCell? { cells.first { $0.id == selection.selectedCellID } }
 
     var body: some View {
-        PanelBar(rule: .below) {
+        PanelBar {
             Button { showOutline.toggle() } label: { Label("Outline", systemImage: "list.bullet.indent") }
                 .buttonStyle(.borderless)
                 .help("Navigate notebook headings and cells")

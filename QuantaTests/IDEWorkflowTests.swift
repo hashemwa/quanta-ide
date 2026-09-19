@@ -156,7 +156,7 @@ final class IDEWorkflowTests: XCTestCase {
         app.togglePin(third)
         XCTAssertEqual(app.openDocuments.map(\.id), [third.id, first.id, second.id])
         XCTAssertTrue(third.isPinned)
-        app.reorderDocument(second.id, before: first.id)
+        app.reorderDocument(second.id, beside: first.id, after: false)
         XCTAssertEqual(app.openDocuments.map(\.id), [third.id, second.id, first.id])
     }
 

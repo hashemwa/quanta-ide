@@ -36,7 +36,7 @@ struct SidebarView: View {
         SidebarPane.allCases.map { .init(value: $0, icon: $0.icon, title: $0.title, help: $0.help) }
 
     private var navigatorBar: some View {
-        PanelBar(height: DS.Bar.primary, rule: .below) {
+        PanelBar(height: DS.Bar.primary) {
             IconSegmentedControl(segments: Self.paneSegments,
                                  selection: Binding(get: { app.sidebarPane },
                                                     set: { app.showSidebarPane($0) }))
@@ -67,12 +67,8 @@ struct SidebarView: View {
                 searchList
                 searchFooter
             } else {
-                ContentUnavailableView {
-                    Label("Search Workspace", systemImage: "magnifyingglass")
-                } description: {
-                    Text("Find text in scripts, notebooks, and project files.")
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                NavigatorEmptyState("Search Workspace", systemImage: "magnifyingglass",
+                                    detail: "Find text in scripts, notebooks, and project files.")
             }
         } else {
             emptyState
@@ -80,7 +76,7 @@ struct SidebarView: View {
     }
 
     private var searchRow: some View {
-        PanelBar(rule: .below) {
+        PanelBar {
             SearchField(text: $searchQuery,
                         prompt: "Search in files",
                         focusRequest: app.fileSearchFocusRequest,
@@ -89,6 +85,15 @@ struct SidebarView: View {
                             set: { app.handledFileSearchFocusRequest = $0 }),
                         onSubmit: runSearch)
                 .frame(maxWidth: .infinity)
+            IconButton("textformat", help: "Match Case", isActive: searchOptions.caseSensitive) {
+                searchOptions.caseSensitive.toggle()
+            }
+            IconButton("textformat.abc", help: "Match Whole Word", isActive: searchOptions.wholeWord) {
+                searchOptions.wholeWord.toggle()
+            }
+            IconButton("chevron.left.forwardslash.chevron.right", help: "Use Regular Expression", isActive: searchOptions.regularExpression) {
+                searchOptions.regularExpression.toggle()
+            }
             IconButton("slider.horizontal.3", help: "Search Options", isActive: showSearchOptions) { showSearchOptions.toggle() }
         }
         .onChange(of: searchQuery) { _, value in
@@ -99,11 +104,14 @@ struct SidebarView: View {
                 searchedQuery = nil
             }
         }
+        .onChange(of: searchOptions.caseSensitive) { _, _ in rerunSearch() }
+        .onChange(of: searchOptions.wholeWord) { _, _ in rerunSearch() }
+        .onChange(of: searchOptions.regularExpression) { _, _ in rerunSearch() }
     }
 
     private func filesFooter(_ workspace: Workspace) -> some View {
-        PanelBar(height: DS.Bar.footer, rule: .above) {
-            IconMenu("plus", help: "New notebook, file or folder (⌘N)") {
+        PanelBar(height: DS.Bar.footer) {
+            IconMenu("plus", help: "New notebook, file or folder (⌘N)", glass: true) {
                 Button("New Notebook") { app.newNotebook() }
                 Button("New Python File") { app.newScript() }
                 Divider()
@@ -111,7 +119,7 @@ struct SidebarView: View {
                 Button("New Folder…") { app.createFolder(in: workspace.rootURL) }
             }
             FilterField(text: $fileFilter)
-            IconMenu("ellipsis", help: "Show more actions") {
+            IconMenu("ellipsis", help: "Show more actions", glass: true) {
                 Toggle("Show Hidden Files", isOn: $app.showsHiddenFiles)
                 Button("Refresh File Tree") { app.refreshWorkspace() }
                 Divider()
@@ -157,21 +165,20 @@ struct SidebarView: View {
         }
     }
 
+    private func rerunSearch() {
+        if !searchQuery.isEmpty { runSearch() }
+    }
+
     private var searchOptionsView: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
-            HStack(spacing: DS.Space.s) {
-                Toggle("Aa", isOn: $searchOptions.caseSensitive).help("Match Case")
-                Toggle("Word", isOn: $searchOptions.wholeWord).help("Match Whole Word")
-                Toggle(".*", isOn: $searchOptions.regularExpression).help("Use Regular Expression")
-            }
-            .toggleStyle(.button)
             TextField("Include: *.py, **/*.ipynb", text: $searchOptions.include).onSubmit(runSearch)
             TextField("Exclude: tests/**", text: $searchOptions.exclude).onSubmit(runSearch)
         }
         .controlSize(.small)
         .padding(.horizontal, DS.Space.bar)
         .padding(.vertical, DS.Space.s)
-        .onChange(of: searchOptions) { _, _ in if !searchQuery.isEmpty { runSearch() } }
+        .onChange(of: searchOptions.include) { _, _ in rerunSearch() }
+        .onChange(of: searchOptions.exclude) { _, _ in rerunSearch() }
     }
 
     private var searchList: some View {
@@ -210,7 +217,7 @@ struct SidebarView: View {
     }
 
     private var searchFooter: some View {
-        PanelBar(height: DS.Bar.footer, rule: .above) {
+        PanelBar(height: DS.Bar.footer) {
             Text(searchSummary)
                 .lineLimit(1)
             Spacer(minLength: 0)

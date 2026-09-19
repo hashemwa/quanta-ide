@@ -23,11 +23,23 @@ extension AppState {
         }
     }
 
-    func reorderDocument(_ id: UUID, before target: UUID) {
-        guard id != target, let from = openDocuments.firstIndex(where: { $0.id == id }),
-              let to = openDocuments.firstIndex(where: { $0.id == target }) else { return }
+    func reorderDocument(_ id: UUID, beside target: UUID, after: Bool) {
+        guard id != target,
+              let from = openDocuments.firstIndex(where: { $0.id == id }) else { return }
         let document = openDocuments.remove(at: from)
-        openDocuments.insert(document, at: from < to ? to - 1 : to)
+        guard let dest = openDocuments.firstIndex(where: { $0.id == target }) else {
+            openDocuments.append(document)
+            persistSession()
+            return
+        }
+        openDocuments.insert(document, at: after ? dest + 1 : dest)
+        persistSession()
+    }
+
+    func moveDocumentToEnd(_ id: UUID) {
+        guard let from = openDocuments.firstIndex(where: { $0.id == id }) else { return }
+        let document = openDocuments.remove(at: from)
+        openDocuments.append(document)
         persistSession()
     }
 

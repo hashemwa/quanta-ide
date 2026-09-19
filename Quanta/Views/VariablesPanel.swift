@@ -21,15 +21,9 @@ struct VariablesPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader("Variables", systemImage: "list.bullet.rectangle", height: DS.Bar.primary) {
-                if app.kernelStatus != .idle {
-                    Text(app.kernelStatus == .busy ? "Running…" : "Kernel \(app.kernelStatus.label.lowercased())")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .help("Values may be stale until the kernel is idle")
-                }
+            PanelBar(height: DS.Bar.primary) {
                 IconMenu(typeFilter == "All Types" ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill",
-                         help: "Filter and Sort Variables") {
+                         help: "Filter and Sort Variables", glass: true) {
                     Picker("Type", selection: $typeFilter) {
                         Text("All Types").tag("All Types")
                         ForEach(Array(Set(app.variables.map(\.typeName))).sorted(), id: \.self) { Text($0).tag($0) }
@@ -40,11 +34,12 @@ struct VariablesPanel: View {
                         Text("Type").tag(true)
                     }.pickerStyle(.inline)
                 }
-                IconButton("magnifyingglass", help: "Search Variables", isActive: showingSearch) {
+                IconButton("magnifyingglass", help: "Search Variables", isActive: showingSearch, glass: true) {
                     showingSearch.toggle()
                     if !showingSearch { query = "" }
                 }
-                IconButton("arrow.clockwise", help: "Refresh Variables") { app.refreshVariables() }
+                IconButton("arrow.clockwise", help: "Refresh Variables", glass: true) { app.refreshVariables() }
+                Spacer(minLength: DS.Space.s)
             }
             if showingSearch {
                 PanelSearchBar(prompt: "Find variables", text: $query) {

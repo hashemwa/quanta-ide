@@ -1,28 +1,32 @@
+import AppKit
 import SwiftUI
 
 struct MainWindowView: View {
     @EnvironmentObject var app: AppState
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
-                .frame(minWidth: DS.Layout.sidebarMin, idealWidth: DS.Layout.sidebarIdeal)
-                .navigationSplitViewColumnWidth(min: DS.Layout.sidebarMin, ideal: DS.Layout.sidebarIdeal, max: DS.Layout.sidebarMax)
                 .toolbar(removing: .sidebarToggle)
                 .toolbar { navigatorToolbar }
+                .navigationSplitViewColumnWidth(min: DS.Layout.sidebarMin,
+                                                ideal: DS.Layout.sidebarIdeal,
+                                                max: DS.Layout.sidebarMax)
         } detail: {
             DetailSplitView()
+                .navigationSplitViewColumnWidth(min: DS.Layout.editorPaneMin,
+                                                ideal: DS.Layout.editorColumnIdeal)
         }
         .inspector(isPresented: Binding(get: { app.showVariables },
                                         set: { app.setVariablesVisible($0) })) {
             VariablesPanel()
+                .toolbar { inspectorToolbar }
                 .inspectorColumnWidth(min: DS.Layout.inspectorMin,
                                       ideal: DS.Layout.inspectorIdeal,
                                       max: DS.Layout.inspectorMax)
-                .toolbar { inspectorToolbar }
         }
         .navigationTitle(windowTitle)
         .navigationSubtitle(windowSubtitle)
@@ -52,7 +56,7 @@ struct MainWindowView: View {
     @ToolbarContentBuilder
     private var navigatorToolbar: some ToolbarContent {
         ToolbarItem(placement: .automatic) { NavigatorToggle(columnVisibility: $columnVisibility) }
-        if #available(macOS 26.0, *) { ToolbarSpacer(.fixed) }
+        if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
         ToolbarItemGroup(placement: .primaryAction) { RunControls() }
     }
 
@@ -128,23 +132,24 @@ struct DetailSplitView: View {
     }
 
     private var editor: some View {
-        GeometryReader { geo in
-            let maxConsole = max(DS.Layout.consoleMinHeight, min(480, geo.size.height * 0.45))
-            VStack(spacing: 0) {
-                EditorAreaView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if app.showConsole {
-                    PanelResizeHandle(height: $app.consoleHeight,
-                                      range: DS.Layout.consoleMinHeight...maxConsole,
-                                      defaultHeight: DS.Layout.consoleDefaultHeight)
-                    BottomPanel()
-                        .frame(height: min(max(draggedConsoleHeight ?? app.consoleHeight,
-                                               DS.Layout.consoleMinHeight), maxConsole))
-                        .transition(.move(edge: .bottom))
-                }
+        VStack(spacing: 0) {
+            EditorAreaView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
+            if app.showConsole {
+                PanelResizeHandle(height: $app.consoleHeight,
+                                  range: DS.Layout.consoleMinHeight...480,
+                                  defaultHeight: DS.Layout.consoleDefaultHeight)
+                BottomPanel()
+                    .frame(height: min(max(draggedConsoleHeight ?? app.consoleHeight,
+                                           DS.Layout.consoleMinHeight), 480))
+                    .transition(.move(edge: .bottom))
             }
-            .clipped()
-            .onPreferenceChange(PanelDragHeight.self) { draggedConsoleHeight = $0 }
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+        .clipped()
+        .onPreferenceChange(PanelDragHeight.self) { next in
+            if draggedConsoleHeight != next { draggedConsoleHeight = next }
         }
     }
 
@@ -187,7 +192,7 @@ struct DetailSplitView: View {
     }
 
     private var consoleHelp: String {
-        if app.consoleRevealPending && !app.showConsole { return "Show Python Console — new output (⇧⌘Y)" }
+        if app.consoleRevealPending && !app.showConsole { return "Show Console — new output (⇧⌘Y)" }
         return app.showConsole ? "Hide Bottom Panel (⇧⌘Y)" : "Show Bottom Panel (⇧⌘Y)"
     }
 }
@@ -223,6 +228,45 @@ struct PanelResizeHandle: View {
             }
             .zIndex(1)
             .preference(key: PanelDragHeight.self, value: live)
+    }
+}
+
+struct ColumnResizeHandle: View {
+    @Binding var fraction: CGFloat
+    @State private var dragStart: CGFloat?
+    @State private var startTotal: CGFloat?
+
+    var body: some View {
+        Divider()
+            .overlay {
+                Color.clear
+                    .frame(width: 8)
+                    .contentShape(Rectangle())
+                    .pointerStyle(.columnResize)
+                    .gesture(
+                        DragGesture(minimumDistance: 1, coordinateSpace: .named("editorSplit"))
+                            .onChanged { value in
+                                if dragStart == nil {
+                                    dragStart = fraction
+                                    let start = max(fraction, 0.001)
+                                    startTotal = value.startLocation.x / start
+                                }
+                                guard let origin = dragStart, let total = startTotal,
+                                      total.isFinite, total > 1 else { return }
+                                let minPane = min(DS.Layout.editorPaneMin, total / 2)
+                                let minFraction = minPane / total
+                                let proposed = origin + value.translation.width / total
+                                guard proposed.isFinite else { return }
+                                fraction = min(max(proposed, minFraction), 1 - minFraction)
+                            }
+                            .onEnded { _ in
+                                dragStart = nil
+                                startTotal = nil
+                            }
+                    )
+                    .onTapGesture(count: 2) { fraction = 0.5 }
+            }
+            .zIndex(1)
     }
 }
 

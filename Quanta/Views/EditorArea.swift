@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct EditorAreaView: View {
     @EnvironmentObject var app: AppState
@@ -10,7 +11,6 @@ struct EditorAreaView: View {
                 WelcomeView()
             } else {
                 TabBarView()
-                Divider()
                 if app.externallyChangedDocumentID != nil {
                     HStack(spacing: DS.Space.s) {
                         Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
@@ -43,10 +43,16 @@ struct EditorAreaView: View {
                 if let splitID = app.splitDocumentID,
                    let secondary = app.openDocuments.first(where: { $0.id == splitID }),
                    let primary = app.openDocuments.first(where: { $0.id == app.primarySplitDocumentID }) ?? app.activeDocument {
-                    HSplitView {
-                        EditorPaneView(document: primary).frame(minWidth: DS.Layout.editorPaneMin)
-                        EditorPaneView(document: secondary, secondary: true).frame(minWidth: DS.Layout.editorPaneMin)
+                    ProportionalHSplit(fraction: app.editorSplitFraction) {
+                        EditorPaneView(document: primary)
+                            .clipped()
+                        ColumnResizeHandle(fraction: $app.editorSplitFraction)
+                        EditorPaneView(document: secondary, secondary: true)
+                            .clipped()
                     }
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .coordinateSpace(name: "editorSplit")
+                    .clipped()
                 } else if let document = app.activeDocument {
                     EditorPaneView(document: document)
                 } else {
@@ -54,6 +60,44 @@ struct EditorAreaView: View {
                 }
             }
         }
+    }
+}
+
+private struct ProportionalHSplit: Layout {
+    var fraction: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else {
+            for subview in subviews {
+                subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+            }
+            return
+        }
+        let divider = max(DS.Layout.hairline, subviews[1].sizeThatFits(.init(width: 1, height: bounds.height)).width)
+        let usable = max(0, bounds.width - divider)
+        let minPane = min(DS.Layout.editorPaneMin, usable / 2)
+        let left = EditorSplit.width(fraction: fraction, total: usable, minPane: minPane)
+        var x = bounds.minX
+        subviews[0].place(at: CGPoint(x: x, y: bounds.minY),
+                          proposal: ProposedViewSize(width: left, height: bounds.height))
+        x += left
+        subviews[1].place(at: CGPoint(x: x, y: bounds.minY),
+                          proposal: ProposedViewSize(width: divider, height: bounds.height))
+        x += divider
+        subviews[2].place(at: CGPoint(x: x, y: bounds.minY),
+                          proposal: ProposedViewSize(width: bounds.maxX - x, height: bounds.height))
+    }
+}
+
+private enum EditorSplit {
+    static func width(fraction: CGFloat, total: CGFloat, minPane: CGFloat) -> CGFloat {
+        guard total.isFinite, total > 0, fraction.isFinite else { return 0 }
+        let maxLeft = max(minPane, total - minPane)
+        return min(max(total * fraction, minPane), maxLeft)
     }
 }
 
@@ -155,18 +199,28 @@ struct ScriptEditorView: View {
 struct TabBarView: View {
     @EnvironmentObject var app: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var insertion: TabInsertion?
+    @State private var trackingDrop = false
+
+    private var tabs: [Document] {
+        app.openDocuments.filter(\.isPinned) + app.openDocuments.filter { !$0.isPinned }
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
-                    ForEach(app.openDocuments.filter(\.isPinned) + app.openDocuments.filter { !$0.isPinned }) { document in
-                        if document.id != app.openDocuments.first?.id {
-                            Divider().frame(height: DS.Layout.tabDividerHeight)
-                        }
-                        TabItemView(document: document, isActive: document.id == app.activeDocumentID)
+                    ForEach(tabs) { document in
+                        TabItemView(document: document, isActive: document.id == app.activeDocumentID,
+                                    insertion: $insertion, trackingDrop: $trackingDrop)
                             .id(document.id)
                     }
+                    Color.clear
+                        .frame(minWidth: DS.Layout.tabMinWidth, maxWidth: .infinity)
+                        .frame(height: DS.Bar.primary)
+                        .onDrop(of: [.utf8PlainText, .plainText, .text],
+                                delegate: TabEndDropDelegate(app: app, insertion: $insertion,
+                                                             trackingDrop: $trackingDrop))
                 }
             }
             .onChange(of: app.activeDocumentID, initial: true) { _, id in
@@ -178,14 +232,25 @@ struct TabBarView: View {
         }
         .frame(height: DS.Bar.primary)
         .background(Color(nsColor: .windowBackgroundColor))
+        .background {
+            if insertion != nil {
+                TabDragEndMonitor {
+                    trackingDrop = false
+                    insertion = nil
+                }
+            }
+        }
     }
 }
 
 struct TabItemView: View {
     @ObservedObject var document: Document
     let isActive: Bool
+    @Binding var insertion: TabInsertion?
+    @Binding var trackingDrop: Bool
     @EnvironmentObject var app: AppState
     @State private var hovering = false
+    @State private var width: CGFloat = DS.Layout.tabMinWidth
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
@@ -231,17 +296,25 @@ struct TabItemView: View {
                 Rectangle().fill(.quaternary).opacity(0.5)
             }
         }
+        .overlay(alignment: insertion?.after == true ? .trailing : .leading) {
+            if insertion?.id == document.id {
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: DS.Space.xxs)
+                    .padding(.vertical, DS.Space.xs)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             app.primarySplitDocumentID = document.id
             app.activeDocumentID = document.id
         }
+        .onGeometryChange(for: CGFloat.self) { proxy in proxy.size.width } action: { width = $0 }
         .draggable(document.id.uuidString)
-        .dropDestination(for: String.self) { items, _ in
-            guard let first = items.first, let id = UUID(uuidString: first) else { return false }
-            app.reorderDocument(id, before: document.id)
-            return true
-        }
+        .onDrop(of: [.utf8PlainText, .plainText, .text],
+                delegate: TabReorderDropDelegate(target: document.id, width: width,
+                                                 app: app, insertion: $insertion,
+                                                 trackingDrop: $trackingDrop))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { app.activeDocumentID = document.id }
         .scrollAwareHover($hovering)
@@ -262,6 +335,148 @@ struct TabItemView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(url.path, forType: .string)
                 }
+            }
+        }
+    }
+}
+
+struct TabInsertion: Equatable {
+    var id: UUID
+    var after: Bool
+}
+
+private struct TabReorderDropDelegate: DropDelegate {
+    let target: UUID
+    let width: CGFloat
+    let app: AppState
+    @Binding var insertion: TabInsertion?
+    @Binding var trackingDrop: Bool
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.utf8PlainText, .plainText, .text])
+    }
+
+    func dropEntered(info: DropInfo) {
+        trackingDrop = true
+        updateInsertion(info)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        if trackingDrop { updateInsertion(info) }
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        insertion = nil
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let after = insertion?.id == target ? (insertion?.after ?? false) : info.location.x >= width / 2
+        trackingDrop = false
+        insertion = nil
+        return Self.loadTabID(from: info) { id in
+            app.reorderDocument(id, beside: target, after: after)
+        }
+    }
+
+    private func updateInsertion(_ info: DropInfo) {
+        insertion = TabInsertion(id: target, after: info.location.x >= width / 2)
+    }
+
+    static func loadTabID(from info: DropInfo, deliver: @escaping (UUID) -> Void) -> Bool {
+        let types: [UTType] = [.utf8PlainText, .plainText, .text]
+        guard let provider = info.itemProviders(for: types).first else { return false }
+        provider.loadItem(forTypeIdentifier: UTType.utf8PlainText.identifier, options: nil) { item, _ in
+            let raw: String?
+            if let data = item as? Data {
+                raw = String(data: data, encoding: .utf8)
+            } else if let string = item as? String {
+                raw = string
+            } else {
+                raw = (item as? NSString) as String?
+            }
+            guard let raw, let id = UUID(uuidString: raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+            DispatchQueue.main.async { deliver(id) }
+        }
+        return true
+    }
+}
+
+private struct TabEndDropDelegate: DropDelegate {
+    let app: AppState
+    @Binding var insertion: TabInsertion?
+    @Binding var trackingDrop: Bool
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.utf8PlainText, .plainText, .text])
+    }
+
+    func dropEntered(info: DropInfo) {
+        trackingDrop = true
+        markEnd()
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        if trackingDrop { markEnd() }
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        insertion = nil
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        trackingDrop = false
+        insertion = nil
+        return TabReorderDropDelegate.loadTabID(from: info) { id in
+            app.moveDocumentToEnd(id)
+        }
+    }
+
+    private func markEnd() {
+        if let last = app.openDocuments.last {
+            insertion = TabInsertion(id: last.id, after: true)
+        }
+    }
+}
+
+private struct TabDragEndMonitor: NSViewRepresentable {
+    var onEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onEnded: onEnded) }
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.start()
+        return NSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onEnded = onEnded
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class Coordinator {
+        var onEnded: () -> Void
+        private var monitor: Any?
+
+        init(onEnded: @escaping () -> Void) { self.onEnded = onEnded }
+
+        func start() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .keyDown]) { [weak self] event in
+                if event.type == .keyDown, event.keyCode != 53 { return event }
+                DispatchQueue.main.async { self?.onEnded() }
+                return event
+            }
+        }
+
+        func stop() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
             }
         }
     }

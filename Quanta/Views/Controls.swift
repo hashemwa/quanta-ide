@@ -35,8 +35,11 @@ enum DS {
     enum Layout {
         static let sidebarMin: CGFloat = 260
         static let sidebarIdeal: CGFloat = 290
-        static let sidebarMax: CGFloat = 400
-        static let editorPaneMin: CGFloat = 200
+        static let sidebarMax: CGFloat = 480
+        static let editorColumnIdeal: CGFloat = 720
+        static let windowMinWidth: CGFloat = 1200
+        static let windowMinHeight: CGFloat = 760
+        static let editorPaneMin: CGFloat = 280
         static let executionProgressWidth: CGFloat = 64
         static let paletteWidth: CGFloat = 580
         static let paletteHeight: CGFloat = 390
@@ -63,6 +66,7 @@ enum DS {
         static let statusSlot: CGFloat = 14
         static let kernelLabelWidth: CGFloat = 244
         static let kernelLabelMinWidth: CGFloat = 140
+        static let branchLabelMaxWidth: CGFloat = 96
         static let symbolGlyph: CGFloat = 10
         static let kernelGlyph: CGFloat = 12
         static let tabDividerHeight: CGFloat = 16
@@ -218,16 +222,18 @@ struct IconButton: View {
     var isActive = false
     var size: Size? = nil
     var symbolWeight: Font.Weight = .regular
+    var glass = false
     let action: () -> Void
     @Environment(\.iconButtonSize) private var inheritedSize
 
     init(_ icon: String, help: String, isActive: Bool = false, size: Size? = nil,
-         symbolWeight: Font.Weight = .regular, action: @escaping () -> Void) {
+         symbolWeight: Font.Weight = .regular, glass: Bool = false, action: @escaping () -> Void) {
         self.icon = icon
         self.help = help
         self.isActive = isActive
         self.size = size
         self.symbolWeight = symbolWeight
+        self.glass = glass
         self.action = action
     }
 
@@ -238,14 +244,16 @@ struct IconButton: View {
                 .font(.system(size: metrics.glyph, weight: symbolWeight))
                 .frame(width: metrics.extent, height: metrics.extent)
         }
-        .buttonStyle(IconButtonStyle(isActive: isActive, shape: Self.shape(for: metrics)))
+        .buttonStyle(IconButtonStyle(isActive: isActive, shape: Self.shape(for: metrics, glass: glass),
+                                     glass: glass))
         .help(help)
         .accessibilityLabel(Self.accessibilityName(help))
     }
 
-    static func shape(for size: Size) -> AnyShape {
-        size == .strip ? AnyShape(Capsule())
-                       : AnyShape(RoundedRectangle(cornerRadius: DS.Radius.control))
+    static func shape(for size: Size, glass: Bool = false) -> AnyShape {
+        if glass { return AnyShape(Circle()) }
+        return size == .strip ? AnyShape(Capsule())
+                              : AnyShape(RoundedRectangle(cornerRadius: DS.Radius.control))
     }
 
     static func accessibilityName(_ help: String) -> String {
@@ -257,6 +265,7 @@ struct IconButton: View {
 struct IconButtonStyle: ButtonStyle {
     var isActive = false
     var shape: AnyShape = AnyShape(RoundedRectangle(cornerRadius: DS.Radius.control))
+    var glass = false
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -264,8 +273,16 @@ struct IconButtonStyle: ButtonStyle {
             .foregroundStyle(isActive ? Color.accentColor : Color.primary)
             .background {
                 ZStack {
-                    shape.fill(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.14))
-                                        : AnyShapeStyle(.clear))
+                    if glass {
+                        if #available(macOS 26.0, *) {
+                            shape.fill(.clear)
+                        } else {
+                            shape.fill(.regularMaterial)
+                        }
+                    } else {
+                        shape.fill(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.14))
+                                            : AnyShapeStyle(.clear))
+                    }
                     shape.fill(configuration.isPressed
                                ? AnyShapeStyle(.tertiary)
                                : hovering ? AnyShapeStyle(.quaternary)
@@ -273,19 +290,39 @@ struct IconButtonStyle: ButtonStyle {
                 }
             }
             .contentShape(shape)
+            .modifier(GlassIconChrome(shape: shape, enabled: glass))
             .scrollAwareHover($hovering)
+    }
+}
+
+private struct GlassIconChrome: ViewModifier {
+    var shape: AnyShape
+    var enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            if #available(macOS 26.0, *) {
+                content.glassEffect(.regular, in: shape)
+            } else {
+                content.overlay(shape.stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+            }
+        } else {
+            content
+        }
     }
 }
 
 struct IconMenu<Content: View>: View {
     let icon: String
     let help: String
+    var glass = false
     @ViewBuilder var content: Content
     @Environment(\.iconButtonSize) private var inheritedSize
 
-    init(_ icon: String, help: String, @ViewBuilder content: () -> Content) {
+    init(_ icon: String, help: String, glass: Bool = false, @ViewBuilder content: () -> Content) {
         self.icon = icon
         self.help = help
+        self.glass = glass
         self.content = content()
     }
 
@@ -298,7 +335,7 @@ struct IconMenu<Content: View>: View {
                 .frame(width: inheritedSize.extent, height: inheritedSize.extent)
         }
         .menuStyle(.button)
-        .buttonStyle(IconButtonStyle(shape: IconButton.shape(for: inheritedSize)))
+        .buttonStyle(IconButtonStyle(shape: IconButton.shape(for: inheritedSize, glass: glass), glass: glass))
         .menuIndicator(.hidden)
         .fixedSize()
         .help(help)
@@ -310,13 +347,16 @@ struct PanelBar<Content: View>: View {
     enum Rule { case none, below, above }
 
     var height: CGFloat = DS.Bar.secondary
-    var rule: Rule = .below
+    var rule: Rule = .none
+    var horizontalPadding: CGFloat = DS.Space.bar
     @ViewBuilder var content: Content
 
-    init(height: CGFloat = DS.Bar.secondary, rule: Rule = .below,
+    init(height: CGFloat = DS.Bar.secondary, rule: Rule = .none,
+         horizontalPadding: CGFloat = DS.Space.bar,
          @ViewBuilder content: () -> Content) {
         self.height = height
         self.rule = rule
+        self.horizontalPadding = horizontalPadding
         self.content = content()
     }
 
@@ -324,10 +364,39 @@ struct PanelBar<Content: View>: View {
         VStack(spacing: 0) {
             if rule == .above { Divider() }
             HStack(spacing: DS.Space.s) { content }
-                .padding(.horizontal, DS.Space.bar)
+                .padding(.horizontal, horizontalPadding)
                 .frame(height: height)
             if rule == .below { Divider() }
         }
+    }
+}
+
+struct NavigatorEmptyState: View {
+    let title: String
+    let systemImage: String
+    let detail: String
+
+    init(_ title: String, systemImage: String, detail: String) {
+        self.title = title
+        self.systemImage = systemImage
+        self.detail = detail
+    }
+
+    var body: some View {
+        VStack(spacing: DS.Space.m) {
+            Image(systemName: systemImage)
+                .font(.title2)
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.callout.weight(.medium))
+            Text(detail)
+                .font(.caption)
+                .multilineTextAlignment(.center)
+        }
+        .foregroundStyle(.secondary)
+        .padding(DS.Space.xl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -588,6 +657,7 @@ struct FilterField: View {
     var body: some View {
         SearchField(text: $text, prompt: prompt, style: .filter,
                     focusRequest: 0, handledFocusRequest: .constant(0), onSubmit: {})
+            .frame(maxWidth: .infinity)
             .accessibilityLabel(prompt)
     }
 }

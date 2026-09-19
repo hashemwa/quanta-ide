@@ -68,6 +68,10 @@ final class AppState: ObservableObject {
         QuantaDefaults.store.object(forKey: "QuantaConsoleHeight") as? CGFloat ?? DS.Layout.consoleDefaultHeight {
         didSet { QuantaDefaults.store.set(consoleHeight, forKey: "QuantaConsoleHeight") }
     }
+    @Published var editorSplitFraction: CGFloat =
+        QuantaDefaults.store.object(forKey: "QuantaEditorSplitFraction") as? CGFloat ?? 0.5 {
+        didSet { QuantaDefaults.store.set(editorSplitFraction, forKey: "QuantaEditorSplitFraction") }
+    }
     private lazy var consoleUserHidden = !showConsole
     @Published var consoleRevealPending = false
     @Published var pythonPath: String?

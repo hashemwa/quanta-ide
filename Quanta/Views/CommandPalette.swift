@@ -155,7 +155,7 @@ extension AppState {
             IDECommand(id: "search", title: "Find in Files…", shortcut: "⇧⌘F", enabled: workspace != nil, action: focusFileSearch),
             IDECommand(id: "continue-run", title: "Continue Remaining Cells", shortcut: "", enabled: pausedRunDocumentID != nil, action: continueRemainingCells),
             IDECommand(id: "variables", title: "Toggle Variables", shortcut: "⌥⌘0", action: toggleVariables),
-            IDECommand(id: "console", title: "Show Python Console", shortcut: "", action: { self.showPythonConsole() }),
+            IDECommand(id: "console", title: "Show Console", shortcut: "", action: { self.showPythonConsole() }),
             IDECommand(id: "terminal", title: "Show Terminal", shortcut: "⌃`", action: showTerminal),
             IDECommand(id: "reopen", title: "Reopen Closed Tab", shortcut: "⇧⌘T", enabled: !closedDocuments.isEmpty, action: reopenClosedDocument),
             IDECommand(id: "split", title: "Toggle Split Editor", shortcut: "⌘\\", enabled: activeDocument != nil, action: toggleSplitEditor),

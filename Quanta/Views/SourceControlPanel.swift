@@ -82,16 +82,11 @@ struct SourceControlPanel: View {
 
     @ViewBuilder
     private func repository(_ snapshot: GitSnapshot) -> some View {
-        branchRow(snapshot)
         if snapshot.isClean {
-            ContentUnavailableView {
-                Label("No Changes", systemImage: "checkmark.circle")
-            } description: {
-                Text(snapshot.hiddenNotebooks.isEmpty
-                     ? "Your working tree is clean."
-                     : "No source changes. Notebook output changes are hidden.")
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            NavigatorEmptyState("No Changes", systemImage: "checkmark.circle",
+                                detail: snapshot.hiddenNotebooks.isEmpty
+                                ? "On \(snapshot.headDescription). Your working tree is clean."
+                                : "On \(snapshot.headDescription). No source changes. Notebook output changes are hidden.")
         } else {
             changeList(snapshot)
         }
@@ -99,23 +94,32 @@ struct SourceControlPanel: View {
             footer(snapshot)
         }
         if !snapshot.isClean {
-            Divider()
             commitBox(snapshot)
         }
         filterBar
     }
 
     private var filterBar: some View {
-        PanelBar(height: DS.Bar.footer, rule: .above) {
-            FilterField(text: $filenameFilter,
-                        prompt: scope == .all ? "Filter" : "Filter \(scope.rawValue)")
-            IconMenu("ellipsis", help: "Show more actions") {
+        PanelBar(height: DS.Bar.footer) {
+            IconButton("arrow.clockwise", help: "Refresh Git Status", glass: true) {
+                app.refreshSourceControl()
+            }
+            .disabled(git.isBusy || git.isRefreshing)
+            FilterField(text: $filenameFilter)
+            if git.isBusy || git.isRefreshing {
+                ActivitySlot(active: true)
+            }
+            IconMenu("ellipsis", help: "Show more actions", glass: true) {
                 Picker("Show", selection: $scope) {
                     ForEach(GitChangeScope.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.inline)
                 Divider()
                 Button("Refresh Status") { app.refreshSourceControl() }
+                Divider()
+                Button("Stage All and Commit…") { app.stageAllAndCommit() }
+                    .disabled(!hasCommitMessage || git.isBusy || !((git.snapshot?.conflicted.isEmpty) ?? false)
+                              || ((git.snapshot?.unstaged.isEmpty) ?? true))
                 Divider()
                 SourceControlMenuItems()
             }
@@ -146,63 +150,39 @@ struct SourceControlPanel: View {
         return snapshot.remotes.isEmpty ? "Local repository · no remote" : "Branch not published"
     }
 
-    private func branchRow(_ snapshot: GitSnapshot) -> some View {
-        PanelBar(rule: .below) {
-            LabelMenu(help: branchHelp(snapshot),
-                      accessibilityName: "Branch \(snapshot.headDescription)") {
-                Text(remoteDescription(snapshot))
-                Divider()
-                ForEach(snapshot.branches, id: \.self) { branch in
-                    Button {
-                        app.checkout(branch: branch)
-                    } label: {
-                        if branch == snapshot.branch {
-                            Label(branch, systemImage: "checkmark")
-                        } else {
-                            Text(branch)
-                        }
+    private func branchMenu(_ snapshot: GitSnapshot) -> some View {
+        LabelMenu(help: branchHelp(snapshot),
+                  accessibilityName: "Branch \(snapshot.headDescription)") {
+            Text(remoteDescription(snapshot))
+            Divider()
+            ForEach(snapshot.branches, id: \.self) { branch in
+                Button {
+                    app.checkout(branch: branch)
+                } label: {
+                    if branch == snapshot.branch {
+                        Label(branch, systemImage: "checkmark")
+                    } else {
+                        Text(branch)
                     }
                 }
-                if !snapshot.branches.isEmpty {
-                    Divider()
-                }
-                Button("New Branch…") { app.createBranch() }
-            } label: {
-                HStack(spacing: DS.Space.xs) {
-                    Image(systemName: "arrow.triangle.branch")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text(snapshot.headDescription)
-                        .font(.callout)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
             }
-            .disabled(git.isBusy)
-            Spacer(minLength: DS.Space.s)
-            branchTrailing(snapshot)
-            ActivitySlot(active: git.isBusy || git.isRefreshing)
-        }
-    }
-
-    @ViewBuilder
-    private func branchTrailing(_ snapshot: GitSnapshot) -> some View {
-        if let operation = git.activeOperation {
-            Text(operation)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .layoutPriority(1)
-        } else if snapshot.ahead > 0 || snapshot.behind > 0 {
-            Text(syncLabel(snapshot))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .fixedSize()
-                .layoutPriority(1)
-                .help(syncHelp(snapshot))
+            if !snapshot.branches.isEmpty {
+                Divider()
+            }
+            Button("New Branch…") { app.createBranch() }
+        } label: {
+            HStack(spacing: DS.Space.xs) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: DS.Layout.symbolGlyph, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(snapshot.headDescription)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: DS.Layout.symbolGlyph, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 
@@ -210,14 +190,8 @@ struct SourceControlPanel: View {
         var parts = ["Switch branch"]
         if let upstream = snapshot.upstream { parts.append("tracking \(upstream)") }
         if !snapshot.hasCommits { parts.append("no commits yet") }
+        if snapshot.ahead > 0 || snapshot.behind > 0 { parts.append(syncHelp(snapshot)) }
         return parts.joined(separator: " · ")
-    }
-
-    private func syncLabel(_ snapshot: GitSnapshot) -> String {
-        var parts: [String] = []
-        if snapshot.ahead > 0 { parts.append("↑\(snapshot.ahead)") }
-        if snapshot.behind > 0 { parts.append("↓\(snapshot.behind)") }
-        return parts.joined(separator: " ")
     }
 
     private func syncHelp(_ snapshot: GitSnapshot) -> String {
@@ -247,27 +221,47 @@ struct SourceControlPanel: View {
                     draft.handledFocusRequest = value
                     DispatchQueue.main.async { messageFocused = true }
                 }
-            HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
-                Text(commitSummary(snapshot))
-                    .font(.caption)
-                    .foregroundStyle(snapshot.conflicted.isEmpty ? Color.secondary : DS.Git.removed)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: DS.Space.s) {
+                branchMenu(snapshot)
+                    .disabled(git.isBusy)
+                    .fixedSize()
                 Spacer(minLength: DS.Space.s)
-                if snapshot.staged.isEmpty && !snapshot.unstaged.isEmpty {
-                    Button("Stage All and Commit") { app.stageAllAndCommit() }
-                        .disabled(!hasCommitMessage || git.isBusy || !snapshot.conflicted.isEmpty)
-                        .help(commitHelp(snapshot))
-                } else {
-                    Button("Commit") { app.commit() }
-                        .disabled(!canCommit(snapshot))
-                        .help(commitHelp(snapshot))
-                }
+                Button("Pull", systemImage: "arrow.down") { app.pull() }
+                    .disabled(!git.canPull)
+                    .help(pullHelp(snapshot))
+                    .fixedSize()
+                Button("Push", systemImage: "arrow.up") { app.push() }
+                    .disabled(!git.canPush)
+                    .help(pushHelp(snapshot))
+                    .fixedSize()
+                commitButton(snapshot)
             }
             .controlSize(.small)
         }
         .padding(.horizontal, DS.Space.bar)
         .padding(.vertical, DS.Space.m)
+    }
+
+    private func pullHelp(_ snapshot: GitSnapshot) -> String {
+        if snapshot.behind > 0 {
+            return "Pull \(snapshot.behind) commit\(snapshot.behind == 1 ? "" : "s")"
+        }
+        return "Pull from Upstream"
+    }
+
+    private func pushHelp(_ snapshot: GitSnapshot) -> String {
+        if snapshot.ahead > 0 {
+            return "Push \(snapshot.ahead) commit\(snapshot.ahead == 1 ? "" : "s")"
+        }
+        if snapshot.upstream == nil { return "Publish Branch" }
+        return "Push to Remote"
+    }
+
+    private func commitButton(_ snapshot: GitSnapshot) -> some View {
+        Button("Commit", systemImage: "checkmark") { app.commit() }
+            .disabled(!canCommit(snapshot))
+            .help(commitHelp(snapshot))
+            .fixedSize()
     }
 
     private var hasCommitMessage: Bool {
@@ -282,26 +276,8 @@ struct SourceControlPanel: View {
         if !snapshot.conflicted.isEmpty { return "Resolve the conflicts before committing" }
         if snapshot.isClean { return "Make changes before committing" }
         if !hasCommitMessage { return "Enter a commit message" }
-        if snapshot.staged.isEmpty { return "Stage every change, then commit" }
-        return "Commit the staged changes (⌥⌘↩)"
-    }
-
-    private func commitSummary(_ snapshot: GitSnapshot) -> String {
-        if !snapshot.conflicted.isEmpty {
-            let count = snapshot.conflicted.count
-            return "\(count) conflict\(count == 1 ? "" : "s") to resolve"
-        }
-        if !snapshot.staged.isEmpty {
-            let staged = snapshot.staged.count
-            let remaining = snapshot.unstaged.count
-            return "\(staged) staged file\(staged == 1 ? "" : "s")"
-                + (remaining > 0 ? " · \(remaining) unstaged, excluded" : " ready to commit")
-        }
-        if !snapshot.unstaged.isEmpty {
-            let count = snapshot.unstaged.count
-            return "\(count) unstaged file\(count == 1 ? "" : "s"), nothing staged"
-        }
-        return "No changes to commit."
+        if snapshot.staged.isEmpty { return "Stage the changes you want to commit" }
+        return "Commit staged changes (⌥⌘↩)"
     }
 
     private func filtered(_ changes: [GitChange]) -> [GitChange] {
@@ -311,13 +287,15 @@ struct SourceControlPanel: View {
     private func changeList(_ snapshot: GitSnapshot) -> some View {
         List(selection: $selectedChangeID) {
             if !filtered(snapshot.conflicted).isEmpty {
-                Section(isExpanded: $conflictsExpanded) {
-                    ForEach(filtered(snapshot.conflicted)) { change in
-                        GitChangeRow(change: change)
-                            .tag(change.id)
+                Section {
+                    if conflictsExpanded {
+                        ForEach(filtered(snapshot.conflicted)) { change in
+                            GitChangeRow(change: change, isSelected: selectedChangeID == change.id)
+                                .tag(change.id)
+                        }
                     }
                 } header: {
-                    ChangeSectionHeader(title: "Conflicts", count: snapshot.conflicted.count) {
+                    ChangeSectionHeader(title: "Conflicts", count: snapshot.conflicted.count, isExpanded: $conflictsExpanded) {
                         IconButton("checkmark", help: "Mark All Resolved") { app.markAllResolved() }
                     }
                     .contextMenu {
@@ -326,13 +304,15 @@ struct SourceControlPanel: View {
                 }
             }
             if !filtered(snapshot.staged).isEmpty {
-                Section(isExpanded: $stagedExpanded) {
-                    ForEach(filtered(snapshot.staged)) { change in
-                        GitChangeRow(change: change)
-                            .tag(change.id)
+                Section {
+                    if stagedExpanded {
+                        ForEach(filtered(snapshot.staged)) { change in
+                            GitChangeRow(change: change, isSelected: selectedChangeID == change.id)
+                                .tag(change.id)
+                        }
                     }
                 } header: {
-                    ChangeSectionHeader(title: "Staged Changes", count: snapshot.staged.count) {
+                    ChangeSectionHeader(title: "Staged Changes", count: snapshot.staged.count, isExpanded: $stagedExpanded) {
                         IconButton("minus", help: "Unstage All Changes") { app.unstageAllChanges() }
                     }
                     .contextMenu {
@@ -341,13 +321,15 @@ struct SourceControlPanel: View {
                 }
             }
             if !filtered(snapshot.unstaged).isEmpty {
-                Section(isExpanded: $changesExpanded) {
-                    ForEach(filtered(snapshot.unstaged)) { change in
-                        GitChangeRow(change: change)
-                            .tag(change.id)
+                Section {
+                    if changesExpanded {
+                        ForEach(filtered(snapshot.unstaged)) { change in
+                            GitChangeRow(change: change, isSelected: selectedChangeID == change.id)
+                                .tag(change.id)
+                        }
                     }
                 } header: {
-                    ChangeSectionHeader(title: "Unstaged Changes", count: snapshot.unstaged.count) {
+                    ChangeSectionHeader(title: "Unstaged Changes", count: snapshot.unstaged.count, isExpanded: $changesExpanded) {
                         IconButton("arrow.uturn.backward", help: "Discard All Changes…") {
                             app.discardAllChanges()
                         }
@@ -395,7 +377,7 @@ struct SourceControlPanel: View {
     }
 
     private func footer(_ snapshot: GitSnapshot) -> some View {
-        PanelBar(rule: .above) {
+        PanelBar {
             Image(systemName: "eye.slash")
             Text(footerText(snapshot))
                 .lineLimit(1)
@@ -445,6 +427,23 @@ struct SourceControlMenuItems: View {
     @ObservedObject private var git = AppState.shared.git
 
     var body: some View {
+        if let snapshot = git.snapshot {
+            ForEach(snapshot.branches, id: \.self) { branch in
+                Button {
+                    app.checkout(branch: branch)
+                } label: {
+                    if branch == snapshot.branch {
+                        Label(branch, systemImage: "checkmark")
+                    } else {
+                        Text(branch)
+                    }
+                }
+                .disabled(git.isBusy)
+            }
+        }
+        Button("New Branch…") { app.createBranch() }
+            .disabled(git.isBusy)
+        Divider()
         Button("Fetch") { app.fetch() }
             .disabled(!git.canFetch)
         Button("Pull") { app.pull() }
@@ -462,53 +461,84 @@ struct SourceControlMenuItems: View {
             .disabled(git.isBusy || (git.snapshot?.unstaged.isEmpty ?? true))
         Button("Discard Output-Only Changes…", role: .destructive) { app.discardOutputOnlyChanges() }
             .disabled(git.isBusy || (git.snapshot?.hiddenNotebooks.isEmpty ?? true))
-        Divider()
-        Button("New Branch…") { app.createBranch() }
-            .disabled(git.isBusy)
     }
 }
 
 private struct ChangeSectionHeader<Actions: View>: View {
     let title: String
     let count: Int
+    @Binding var isExpanded: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ViewBuilder var actions: Actions
     @ObservedObject private var git = AppState.shared.git
+    @State private var hovering = false
 
-    init(title: String, count: Int, @ViewBuilder actions: () -> Actions) {
+    init(title: String, count: Int, isExpanded: Binding<Bool>, @ViewBuilder actions: () -> Actions) {
         self.title = title
         self.count = count
+        self._isExpanded = isExpanded
         self.actions = actions()
     }
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
-            Text(title).lineLimit(1)
-            Text("\(count)")
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, DS.Space.xs)
-                .background(.quaternary, in: Capsule())
-                .fixedSize()
+            Button {
+                withAnimation(reduceMotion ? nil : DS.Motion.quick) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: DS.Space.s) {
+                    Image(systemName: "chevron.right")
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .font(.caption.weight(.semibold))
+                        .frame(width: DS.Layout.iconSlot)
+                    Text(title)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("\(isExpanded ? "Collapse" : "Expand") \(title)")
+            .accessibilityLabel(title)
+            .accessibilityValue("\(isExpanded ? "Expanded" : "Collapsed"), \(count) files")
             Spacer(minLength: DS.Space.xs)
             HStack(spacing: 0) { actions }
+                .opacity(hovering ? 1 : 0)
+                .allowsHitTesting(hovering)
                 .disabled(git.isBusy)
+            Text("\(count)")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, DS.Space.s)
+                .padding(.vertical, DS.Space.xxs)
+                .background(.quaternary, in: Capsule())
+                .fixedSize()
+                .accessibilityHidden(true)
         }
+        .padding(.trailing, DS.Space.bar)
         .contentShape(Rectangle())
+        .scrollAwareHover($hovering)
     }
 }
 
 struct GitChangeRow: View {
     let change: GitChange
+    var isSelected = false
     private var app: AppState { AppState.shared }
     @ObservedObject private var git = AppState.shared.git
     @State private var hovering = false
+    @FocusState private var discardFocused: Bool
 
     private var color: Color { DS.Git.color(for: change.status) }
+    private var showsActions: Bool { hovering || isSelected || discardFocused }
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
             Image(systemName: FileNode.iconName(forExtension: change.url.pathExtension))
                 .foregroundStyle(.secondary)
+                .frame(width: DS.Layout.iconSlot)
             VStack(alignment: .leading, spacing: DS.Space.xxs) {
                 Text(change.fileName)
                     .strikethrough(change.status == .deleted)
@@ -535,8 +565,15 @@ struct GitChangeRow: View {
                 .frame(width: DS.Layout.statusSlot)
                 .help(change.status.label)
                 .accessibilityLabel(change.status.label)
-            HStack(spacing: 0) { actions }
-                .disabled(git.isBusy)
+        }
+        .overlay(alignment: .trailing) {
+            HStack(spacing: 0) {
+                actions
+                Color.clear.frame(width: DS.Layout.statusSlot)
+            }
+            .opacity(showsActions ? 1 : 0)
+            .allowsHitTesting(showsActions)
+            .disabled(git.isBusy)
         }
         .frame(minHeight: DS.Layout.listRowMinHeight)
         .contentShape(Rectangle())
@@ -549,15 +586,16 @@ struct GitChangeRow: View {
 
     @ViewBuilder
     private var actions: some View {
+        if change.existsOnDisk {
+            IconButton("arrow.up.forward", help: "Open File") { app.openFile(change.url) }
+        }
         switch change.area {
         case .unstaged:
             IconButton("arrow.uturn.backward",
                        help: change.status == .untracked ? "Move to Trash…" : "Discard Changes…") {
                 app.discardChanges(change)
             }
-            .opacity(hovering ? 1 : 0)
-            .allowsHitTesting(hovering)
-            .accessibilityHidden(!hovering)
+            .focused($discardFocused)
             IconButton("plus", help: "Stage Changes") { app.stage(change) }
         case .staged:
             IconButton("minus", help: "Unstage Changes") { app.unstage(change) }

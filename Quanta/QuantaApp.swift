@@ -40,11 +40,13 @@ struct QuantaApp: App {
         Window("Quanta", id: "main") {
             MainWindowView()
                 .environmentObject(appState)
-                .frame(minWidth: 800, minHeight: 520)
+                .frame(minWidth: DS.Layout.windowMinWidth, minHeight: DS.Layout.windowMinHeight)
                 .background(WindowFrameSaver())
                 .preferredColorScheme(previewColorScheme)
         }
         .windowToolbarStyle(.unified)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: MainWindowFrame.size.width, height: MainWindowFrame.size.height)
         .commands {
             QuantaCommands(app: appState, git: appState.git, selection: appState.selection)
         }
@@ -62,21 +64,36 @@ struct QuantaApp: App {
     }
 }
 
-private struct WindowFrameSaver: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            if QuantaDefaults.previewDirectory != nil {
-                let width = Double(ProcessInfo.processInfo.environment["QUANTA_UI_PREVIEW_WIDTH"] ?? "1280") ?? 1280
-                view.window?.setContentSize(NSSize(width: width, height: width < 1280 ? 700 : 800))
-            } else {
-                view.window?.setFrameAutosaveName("QuantaMainWindow")
-            }
+private enum MainWindowFrame {
+    static let fallback = CGSize(width: 1440, height: 900)
+
+    static var size: CGSize {
+        let minWidth = DS.Layout.windowMinWidth
+        let minHeight = DS.Layout.windowMinHeight
+        guard let raw = QuantaDefaults.store.string(forKey: "NSWindow Frame main") else {
+            return CGSize(width: max(fallback.width, minWidth), height: max(fallback.height, minHeight))
         }
-        return view
+        let parts = raw.split(whereSeparator: \.isWhitespace).compactMap { Double($0) }.map { CGFloat($0) }
+        guard parts.count >= 4 else {
+            return CGSize(width: max(fallback.width, minWidth), height: max(fallback.height, minHeight))
+        }
+        return CGSize(width: max(parts[2], minWidth), height: max(parts[3], minHeight))
     }
+}
+
+private struct WindowFrameSaver: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { WindowHookView() }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class WindowHookView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window, QuantaDefaults.previewDirectory != nil else { return }
+        let width = Double(ProcessInfo.processInfo.environment["QUANTA_UI_PREVIEW_WIDTH"] ?? "1280") ?? 1280
+        window.setContentSize(NSSize(width: width, height: width < 1280 ? 700 : 800))
+    }
 }
 
 struct QuantaCommands: Commands {
@@ -110,7 +127,7 @@ struct QuantaCommands: Commands {
             Button("Show Terminal") { app.showTerminal() }
                 .keyboardShortcut("`", modifiers: .control)
             Button("New Terminal Session…") { app.newTerminalSession() }
-            Button("Show Python Console") { app.showPythonConsole() }
+            Button("Show Console") { app.showPythonConsole() }
         }
         CommandGroup(replacing: .newItem) {
             Button("New Notebook") { app.newNotebook() }
