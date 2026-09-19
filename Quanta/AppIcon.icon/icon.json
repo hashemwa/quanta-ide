@@ -6,16 +6,13 @@
     {
       "layers" : [
         {
-          "blend-mode" : "normal",
-          "fill" : "none",
-          "glass" : true,
-          "image-name" : "download 1.svg",
-          "name" : "download 1",
+          "image-name" : "Quanta Icon.svg",
+          "name" : "Quanta Icon",
           "position" : {
             "scale" : 8,
             "translation-in-points" : [
-              11.769193124412482,
-              -40.2308071758124
+              7.769193124412482,
+              -56.2308071758124
             ]
           }
         }
