@@ -191,7 +191,7 @@ final class WorkspaceTrustTests: XCTestCase {
             if app.kernel.status == .idle { return }
             try await Task.sleep(for: .milliseconds(20))
         }
-        XCTFail("Kernel did not become idle: \(app.kernel.status)")
+        XCTFail("Kernel did not become idle: \(app.kernel.status). \(app.console.lines.map(\.text).joined(separator: "\n"))")
         throw NSError(domain: "WorkspaceTrustTests", code: 1)
     }
 

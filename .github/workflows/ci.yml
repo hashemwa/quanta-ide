@@ -30,12 +30,22 @@ jobs:
         run: ./scripts/quanta build
       - name: Unit tests
         run: ./scripts/quanta test
+      - name: Test failure details
+        if: failure()
+        run: |
+          for result in "$HOME"/Library/Developer/Xcode/DerivedData/Quanta-*/Logs/Test/*.xcresult; do
+            if [ -d "$result" ]; then
+              xcrun xcresulttool get test-results summary --path "$result"
+            fi
+          done
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: macos-failure-logs
-          path: .build/last-*.log
+          path: |
+            .build/last-*.log
+            ~/Library/Developer/Xcode/DerivedData/Quanta-*/Logs/Test/*.xcresult
           include-hidden-files: true
           if-no-files-found: ignore
 

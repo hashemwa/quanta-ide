@@ -11,7 +11,7 @@ enum QuantaDefaults {
         #endif
     }
 
-    private static let testSuiteName = "quanta.tests"
+    private static let testSuiteName = "quanta.tests.\(ProcessInfo.processInfo.processIdentifier)"
 
     static var isRunningTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
