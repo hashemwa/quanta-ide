@@ -54,6 +54,20 @@ for supported commands and current output limitations.
 | ⇧↩ | Run cell and advance |
 | ⌘R | Run notebook or script |
 | ⌘. | Interrupt execution |
+| ⌃Space | Show completions |
+| ⇧Tab | Show documentation or call signature |
+| ⌃⌘J | Go to definition |
+
+For completion, diagnostics, and definition navigation before running code, install
+[Node.js](https://nodejs.org/) and [Pyright](https://github.com/microsoft/pyright)
+(`npm install -g pyright`). Open a trusted workspace, select its Python interpreter,
+and check **Settings → Editor → Python Analysis**. Quanta finds standard Homebrew and
+`~/.local/bin` installations; **Choose Executable…** supports other locations.
+
+Analysis covers Python scripts and code cells in notebook order, including unsaved
+edits. Underlined issues have tooltips; the document's **Issues** menu jumps to each
+location. Runtime completion remains available as a fallback. This first integration
+does not provide auto-import edits, rename, or find-all-references.
 
 Select or hover over a cell and open its **+** menu to insert **Code** or **Markdown**
 above or below it. The same choices appear in the cell's context menu, the notebook

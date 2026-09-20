@@ -5,6 +5,7 @@ final class EditorRegistry {
     private var map: [UUID: NSHashTable<QuantaTextView>] = [:]
 
     func register(_ textView: QuantaTextView, for id: UUID) {
+        textView.languageEditorID = id
         map = map.filter { !$0.value.allObjects.isEmpty }
         let views = map[id] ?? NSHashTable<QuantaTextView>.weakObjects()
         views.add(textView)
@@ -35,6 +36,8 @@ final class CompletionPanel {
     private var allMatches: [String] = []
     private var filtered: [String] = []
     private var replaceStart = 0
+    private var replaceEnd = 0
+    private var sourceLength = 0
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
@@ -44,7 +47,7 @@ final class CompletionPanel {
 
     private var scrollObserver: NSObjectProtocol?
 
-    func show(matches: [String], start: Int, for textView: QuantaTextView) {
+    func show(matches: [String], start: Int, end: Int? = nil, for textView: QuantaTextView) {
         guard !matches.isEmpty, textView.window != nil else {
             hide()
             return
@@ -52,6 +55,8 @@ final class CompletionPanel {
         host = textView
         allMatches = matches
         replaceStart = start
+        replaceEnd = end ?? textView.selectedRange().location
+        sourceLength = textView.string.utf16.count
         refilter()
         guard !filtered.isEmpty else {
             hide()
@@ -101,6 +106,8 @@ final class CompletionPanel {
 
     func refresh(from textView: QuantaTextView) {
         guard isShowing(for: textView) else { return }
+        replaceEnd += textView.string.utf16.count - sourceLength
+        sourceLength = textView.string.utf16.count
         let caret = textView.selectedRange().location
         guard caret >= replaceStart else {
             hide()
@@ -168,7 +175,8 @@ final class CompletionPanel {
         }
         let completion = filtered[row]
         let caret = host.selectedRange().location
-        let range = NSRange(location: replaceStart, length: max(0, caret - replaceStart))
+        let range = NSRange(location: replaceStart, length: max(0, max(caret, replaceEnd) - replaceStart))
+        guard NSMaxRange(range) <= host.string.utf16.count else { hide(); return }
         hide()
         if host.shouldChangeText(in: range, replacementString: completion) {
             host.textStorage?.replaceCharacters(in: range, with: completion)

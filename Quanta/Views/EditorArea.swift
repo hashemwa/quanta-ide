@@ -133,6 +133,7 @@ private struct EditorPaneView: View {
                     }
                 }
             }
+            LanguageIssuesView(service: app.language, document: document)
             DocumentContentView(document: document).id(document.id)
         }
     }

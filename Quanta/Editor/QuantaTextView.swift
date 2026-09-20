@@ -10,6 +10,7 @@ final class QuantaTextView: NSTextView {
     var onFocusChange: ((Bool) -> Void)?
     var onLayoutChange: (() -> Void)?
     var onEscape: (() -> Void)?
+    var languageEditorID: UUID?
     var completionProvider: ((String, Int, @escaping ([String], Int, Int) -> Void) -> Void)?
     var inspectionProvider: ((String, Int, @escaping (InspectionInfo?) -> Void) -> Void)?
     private(set) var lastEditedRange = NSRange(location: 0, length: 0)
@@ -75,6 +76,7 @@ final class QuantaTextView: NSTextView {
     }
 
     override func didChangeText() {
+        applyLanguageDiagnostics([])
         super.didChangeText()
         if CompletionPanel.shared.isShowing(for: self) {
             CompletionPanel.shared.refresh(from: self)
@@ -146,22 +148,59 @@ final class QuantaTextView: NSTextView {
     func requestCompletions() {
         guard let completionProvider else { return }
         let caret = selectedRange().location
-        completionProvider(self.string, caret) { [weak self] matches, start, _ in
+        let source = string
+        completionProvider(source, caret) { [weak self] matches, start, end in
             guard let self, self.window != nil,
                   self.window?.firstResponder === self,
-                  self.selectedRange().location >= start else { return }
-            CompletionPanel.shared.show(matches: matches, start: start, for: self)
+                  self.string == source, self.selectedRange().location == caret,
+                  start >= 0, start <= caret, end >= caret, end <= source.utf16.count else { return }
+            CompletionPanel.shared.show(matches: matches, start: start, end: end, for: self)
         }
     }
 
-    private func requestDocumentation() -> Bool {
-        guard let inspectionProvider, AppState.shared.kernelStatus == .idle else { return false }
+    @discardableResult
+    func requestDocumentation() -> Bool {
+        guard let inspectionProvider else { return false }
         let caret = selectedRange().location
-        inspectionProvider(self.string, caret) { [weak self] info in
-            guard let self, self.window != nil, let info else { return }
+        let source = string
+        inspectionProvider(source, caret) { [weak self] info in
+            guard let self, self.window?.firstResponder === self, self.string == source,
+                  self.selectedRange().location == caret, let info else { return }
             DocumentationPopover.show(info, for: self)
         }
         return true
+    }
+
+    func applyLanguageDiagnostics(_ diagnostics: [LanguageDiagnostic]) {
+        let full = NSRange(location: 0, length: string.utf16.count)
+        layoutManager?.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
+        layoutManager?.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
+        textStorage?.removeAttribute(.toolTip, range: full)
+        for diagnostic in diagnostics {
+            var range = diagnostic.range
+            guard range.location < full.length else { continue }
+            range.length = min(max(1, range.length), full.length - range.location)
+            let color: NSColor = diagnostic.severity == 1 ? .systemRed : .systemOrange
+            layoutManager?.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.single.rawValue,
+                                                   .underlineColor: color], forCharacterRange: range)
+            textStorage?.addAttribute(.toolTip, value: diagnostic.message, range: range)
+        }
+    }
+
+    @objc func goToLanguageDefinition(_ sender: Any?) {
+        guard let id = languageEditorID else { return }
+        AppState.shared.language.definition(editorID: id, code: string, offset: selectedRange().location)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        if languageEditorID != nil {
+            menu.addItem(.separator())
+            let item = NSMenuItem(title: "Go to Definition", action: #selector(goToLanguageDefinition), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        return menu
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -198,7 +237,7 @@ final class QuantaTextView: NSTextView {
             let ns = string as NSString
             let previous = ns.substring(with: NSRange(location: sel.location - 1, length: 1))
             if let scalar = previous.unicodeScalars.first,
-               CharacterSet.alphanumerics.contains(scalar) || previous == "_" || previous == ")",
+               CharacterSet.alphanumerics.contains(scalar) || previous == "_" || previous == ")" || previous == "(" || previous == ",",
                requestDocumentation() {
                 return
             }

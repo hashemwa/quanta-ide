@@ -30,8 +30,13 @@ jobs:
         run: xcrun --sdk macosx --show-sdk-version
       - name: Build
         run: ./scripts/quanta build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install language-server test dependency
+        run: npm install --prefix "$RUNNER_TEMP/quanta-language" pyright@1.1.414 --no-audit --no-fund
       - name: Unit tests
-        run: ./scripts/quanta test
+        run: TEST_RUNNER_QUANTA_TEST_PYRIGHT="$RUNNER_TEMP/quanta-language/node_modules/.bin/pyright-langserver" ./scripts/quanta test
       - name: Test failure details
         if: failure()
         run: |

@@ -28,11 +28,25 @@ enum CodeEditorFactory {
         tv.isAutomaticTextCompletionEnabled = false
         tv.typingAttributes = [.font: EditorTheme.font, .foregroundColor: EditorTheme.text]
         tv.textContainerInset = NSSize(width: DS.Space.xs, height: DS.Space.s)
-        tv.completionProvider = { code, cursor, reply in
-            AppState.shared.requestCompletions(code: code, cursor: cursor, reply: reply)
+        tv.completionProvider = { [weak tv] code, cursor, reply in
+            let app = AppState.shared
+            guard let id = tv?.languageEditorID else {
+                app.requestCompletions(code: code, cursor: cursor, reply: reply); return
+            }
+            app.language.completions(editorID: id, code: code, offset: cursor) { matches, start, end in
+                if matches.isEmpty { app.requestCompletions(code: code, cursor: cursor, reply: reply) }
+                else { reply(matches, start, end) }
+            }
         }
-        tv.inspectionProvider = { code, cursor, reply in
-            AppState.shared.requestInspection(code: code, cursor: cursor, reply: reply)
+        tv.inspectionProvider = { [weak tv] code, cursor, reply in
+            let app = AppState.shared
+            guard let id = tv?.languageEditorID else {
+                app.requestInspection(code: code, cursor: cursor, reply: reply); return
+            }
+            app.language.inspect(editorID: id, code: code, offset: cursor) { info in
+                if let info { reply(info) }
+                else { app.requestInspection(code: code, cursor: cursor, reply: reply) }
+            }
         }
         return tv
     }
@@ -113,6 +127,7 @@ struct ScrollingCodeEditor: NSViewRepresentable {
             tv.setSelectedRange(NSRange(location: min(sel.location, length), length: 0))
             context.coordinator.ruler?.needsDisplay = true
         }
+        AppState.shared.language.applyDiagnostics(to: tv)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -180,6 +195,7 @@ struct GrowingCodeEditor: NSViewRepresentable {
             if let storage = tv.textStorage { PythonHighlighter.highlight(storage) }
         }
         context.coordinator.scheduleMeasure()
+        AppState.shared.language.applyDiagnostics(to: tv)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
