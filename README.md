@@ -55,6 +55,19 @@ for supported commands and current output limitations.
 | ⌘R | Run notebook or script |
 | ⌘. | Interrupt execution |
 
+Select or hover over a cell and open its **+** menu to insert **Code** or **Markdown**
+above or below it. The same choices appear in the cell's context menu, the notebook
+toolbar, the **Cell** menu, and the command palette. Press **Esc** for command mode,
+then **A** or **B** to insert code above or below, or **M** / **Y** to change the cell type.
+
+Use **File → Export Notebook → As PDF…** or the notebook toolbar's **… → Export Notebook** menu
+to save a paginated PDF. HTML export includes offline math, Markdown tables, full text
+outputs, and interactive Plotly figures. PDF export waits for figures to finish rendering.
+
+DataFrame context menus distinguish formatted **Previews** from **Original Values**.
+Original values preserve full strings, newlines, and numeric precision for the rows
+captured in the table snapshot; column copying covers loaded rows only.
+
 The Plots panel defaults to the active file. Choose **All Files and Console** to browse
 other figures. It retains up to 200 plots during the app session, including earlier
 runs; notebook outputs remain inline and are saved independently. Script figures appear

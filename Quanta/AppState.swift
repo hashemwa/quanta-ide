@@ -75,6 +75,7 @@ final class AppState: ObservableObject {
     }
     private lazy var consoleUserHidden = !showConsole
     @Published var consoleRevealPending = false
+    @Published var isExportingPDF = false
     @Published var workspaceTrustRequest: URL?
     @Published var kernelTransition: KernelTransition?
     @Published var pythonPath: String?
@@ -2290,18 +2291,26 @@ final class AppState: ObservableObject {
     }
 
     func exportActiveNotebookAsPDF() {
-        guard let document = activeDocument, let notebook = document.notebook else { return }
+        guard !isExportingPDF, let document = activeDocument, let notebook = document.notebook else { return }
+        let panel = NSSavePanel()
+        panel.directoryURL = document.url?.deletingLastPathComponent() ?? workspace?.rootURL
+        panel.nameFieldStringValue = (document.displayName as NSString).deletingPathExtension + ".pdf"
+        panel.allowedContentTypes = [.pdf]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        isExportingPDF = true
         let html = NotebookExporter.html(from: notebook, title: document.displayName,
                                          baseDirectory: document.url?.deletingLastPathComponent())
         NotebookExporter.renderPDF(html: html) { [weak self] data in
+            guard let self else { return }
+            self.isExportingPDF = false
             guard let data else {
-                self?.appendConsole(.system, "PDF export failed.")
+                self.userNotice = "PDF export could not finish rendering the notebook. Check its outputs and try again."
                 return
             }
-            self?.savePanelWrite(
-                data: data,
-                suggested: document.displayName.replacingOccurrences(of: ".ipynb", with: ".pdf"),
-                type: .pdf)
+            do {
+                try data.write(to: url, options: .atomic)
+                self.refreshWorkspace()
+            } catch { self.userNotice = "Could not save PDF: \(error.localizedDescription)" }
         }
     }
 

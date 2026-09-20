@@ -372,11 +372,11 @@ struct MarkdownView: View {
                 flushParagraph()
                 continue
             }
-            if trimmed.hasPrefix("#") {
+            let level = trimmed.prefix(while: { $0 == "#" }).count
+            if (1...6).contains(level), trimmed.dropFirst(level).hasPrefix(" ") {
                 flushParagraph()
-                let level = trimmed.prefix(while: { $0 == "#" }).count
-                let text = trimmed.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
-                result.append(.heading(min(level, 4), text))
+                let text = trimmed.dropFirst(level + 1).trimmingCharacters(in: .whitespaces)
+                result.append(.heading(level, text))
                 continue
             }
             if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {

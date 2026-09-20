@@ -49,7 +49,7 @@ enum RichOutput {
         return """
         <div id="quanta-figure"></div><script>
         const figure = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('\(bytes.base64EncodedString())'), c => c.charCodeAt(0))));
-        Plotly.newPlot('quanta-figure', figure.data || [], figure.layout || {}, {responsive:true,displayModeBar:false});
+        window.quantaPlotReady = Plotly.newPlot('quanta-figure', figure.data || [], figure.layout || {}, {responsive:true,displayModeBar:false});
         </script>
         """
     }
@@ -61,7 +61,9 @@ enum RichOutput {
         <!doctype html><html><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; base-uri 'none'; form-action 'none'">
         <script>\(script.replacingOccurrences(of: "</script", with: "<\\/script"))</script>
-        </head><body>\(html)</body></html>
+        </head><body>\(html)<script>
+        window.quantaPlotReady.then(() => parent.postMessage({type:'quanta-plot-ready'}, '*'), () => parent.postMessage({type:'quanta-plot-error'}, '*'));
+        </script></body></html>
         """
     }
 

@@ -19,7 +19,8 @@ standard-library bridge. It does not run an IPython or Jupyter kernel.
 | DataFrames | Save an HTML table preview, text fallback, and a native snapshot. Reopened snapshots do not query a variable in the current kernel. |
 | Plotly | Save structured Plotly JSON plus an available PNG fallback. Reopen interactively using a bundled offline renderer. |
 | Arrays, JSON trees and model cards | Save structured snapshots and text fallbacks; array/card snapshots retain their native views. |
-| HTML export | Tables, SVG, JPEG and JSON render in sandboxed frames. Plotly exports embed a renderer in an isolated frame and can substantially increase file size. |
+| HTML export | Markdown tables, offline MathML equations, full text outputs, and sanitized rich HTML. SVG/JPEG images are embedded. Plotly embeds an offline renderer in an isolated frame and can substantially increase file size. |
+| PDF export | Paginated US Letter pages with margins, wrapped code/text, tables, equations, embedded images, and rendered Plotly figures. Figures finish rendering before capture; exports are limited to 500 pages and 35 seconds. |
 
 Recognized unsupported commands fail the entire cell before any Python statements in
 it execute. Subsequent cells can still run. Text inside Python strings is preserved,
@@ -33,6 +34,20 @@ Rich output is a saved presentation, not a full dataset backup. DataFrames retai
 bounded rows/columns shown in their preview; array and JSON-tree snapshots retain the
 bridge's existing size/depth limits. Unknown imported MIME types remain intact. Generic
 HTML scripts and Jupyter widget communication are not enabled by workspace trust.
+
+New DataFrame snapshots also retain original string representations for copying,
+separately from shortened display previews. These are bounded to 1 MB per value and
+4 MB per page. Older snapshots and values over the limit cannot supply original
+values; Quanta never substitutes a truncated preview for an original. These strings
+are copyable representations, not typed Python object serialization.
+
+Exported rich HTML uses a conservative allowlist of text, tables, lists, links, and
+embedded images. Custom styles, scripts, forms, remote images, and embedded frames
+are removed. Markdown equations are converted to MathML using bundled KaTeX without
+network access. Unsupported TeX remains visible as an error or source fallback.
+
+JupyterLab can display saved DataFrame HTML and generic HTML directly. Interactive
+Plotly JSON requires its Plotly renderer extension; Quanta includes its own renderer.
 
 Output dictionaries follow the [Jupyter MIME-bundle format](https://nbformat.readthedocs.io/en/5.5.0/format_description.html).
 Plotly's saved JSON is rendered with application-owned code; saved HTML is never treated

@@ -183,7 +183,8 @@ struct QuantaCommands: Commands {
             Menu("Export Notebook") {
                 Button("As Python Script…") { app.exportActiveNotebookAsPython() }
                 Button("As HTML…") { app.exportActiveNotebookAsHTML() }
-                Button("As PDF…") { app.exportActiveNotebookAsPDF() }
+                Button(app.isExportingPDF ? "Exporting PDF…" : "As PDF…") { app.exportActiveNotebookAsPDF() }
+                    .disabled(app.isExportingPDF)
             }
             .disabled(app.activeDocument?.kind != .notebook)
         }

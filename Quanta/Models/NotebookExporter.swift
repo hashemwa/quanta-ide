@@ -44,7 +44,7 @@ enum NotebookExporter {
             }
         }
         return """
-        <!doctype html><html><head><meta charset="utf-8"><title>\(escape(title))</title><style>
+        <!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-src about:; base-uri 'none'; form-action 'none'"><title>\(escape(title))</title><style>
         body { font: 14px -apple-system, system-ui, sans-serif; max-width: 860px;
                margin: 40px auto; padding: 0 20px; color: #1d1d1f; background: #fff; }
         pre { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -66,7 +66,30 @@ enum NotebookExporter {
           .code, .md code { background: #2a2a2c; }
           .err { background: #3a2426; color: #ff6b62; }
         }
-        </style></head><body>\(body)</body></html>
+        table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 12px; }
+        th, td { padding: 6px 8px; border-bottom: 1px solid #ccc; text-align: left; overflow-wrap: anywhere; }
+        th { background: #f5f5f7; color: #1d1d1f; }
+        caption { text-align: left; color: #666; padding: 6px 0; }
+        .rich-output { margin: 8px 0 8px 42px; }
+        .rich-output img { margin-left: 0; }
+        .rich-output pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+        math { font-size: 1.1em; }
+        iframe { display: block; }
+        @media print {
+          @page { size: letter; margin: 0.5in; }
+          body { max-width: none; margin: 0; padding: 0; background: white; color: black; }
+          pre, .code { white-space: pre-wrap; overflow-wrap: anywhere; }
+          .code, .md code { background: #f5f5f7; }
+          .err { color: #a00; background: #fff1f0; }
+          .cell { display: block; }
+          .prompt { float: left; padding-right: 8px; }
+          .code { margin-left: 42px; }
+          h1, h2, h3, h4, h5, h6 { break-after: avoid; }
+          tr, img, iframe, math { break-inside: avoid; }
+          thead { display: table-header-group; }
+          img { max-height: 8in; object-fit: contain; }
+        }
+        </style><script>\(preparationScript)</script></head><body>\(body)</body></html>
         """
     }
 
@@ -74,14 +97,15 @@ enum NotebookExporter {
         if let bundle = RichOutput.bundle(output) {
             if let figure = bundle[RichOutput.plotlyMIME] as? [String: Any],
                let document = RichOutput.plotlyDocument(figure) {
-                return "<iframe sandbox=\"allow-scripts\" referrerpolicy=\"no-referrer\" style=\"width:100%;height:500px;border:0\" srcdoc=\"\(RichOutput.escape(document))\"></iframe>\n"
+                return "<iframe data-quanta-plot sandbox=\"allow-scripts\" referrerpolicy=\"no-referrer\" style=\"width:100%;height:500px;border:0\" srcdoc=\"\(RichOutput.escape(document))\"></iframe>\n"
             }
             let document = RichOutput.safeDocument(RichOutput.staticHTML(bundle))
-            return "<iframe sandbox=\"\" referrerpolicy=\"no-referrer\" style=\"width:100%;height:360px;border:0\" srcdoc=\"\(RichOutput.escape(document))\"></iframe>\n"
+            let encoded = Data(RichOutput.staticHTML(bundle).utf8).base64EncodedString()
+            return "<iframe data-quanta-static=\"\(encoded)\" sandbox=\"\" referrerpolicy=\"no-referrer\" style=\"width:100%;height:360px;border:0\" srcdoc=\"\(RichOutput.escape(document))\"></iframe>\n"
         }
         switch output.kind {
         case .stream(_, let text), .executeResult(let text):
-            return "<pre class=\"out\">\(escape(String(text.prefix(20_000))))</pre>\n"
+            return "<pre class=\"out\">\(escape(text))</pre>\n"
         case .image(let data, _), .plotlyFigure(_, _, let data, _, _):
             guard !data.isEmpty else {
                 return "<pre class=\"out\">[interactive plotly figure]</pre>\n"
@@ -109,48 +133,32 @@ enum NotebookExporter {
                                attachments: [String: Data] = [:],
                                baseDirectory: URL? = nil) -> String {
         var html = ""
-        var inCodeFence = false
         var inList = false
-        func closeList() {
-            if inList { html += "</ul>\n"; inList = false }
+        func content(_ text: String) -> String {
+            inline(text, attachments: attachments, baseDirectory: baseDirectory)
         }
-        for rawLine in source.components(separatedBy: "\n") {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("```") {
-                closeList()
-                html += inCodeFence ? "</code></pre>\n" : "<pre><code>"
-                inCodeFence.toggle()
-                continue
-            }
-            if inCodeFence {
-                html += escape(rawLine) + "\n"
-                continue
-            }
-            if line.isEmpty {
-                closeList()
-                continue
-            }
-            if MarkdownView.imageMarkup(in: line, wholeLine: true) != nil {
-                closeList()
-                html += imageTag(from: line, attachments: attachments, baseDirectory: baseDirectory) + "\n"
-                continue
-            }
-            var content = line
-            var wrapper = "p"
-            let hashes = line.prefix { $0 == "#" }.count
-            if hashes >= 1, hashes <= 6, line.dropFirst(hashes).hasPrefix(" ") {
-                wrapper = "h\(hashes)"
-                content = String(line.dropFirst(hashes + 1))
-            } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+        for block in MarkdownView.parse(source) {
+            if case .bullet = block {} else if inList { html += "</ul>\n"; inList = false }
+            switch block {
+            case .heading(let level, let text): html += "<h\(level)>\(content(text))</h\(level)>\n"
+            case .paragraph(let text): html += "<p>\(content(text))</p>\n"
+            case .code(let code): html += "<pre><code>\(escape(code))</code></pre>\n"
+            case .bullet(let text):
                 if !inList { html += "<ul>\n"; inList = true }
-                html += "<li>\(inline(String(line.dropFirst(2)), attachments: attachments, baseDirectory: baseDirectory))</li>\n"
-                continue
+                html += "<li>\(content(text))</li>\n"
+            case .math(let tex): html += "<div class=\"math\">\(NotebookMath.html(tex, display: true))</div>\n"
+            case .image(let alt, let url):
+                html += imageTag(alt: alt, url: url, attachments: attachments, baseDirectory: baseDirectory) + "\n"
+            case .table(let rows):
+                guard let header = rows.first else { continue }
+                html += "<table><thead><tr>" + header.map { "<th>\(content($0))</th>" }.joined() + "</tr></thead><tbody>"
+                for row in rows.dropFirst() {
+                    html += "<tr>" + row.map { "<td>\(content($0))</td>" }.joined() + "</tr>"
+                }
+                html += "</tbody></table>\n"
             }
-            closeList()
-            html += "<\(wrapper)>\(inline(content, attachments: attachments, baseDirectory: baseDirectory))</\(wrapper)>\n"
         }
-        closeList()
-        if inCodeFence { html += "</code></pre>\n" }
+        if inList { html += "</ul>\n" }
         return html
     }
 
@@ -176,23 +184,14 @@ enum NotebookExporter {
         for segment in MarkdownView.splitInlineMath(text) {
             switch segment {
             case .text(let s):
-                out += emphasis(escape(s))
+                out += linkedText(s)
             case .math(let tex):
-                out += "$" + escape(tex) + "$"
+                out += NotebookMath.html(tex, display: false)
             case .image(let alt, let url):
                 out += imageTag(alt: alt, url: url, attachments: attachments, baseDirectory: baseDirectory)
             }
         }
         return out
-    }
-
-    private static func imageTag(from line: String,
-                                 attachments: [String: Data],
-                                 baseDirectory: URL?) -> String {
-        guard let markup = MarkdownView.imageMarkup(in: line, wholeLine: true) else {
-            return "<p>\(inline(line, attachments: attachments, baseDirectory: baseDirectory))</p>"
-        }
-        return imageTag(alt: markup.alt, url: markup.url, attachments: attachments, baseDirectory: baseDirectory)
     }
 
     private static func imageTag(alt: String, url: String,
@@ -202,6 +201,23 @@ enum NotebookExporter {
             return "<img alt=\"\(escapeAttribute(alt))\" src=\"\(MarkdownView.dataURI(for: data))\">"
         }
         return alt.isEmpty ? escape(url) : escape(alt)
+    }
+
+    private static func linkedText(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^\s)]+)\)"#) else { return emphasis(escape(text)) }
+        let source = text as NSString
+        var result = ""
+        var cursor = 0
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            result += emphasis(escape(source.substring(with: NSRange(location: cursor, length: match.range.location - cursor))))
+            let label = source.substring(with: match.range(at: 1))
+            let target = source.substring(with: match.range(at: 2))
+            if let url = URL(string: target), ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") {
+                result += "<a href=\"\(escapeAttribute(target))\" rel=\"noreferrer\">\(emphasis(escape(label)))</a>"
+            } else { result += emphasis(escape(label)) }
+            cursor = NSMaxRange(match.range)
+        }
+        return result + emphasis(escape(source.substring(from: cursor)))
     }
 
     private static func emphasis(_ text: String) -> String {
@@ -229,44 +245,14 @@ enum NotebookExporter {
             .replacingOccurrences(of: "'", with: "&#39;")
     }
 
-    private static var activePDFExports: [ObjectIdentifier: PDFRenderer] = [:]
+    private static var activePDFExports: [ObjectIdentifier: NotebookPDFRenderer] = [:]
 
     static func renderPDF(html: String, completion: @escaping (Data?) -> Void) {
-        var key: ObjectIdentifier?
-        let renderer = PDFRenderer(html: html) { data in
-            if let key { activePDFExports[key] = nil }
+        let renderer = NotebookPDFRenderer { renderer, data in
+            activePDFExports[ObjectIdentifier(renderer)] = nil
             completion(data)
         }
-        key = ObjectIdentifier(renderer)
         activePDFExports[ObjectIdentifier(renderer)] = renderer
-    }
-
-    private final class PDFRenderer: NSObject, WKNavigationDelegate {
-        private let webView: WKWebView
-        private let completion: (Data?) -> Void
-
-        init(html: String, completion: @escaping (Data?) -> Void) {
-            self.webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 820, height: 1060))
-            self.completion = completion
-            super.init()
-            webView.navigationDelegate = self
-            webView.loadHTMLString(html, baseURL: nil)
-        }
-
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [self] in
-                let config = WKPDFConfiguration()
-                webView.createPDF(configuration: config) { result in
-                    switch result {
-                    case .success(let data): self.completion(data)
-                    case .failure: self.completion(nil)
-                    }
-                }
-            }
-        }
-
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            completion(nil)
-        }
+        renderer.start(html: html)
     }
 }
