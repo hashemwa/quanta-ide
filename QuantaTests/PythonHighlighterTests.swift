@@ -3,7 +3,7 @@ import XCTest
 @testable import Quanta
 
 @MainActor
-final class PythonHighlighterTests: XCTestCase {
+final class PythonLexicalContextTests: XCTestCase {
     func kind(_ text: String, _ token: String) -> PythonHighlighter.Kind? {
         let range = (text as NSString).range(of: token)
         return PythonHighlighter.tokens(text).last { NSLocationInRange(range.location, $0.range) }?.kind
