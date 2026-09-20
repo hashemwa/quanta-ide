@@ -16,6 +16,8 @@ final class QuantaTextView: NSTextView {
     var snippetRanges: [NSRange] = []
     private var completionWork: DispatchWorkItem?
     private var completionGeneration = 0
+    private var appliedDiagnostics: [LanguageDiagnostic] = []
+    private var diagnosticSource = ""
     private(set) var lastEditedRange = NSRange(location: 0, length: 0)
 
     override func shouldChangeText(in affectedCharRange: NSRange,
@@ -196,19 +198,29 @@ final class QuantaTextView: NSTextView {
     }
 
     func applyLanguageDiagnostics(_ diagnostics: [LanguageDiagnostic]) {
+        guard diagnostics != appliedDiagnostics || (!diagnostics.isEmpty && diagnosticSource != string) else { return }
         let full = NSRange(location: 0, length: string.utf16.count)
-        layoutManager?.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
-        layoutManager?.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
-        textStorage?.removeAttribute(.toolTip, range: full)
+        if !appliedDiagnostics.isEmpty {
+            layoutManager?.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
+            layoutManager?.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
+        }
+        textStorage?.beginEditing()
+        if !appliedDiagnostics.isEmpty { textStorage?.removeAttribute(.toolTip, range: full) }
+        appliedDiagnostics = diagnostics
+        diagnosticSource = diagnostics.isEmpty ? "" : string
         for diagnostic in diagnostics {
             var range = diagnostic.range
-            guard range.location < full.length else { continue }
+            guard range.location >= 0, range.location < full.length else { continue }
             range.length = min(max(1, range.length), full.length - range.location)
             let color: NSColor = diagnostic.severity == 1 ? .systemRed : .systemOrange
-            layoutManager?.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.single.rawValue,
-                                                   .underlineColor: color], forCharacterRange: range)
+            (string as NSString).enumerateSubstrings(in: range, options: .byLines) { text, lineRange, _, _ in
+                guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                self.layoutManager?.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue,
+                                                           .underlineColor: color], forCharacterRange: lineRange)
+            }
             textStorage?.addAttribute(.toolTip, value: diagnostic.message, range: range)
         }
+        textStorage?.endEditing()
     }
 
     @objc func goToLanguageDefinition(_ sender: Any?) {

@@ -29,17 +29,39 @@ enum PythonHighlighter {
     }
 
     static func highlight(_ storage: NSTextStorage) {
-        storage.beginEditing()
-        defer { storage.endEditing() }
         let full = NSRange(location: 0, length: storage.length)
-        storage.addAttributes([.font: EditorTheme.font, .foregroundColor: EditorTheme.text], range: full)
-        for token in tokens(storage.string) {
-            storage.addAttribute(.foregroundColor, value: color(token.kind), range: token.range)
+        let font = EditorTheme.font
+        var ranges: [NSRange] = []
+        storage.enumerateAttribute(.font, in: full) { value, range, _ in
+            if (value as? NSFont) != font { ranges.append(range) }
         }
+        storage.beginEditing()
+        for range in ranges { storage.addAttribute(.font, value: font, range: range) }
+        applyColors(to: storage)
+        storage.endEditing()
     }
 
     static func highlight(_ storage: NSTextStorage, editedRange: NSRange) {
-        highlight(storage)
+        applyColors(to: storage)
+    }
+
+    private static func applyColors(to storage: NSTextStorage) {
+        let full = NSRange(location: 0, length: storage.length)
+        let desired = NSMutableAttributedString(string: storage.string, attributes: [.foregroundColor: EditorTheme.text])
+        for token in tokens(storage.string) {
+            desired.addAttribute(.foregroundColor, value: color(token.kind), range: token.range)
+        }
+        var changes: [(NSRange, NSColor)] = []
+        desired.enumerateAttribute(.foregroundColor, in: full) { value, range, _ in
+            guard let color = value as? NSColor else { return }
+            storage.enumerateAttribute(.foregroundColor, in: range) { current, subrange, _ in
+                if (current as? NSColor) != color { changes.append((subrange, color)) }
+            }
+        }
+        guard !changes.isEmpty else { return }
+        storage.beginEditing()
+        for (range, color) in changes { storage.addAttribute(.foregroundColor, value: color, range: range) }
+        storage.endEditing()
     }
 
     private static func color(_ kind: Kind) -> NSColor {
