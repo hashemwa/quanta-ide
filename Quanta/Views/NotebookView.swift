@@ -332,6 +332,12 @@ struct CellView: View {
                     .allowsHitTesting(hovering || isSelected)
                     .animation(reduceMotion ? nil : DS.Motion.hover, value: hovering || isSelected)
             }
+            IconMenu("plus", help: "Insert Code or Markdown Above or Below") {
+                CellInsertionActions(cell: cell, notebook: notebook, document: document)
+            }
+            .opacity(hovering || isSelected ? 1 : 0)
+            .allowsHitTesting(hovering || isSelected)
+            .accessibilityHidden(!(hovering || isSelected))
         }
         .frame(width: DS.Layout.cellGutterWidth)
         .padding(.top, DS.Space.m)
@@ -486,15 +492,7 @@ struct CellView: View {
         Button("Paste Cell Below") { app.pasteCell(after: cell, in: notebook, document: document) }
         Button("Duplicate Cell") { app.duplicateCell(cell, in: notebook, document: document) }
         Divider()
-        Button("Insert Code Cell Above") {
-            app.insertCell(type: .code, nextTo: cell, offset: 0, in: notebook, document: document)
-        }
-        Button("Insert Code Cell Below") {
-            app.insertCell(type: .code, nextTo: cell, offset: 1, in: notebook, document: document)
-        }
-        Button("Insert Markdown Cell Below") {
-            app.insertCell(type: .markdown, nextTo: cell, offset: 1, in: notebook, document: document)
-        }
+        CellInsertionActions(cell: cell, notebook: notebook, document: document)
         Divider()
         if cell.cellType == .code {
             Button("Convert to Markdown") { app.convertCell(cell, to: .markdown, in: document) }

@@ -1246,6 +1246,7 @@ final class AppState: ObservableObject {
     }
 
     func appendCell(type: CellType, to notebook: Notebook, in document: Document) {
+        activeDocumentID = document.id
         let cell = NotebookCell(type: type)
         if type == .markdown { cell.isEditingMarkdown = true }
         notebook.cells.append(cell)
@@ -1256,14 +1257,16 @@ final class AppState: ObservableObject {
     }
 
     func insertCell(type: CellType, nextTo cell: NotebookCell, offset: Int,
-                    in notebook: Notebook, document: Document) {
+                    in notebook: Notebook, document: Document, editing: Bool = false) {
         guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        activeDocumentID = document.id
         let newCell = NotebookCell(type: type)
         if type == .markdown { newCell.isEditingMarkdown = true }
         let target = max(0, min(index + offset, notebook.cells.count))
         notebook.cells.insert(newCell, at: target)
         selectedCellID = newCell.id
         scrollRequest = newCell.id
+        if editing { isCommandMode = false }
         if !isCommandMode { focusCellEditor(newCell.id) }
         document.isDirty = true
     }
@@ -1654,9 +1657,9 @@ final class AppState: ObservableObject {
         return (cell, notebook, document)
     }
 
-    func commandInsert(offset: Int) {
+    func commandInsert(offset: Int, type: CellType = .code) {
         guard let ctx = selectionContext else { return }
-        insertCell(type: .code, nextTo: ctx.cell, offset: offset,
+        insertCell(type: type, nextTo: ctx.cell, offset: offset,
                    in: ctx.notebook, document: ctx.document)
     }
 

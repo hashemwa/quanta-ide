@@ -65,15 +65,14 @@ struct NotebookNavigator: View {
                 if stale > 0 { Text("\(stale) stale").foregroundStyle(.orange).help("Cell source changed since its output was produced") }
             }
             Divider().frame(height: DS.Layout.tabDividerHeight)
-            IconMenu("plus", help: "Insert Cell") {
-                Button("Code Below") {
-                    if let cell = selectedCell { app.insertCell(type: .code, nextTo: cell, offset: 1, in: activity.notebook, document: document) }
-                }
-                Button("Markdown Below") {
-                    if let cell = selectedCell { app.insertCell(type: .markdown, nextTo: cell, offset: 1, in: activity.notebook, document: document) }
+            IconMenu("plus", help: "Insert Code or Markdown Above or Below") {
+                if let cell = selectedCell {
+                    CellInsertionActions(cell: cell, notebook: activity.notebook, document: document)
+                } else {
+                    Button("Code Cell") { app.appendCell(type: .code, to: activity.notebook, in: document) }
+                    Button("Markdown Cell") { app.appendCell(type: .markdown, to: activity.notebook, in: document) }
                 }
             }
-            .disabled(selectedCell == nil)
             IconButton("chevron.up", help: "Move Selected Cell Up") {
                 if let cell = selectedCell { app.moveCell(cell, direction: -1, in: activity.notebook, document: document) }
             }
@@ -82,7 +81,13 @@ struct NotebookNavigator: View {
                 if let cell = selectedCell { app.moveCell(cell, direction: 1, in: activity.notebook, document: document) }
             }
             .disabled(selectedCell == nil || selectedCell?.id == cells.last?.id)
-            IconMenu("ellipsis", help: "Selected Cell Actions") {
+            IconMenu("ellipsis", help: "Notebook and Cell Actions") {
+                Menu("Export Notebook") {
+                    Button("As PDF…") { app.activeDocumentID = document.id; app.exportActiveNotebookAsPDF() }
+                    Button("As HTML…") { app.activeDocumentID = document.id; app.exportActiveNotebookAsHTML() }
+                    Button("As Python Script…") { app.activeDocumentID = document.id; app.exportActiveNotebookAsPython() }
+                }
+                Divider()
                 if let cell = selectedCell {
                     Button("Run Cell") { app.runCell(cell, in: document, advance: false) }
                     Button(cell.isSourceCollapsed ? "Expand Source" : "Collapse Source") {
@@ -93,7 +98,6 @@ struct NotebookNavigator: View {
                     Button("Delete Cell", role: .destructive) { app.deleteCell(cell, in: activity.notebook, document: document) }
                 }
             }
-            .disabled(selectedCell == nil)
         }
         .font(.caption)
     }
@@ -136,5 +140,27 @@ extension EnvironmentValues {
     var outputCellID: UUID? {
         get { self[OutputCellKey.self] }
         set { self[OutputCellKey.self] = newValue }
+    }
+}
+
+struct CellInsertionActions: View {
+    let cell: NotebookCell
+    let notebook: Notebook
+    let document: Document
+
+    var body: some View {
+        Section("Above This Cell") {
+            Button("Code Cell Above") { insert(.code, offset: 0) }
+            Button("Markdown Cell Above") { insert(.markdown, offset: 0) }
+        }
+        Section("Below This Cell") {
+            Button("Code Cell Below") { insert(.code, offset: 1) }
+            Button("Markdown Cell Below") { insert(.markdown, offset: 1) }
+        }
+    }
+
+    private func insert(_ type: CellType, offset: Int) {
+        AppState.shared.insertCell(type: type, nextTo: cell, offset: offset,
+                                   in: notebook, document: document, editing: true)
     }
 }

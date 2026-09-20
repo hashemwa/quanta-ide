@@ -209,9 +209,13 @@ struct QuantaCommands: Commands {
                 .disabled(app.workspace == nil)
         }
         CommandMenu("Cell") {
-            Button("Insert Cell Above") { app.commandInsert(offset: 0) }
+            Button("Insert Code Cell Above") { app.commandInsert(offset: 0) }
                 .disabled(!app.hasSelectedCell)
-            Button("Insert Cell Below") { app.commandInsert(offset: 1) }
+            Button("Insert Code Cell Below") { app.commandInsert(offset: 1) }
+                .disabled(!app.hasSelectedCell)
+            Button("Insert Markdown Cell Above") { app.commandInsert(offset: 0, type: .markdown) }
+                .disabled(!app.hasSelectedCell)
+            Button("Insert Markdown Cell Below") { app.commandInsert(offset: 1, type: .markdown) }
                 .disabled(!app.hasSelectedCell)
             Divider()
             Button("Copy Cell") { app.commandCopy() }
