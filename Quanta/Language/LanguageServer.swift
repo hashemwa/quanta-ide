@@ -58,12 +58,12 @@ final class LanguageServer {
     private var generation = 0
     private let writeQueue = DispatchQueue(label: "quanta.language.write")
 
-    func start(executable: URL, root: URL, environment: [String: String]) throws {
+    func start(executable: URL, root: URL, environment: [String: String], arguments: [String] = ["server"]) throws {
         stop()
         let generation = self.generation
         let process = Process()
         process.executableURL = executable
-        process.arguments = ["--stdio"]
+        process.arguments = arguments
         process.currentDirectoryURL = root
         process.environment = environment
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()

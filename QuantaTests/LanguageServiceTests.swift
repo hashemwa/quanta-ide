@@ -47,16 +47,16 @@ final class LanguageServiceTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let executable = root.appendingPathComponent("pyright-langserver")
+        let executable = root.appendingPathComponent("ty")
         let marker = root.appendingPathComponent("executed")
         try "#!/bin/sh\n/usr/bin/touch '\(marker.path)'\n".write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
         let defaults = QuantaDefaults.store
-        let oldPath = defaults.object(forKey: "QuantaLanguageServer")
-        defaults.set(executable.path, forKey: "QuantaLanguageServer")
+        let oldPath = defaults.object(forKey: "QuantaNativeLanguageServer")
+        defaults.set(executable.path, forKey: "QuantaNativeLanguageServer")
         defer {
-            if let oldPath { defaults.set(oldPath, forKey: "QuantaLanguageServer") }
-            else { defaults.removeObject(forKey: "QuantaLanguageServer") }
+            if let oldPath { defaults.set(oldPath, forKey: "QuantaNativeLanguageServer") }
+            else { defaults.removeObject(forKey: "QuantaNativeLanguageServer") }
         }
         let app = AppState()
         app.workspace = Workspace(rootURL: root, root: FileNode(url: root, name: "Restricted", isDirectory: true, children: []))
@@ -123,11 +123,12 @@ final class LanguageServiceTests: XCTestCase {
         withExtendedLifetime(watcher) {}
     }
 
-    func testRealPyrightUnexecutedNotebookCompletionDefinitionsDiagnosticsAndChanges() async throws {
-        let configured = ProcessInfo.processInfo.environment["QUANTA_TEST_PYRIGHT"]
-            ?? ProcessInfo.processInfo.environment["TEST_RUNNER_QUANTA_TEST_PYRIGHT"] ?? ""
+    func testRealTyUnexecutedNotebookCompletionDefinitionsDiagnosticsAndChanges() async throws {
+        let configured = ProcessInfo.processInfo.environment["QUANTA_TEST_TY"]
+            ?? ProcessInfo.processInfo.environment["TEST_RUNNER_QUANTA_TEST_TY"] ?? ""
         guard let executable = PythonLanguageService.findServer(configured: configured) else {
-            throw XCTSkip("Install Pyright or set QUANTA_TEST_PYRIGHT to run the live language-server test")
+            XCTFail("The app must bundle ty; run scripts/native-tools prepare and build with the shared Quanta scheme")
+            throw QuantaError("Bundled analyzer missing")
         }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -157,7 +158,9 @@ final class LanguageServiceTests: XCTestCase {
             let range = (value?["range"] ?? value?["targetSelectionRange"]) as? [String: Any]
             let position = LanguagePosition(range?["start"])
             XCTAssertNotNil(position)
-            if let position { XCTAssertEqual(snapshot?.location(position)?.editorID, first.id) }
+            if let position { let uri = value?["uri"] as? String ?? value?["targetUri"] as? String
+                let target = LanguageDocument.documents(document, root: root).first { $0.uri == uri }
+                XCTAssertEqual(target?.location(position)?.editorID, first.id) }
             definition.fulfill()
         }
         await fulfillment(of: [definition], timeout: 20)
@@ -176,7 +179,7 @@ final class LanguageServiceTests: XCTestCase {
         service.update([document], root: root)
         try await Task.sleep(for: .milliseconds(700))
         XCTAssertTrue(service.diagnostics[document.id, default: []].isEmpty)
-        let mapping = try XCTUnwrap(LanguageDocument(document: document, root: root))
+        let mapping = try XCTUnwrap(LanguageDocument.documents(document, root: root).last)
         service.receiveDiagnostics(["uri": mapping.uri, "version": 1, "diagnostics": [[
             "range": ["start": ["line": 0, "character": 0], "end": ["line": 0, "character": 1]], "message": "stale",
         ]]])
@@ -204,6 +207,67 @@ final class LanguageServiceTests: XCTestCase {
             external.fulfill()
         }
         await fulfillment(of: [external], timeout: 20)
+    }
+
+    func testScientificEnvironmentAutoImportsReferencesAndRename() async throws {
+        let python = ProcessInfo.processInfo.environment["QUANTA_TEST_PYTHON"]
+            ?? ProcessInfo.processInfo.environment["TEST_RUNNER_QUANTA_TEST_PYTHON"]
+        guard let python else { throw XCTSkip("Set TEST_RUNNER_QUANTA_TEST_PYTHON to an interpreter with NumPy and pandas") }
+        let executable = try XCTUnwrap(PythonLanguageService.findServer(configured: ""))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = PythonLanguageService()
+        defer { service.stop() }
+        service.start(executable: executable, root: root, python: python)
+        try await waitUntil { service.ready }
+        let document = Document(script: root.appendingPathComponent("science.py"), text: "import numpy as np\nimport pandas as pd\nframe = pd.DataFrame({'x': [1, 2]})\nframe.hea")
+        service.update([document], root: root)
+        let pandas = expectation(description: "pandas methods before execution")
+        service.suggestions(editorID: document.id, code: document.text, offset: document.text.utf16.count) { items in
+            XCTAssertTrue(items.contains { $0.label == "head" }, "Received \(items.map(\.label))")
+            if let head = items.first(where: { $0.label == "head" }) {
+                XCTAssertTrue(head.edit.text.contains("("), "Function completion should include parentheses: \(head.edit.text)")
+                XCTAssertFalse(head.placeholders.isEmpty)
+            }
+            pandas.fulfill()
+        }
+        await fulfillment(of: [pandas], timeout: 20)
+        document.text = "import numpy as np\narray = np.array([1, 2])\narray.mea"
+        service.update([document], root: root)
+        let numpy = expectation(description: "NumPy methods before execution")
+        service.suggestions(editorID: document.id, code: document.text, offset: document.text.utf16.count) { items in
+            XCTAssertTrue(items.contains { $0.label == "mean" }, "Received \(items.map(\.label))")
+            numpy.fulfill()
+        }
+        await fulfillment(of: [numpy], timeout: 20)
+        document.text = "Path"
+        service.update([document], root: root)
+        let imports = expectation(description: "Automatic imports are retained as structured edits")
+        service.suggestions(editorID: document.id, code: document.text, offset: 4) { items in
+            XCTAssertTrue(items.contains { $0.label.hasPrefix("Path") && $0.additionalEdits.contains { $0.text.contains("from pathlib import Path") } }, "Received \(items.map(\.label))")
+            imports.fulfill()
+        }
+        await fulfillment(of: [imports], timeout: 20)
+        document.text = "value = 1\nprint(value)"
+        service.update([document], root: root)
+        let references = expectation(description: "References include the declaration and use")
+        service.request("textDocument/references", editorID: document.id, code: document.text, offset: 2, parameters: ["context": ["includeDeclaration": true]]) { result, _ in
+            XCTAssertEqual((result as? [[String: Any]])?.count, 2)
+            references.fulfill()
+        }
+        await fulfillment(of: [references], timeout: 20)
+        let rename = expectation(description: "Server produces a rename edit")
+        service.request("textDocument/rename", editorID: document.id, code: document.text, offset: 2, parameters: ["newName": "total"]) { result, snapshot in
+            do {
+                let snapshot = try XCTUnwrap(snapshot)
+                let edit = try XCTUnwrap(result as? [String: Any])
+                let changes = try LanguageRename.prepare(edit, documents: [document], root: root, snapshots: [snapshot.uri: snapshot], versions: [:], oldName: "value")
+                XCTAssertEqual(changes.first?.after, "total = 1\nprint(total)")
+            } catch { XCTFail(error.localizedDescription) }
+            rename.fulfill()
+        }
+        await fulfillment(of: [rename], timeout: 20)
     }
 
     private func waitUntil(message: () -> String = { "Timed out waiting for language-server state" }, _ condition: () -> Bool) async throws {

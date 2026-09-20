@@ -11,14 +11,22 @@ final class QuantaTextView: NSTextView {
     var onLayoutChange: (() -> Void)?
     var onEscape: (() -> Void)?
     var languageEditorID: UUID?
-    var completionProvider: ((String, Int, @escaping ([String], Int, Int) -> Void) -> Void)?
+    var completionProvider: ((String, Int, @escaping ([CodeCompletion]) -> Void) -> Void)?
     var inspectionProvider: ((String, Int, @escaping (InspectionInfo?) -> Void) -> Void)?
+    var snippetRanges: [NSRange] = []
+    private var completionWork: DispatchWorkItem?
+    private var completionGeneration = 0
     private(set) var lastEditedRange = NSRange(location: 0, length: 0)
 
     override func shouldChangeText(in affectedCharRange: NSRange,
                                    replacementString: String?) -> Bool {
         let ok = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
         if ok {
+            let delta = (replacementString?.utf16.count ?? 0) - affectedCharRange.length
+            snippetRanges = snippetRanges.compactMap { range in
+                if range.location >= NSMaxRange(affectedCharRange) { return NSRange(location: range.location + delta, length: range.length) }
+                return nil
+            }
             lastEditedRange = NSRange(location: affectedCharRange.location,
                                       length: (replacementString as NSString?)?.length ?? 0)
         }
@@ -46,7 +54,12 @@ final class QuantaTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { completionWork?.cancel(); completionGeneration += 1; snippetRanges = [] }
         if CompletionPanel.shared.handle(event, for: self) { return }
+        if event.keyCode == 48, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty, !snippetRanges.isEmpty {
+            let range = snippetRanges.removeFirst()
+            if NSMaxRange(range) <= string.utf16.count { setSelectedRange(range); return }
+        }
         let chord = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if event.keyCode == 53, chord.isEmpty, !hasMarkedText(), let onEscape {
             onEscape()
@@ -76,6 +89,8 @@ final class QuantaTextView: NSTextView {
     }
 
     override func didChangeText() {
+        completionWork?.cancel()
+        completionGeneration += 1
         applyLanguageDiagnostics([])
         super.didChangeText()
         if CompletionPanel.shared.isShowing(for: self) {
@@ -83,14 +98,22 @@ final class QuantaTextView: NSTextView {
         }
     }
 
-    override func insertText(_ string: Any, replacementRange: NSRange) {
-        super.insertText(string, replacementRange: replacementRange)
-        if let text = string as? String, text == ".", dotIsAttributeAccess() {
-            requestCompletions()
-        }
+    override func insertText(_ value: Any, replacementRange: NSRange) {
+        super.insertText(value, replacementRange: replacementRange)
+        completionWork?.cancel()
+        guard let text = value as? String, text.count == 1, !hasMarkedText(),
+              PythonHighlighter.allowsCompletion(in: string, at: selectedRange().location) else { return }
+        if text == "(" || text == "," { requestDocumentation(); return }
+        guard let last = text.last, last.isLetter || last.isNumber || last == "_" || (last == "." && dotIsAttributeAccess()) else { return }
+        let work = DispatchWorkItem { [weak self] in self?.requestCompletions() }
+        completionWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 
     override func mouseDown(with event: NSEvent) {
+        completionWork?.cancel()
+        completionGeneration += 1
+        snippetRanges = []
         CompletionPanel.shared.hide()
         super.mouseDown(with: event)
     }
@@ -146,15 +169,16 @@ final class QuantaTextView: NSTextView {
     }
 
     func requestCompletions() {
-        guard let completionProvider else { return }
+        guard let completionProvider, !hasMarkedText() else { return }
         let caret = selectedRange().location
         let source = string
-        completionProvider(source, caret) { [weak self] matches, start, end in
-            guard let self, self.window != nil,
+        completionGeneration += 1
+        let generation = completionGeneration
+        completionProvider(source, caret) { [weak self] matches in
+            guard let self, self.completionGeneration == generation, self.window != nil,
                   self.window?.firstResponder === self,
-                  self.string == source, self.selectedRange().location == caret,
-                  start >= 0, start <= caret, end >= caret, end <= source.utf16.count else { return }
-            CompletionPanel.shared.show(matches: matches, start: start, end: end, for: self)
+                  self.string == source, self.selectedRange().location == caret else { return }
+            CompletionPanel.shared.show(matches: matches, for: self)
         }
     }
 
@@ -192,6 +216,9 @@ final class QuantaTextView: NSTextView {
         AppState.shared.language.definition(editorID: id, code: string, offset: selectedRange().location)
     }
 
+    @objc func findLanguageReferences(_ sender: Any?) { AppState.shared.findReferences() }
+    @objc func renameLanguageSymbol(_ sender: Any?) { AppState.shared.renameSymbol() }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event) ?? NSMenu()
         if languageEditorID != nil {
@@ -199,6 +226,11 @@ final class QuantaTextView: NSTextView {
             let item = NSMenuItem(title: "Go to Definition", action: #selector(goToLanguageDefinition), keyEquivalent: "")
             item.target = self
             menu.addItem(item)
+            for (title, action) in [("Find References", #selector(findLanguageReferences)), ("Rename Symbol…", #selector(renameLanguageSymbol))] {
+                let command = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                command.target = self
+                menu.addItem(command)
+            }
         }
         return menu
     }

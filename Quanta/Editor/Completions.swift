@@ -33,11 +33,10 @@ final class CompletionPanel {
     private var panel: NSPanel?
     private var tableView: NSTableView?
     private weak var host: QuantaTextView?
-    private var allMatches: [String] = []
-    private var filtered: [String] = []
+    private var allMatches: [CodeCompletion] = []
+    private var source = ""
+    private var filtered: [CodeCompletion] = []
     private var replaceStart = 0
-    private var replaceEnd = 0
-    private var sourceLength = 0
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
@@ -47,16 +46,12 @@ final class CompletionPanel {
 
     private var scrollObserver: NSObjectProtocol?
 
-    func show(matches: [String], start: Int, end: Int? = nil, for textView: QuantaTextView) {
-        guard !matches.isEmpty, textView.window != nil else {
-            hide()
-            return
-        }
+    func show(matches: [CodeCompletion], for textView: QuantaTextView) {
+        guard let first = matches.first, textView.window != nil else { hide(); return }
         host = textView
         allMatches = matches
-        replaceStart = start
-        replaceEnd = end ?? textView.selectedRange().location
-        sourceLength = textView.string.utf16.count
+        source = textView.string
+        replaceStart = first.edit.range.location
         refilter()
         guard !filtered.isEmpty else {
             hide()
@@ -105,43 +100,18 @@ final class CompletionPanel {
     }
 
     func refresh(from textView: QuantaTextView) {
-        guard isShowing(for: textView) else { return }
-        replaceEnd += textView.string.utf16.count - sourceLength
-        sourceLength = textView.string.utf16.count
-        let caret = textView.selectedRange().location
-        guard caret >= replaceStart else {
-            hide()
-            return
-        }
-        refilter()
-        guard !filtered.isEmpty else {
-            hide()
-            return
-        }
-        reload()
-        position(near: textView)
-    }
-
-    private func currentSegment() -> String {
-        guard let host else { return "" }
-        let ns = host.string as NSString
-        let caret = host.selectedRange().location
-        guard caret >= replaceStart, replaceStart <= ns.length,
-              caret <= ns.length else { return "" }
-        return ns.substring(with: NSRange(location: replaceStart, length: caret - replaceStart))
+        if isShowing(for: textView), textView.string != source { hide() }
     }
 
     private func refilter() {
-        let segment = currentSegment()
-        if segment.isEmpty {
-            filtered = allMatches
-        } else {
-            guard segment.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else {
-                filtered = []
-                return
-            }
-            filtered = allMatches.filter { $0.hasPrefix(segment) }
-        }
+        guard let host else { filtered = []; return }
+        let ns = source as NSString
+        let caret = host.selectedRange().location
+        filtered = allMatches.compactMap { item -> (CodeCompletion, Int)? in
+            guard item.edit.range.location <= caret, caret <= ns.length else { return nil }
+            let query = ns.substring(with: NSRange(location: item.edit.range.location, length: caret - item.edit.range.location))
+            return CodeCompletion.rank(item.filterText, query: query).map { (item, $0) }
+        }.sorted { ($0.1, $0.0.sortText, $0.0.label) < ($1.1, $1.0.sortText, $1.0.label) }.map(\.0)
     }
 
     func handle(_ event: NSEvent, for textView: QuantaTextView) -> Bool {
@@ -174,15 +144,19 @@ final class CompletionPanel {
             return
         }
         let completion = filtered[row]
-        let caret = host.selectedRange().location
-        let range = NSRange(location: replaceStart, length: max(0, max(caret, replaceEnd) - replaceStart))
-        guard NSMaxRange(range) <= host.string.utf16.count else { hide(); return }
+        guard host.string == source, let transaction = CompletionTransaction(source: source, completion: completion) else { hide(); return }
         hide()
-        if host.shouldChangeText(in: range, replacementString: completion) {
-            host.textStorage?.replaceCharacters(in: range, with: completion)
-            host.didChangeText()
-            host.setSelectedRange(NSRange(location: range.location + completion.utf16.count, length: 0))
-        }
+        let ranges = transaction.edits.map { NSValue(range: $0.range) }
+        guard host.shouldChangeText(inRanges: ranges, replacementStrings: transaction.edits.map(\.text)) else { return }
+        host.undoManager?.beginUndoGrouping()
+        host.textStorage?.beginEditing()
+        for edit in transaction.edits.reversed() { host.textStorage?.replaceCharacters(in: edit.range, with: edit.text) }
+        host.textStorage?.endEditing()
+        host.didChangeText()
+        host.setSelectedRange(transaction.selection)
+        host.snippetRanges = Array(transaction.placeholders.dropFirst())
+        host.undoManager?.endUndoGrouping()
+        host.undoManager?.setActionName("Complete Code")
     }
 
     private func buildPanelIfNeeded() {
@@ -240,7 +214,7 @@ final class CompletionPanel {
 
     private lazy var dataSource = CompletionDataSource(owner: self)
 
-    fileprivate var rows: [String] { filtered }
+    fileprivate var rows: [CodeCompletion] { filtered }
 
     private func reload() {
         let rowFont = NSFont.monospacedSystemFont(ofSize: EditorTheme.fontSize - 1, weight: .regular)
@@ -252,7 +226,7 @@ final class CompletionPanel {
             tableView?.scrollRowToVisible(0)
         }
         let height = min(CGFloat(filtered.count) * (rowHeight + 2) + 8, 8 * (rowHeight + 2) + 8)
-        let width = max(220, min(420, 24 + 8 * CGFloat(filtered.map(\.count).max() ?? 20)))
+        let width = max(220, min(420, 24 + 8 * CGFloat(filtered.map { $0.label.count + min(35, $0.detail.count) }.max() ?? 20)))
         panel?.setContentSize(NSSize(width: width, height: height))
     }
 
@@ -290,7 +264,9 @@ private final class CompletionDataSource: NSObject, NSTableViewDataSource, NSTab
             field.lineBreakMode = .byTruncatingTail
         }
         field.font = NSFont.monospacedSystemFont(ofSize: EditorTheme.fontSize - 1, weight: .regular)
-        field.stringValue = owner.rows[row]
+        let item = owner.rows[row]
+        field.stringValue = item.label + (item.detail.isEmpty ? (item.kindLabel.isEmpty ? "" : "  · " + item.kindLabel) : "  · " + item.detail.replacingOccurrences(of: "\n", with: " "))
+        field.toolTip = [item.detail, item.documentation].filter { !$0.isEmpty }.joined(separator: "\n\n")
         return field
     }
 }

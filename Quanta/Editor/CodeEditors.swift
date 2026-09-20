@@ -28,14 +28,17 @@ enum CodeEditorFactory {
         tv.isAutomaticTextCompletionEnabled = false
         tv.typingAttributes = [.font: EditorTheme.font, .foregroundColor: EditorTheme.text]
         tv.textContainerInset = NSSize(width: DS.Space.xs, height: DS.Space.s)
+        tv.inlinePredictionType = .no
         tv.completionProvider = { [weak tv] code, cursor, reply in
             let app = AppState.shared
-            guard let id = tv?.languageEditorID else {
-                app.requestCompletions(code: code, cursor: cursor, reply: reply); return
+            let runtime = {
+                app.requestCompletions(code: code, cursor: cursor) { matches, start, end in
+                    reply(matches.map { CodeCompletion(label: $0, range: NSRange(location: start, length: max(0, end - start))) })
+                }
             }
-            app.language.completions(editorID: id, code: code, offset: cursor) { matches, start, end in
-                if matches.isEmpty { app.requestCompletions(code: code, cursor: cursor, reply: reply) }
-                else { reply(matches, start, end) }
+            guard let id = tv?.languageEditorID else { runtime(); return }
+            app.language.suggestions(editorID: id, code: code, offset: cursor) { items in
+                if items.isEmpty { runtime() } else { reply(items) }
             }
         }
         tv.inspectionProvider = { [weak tv] code, cursor, reply in

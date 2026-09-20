@@ -28,6 +28,7 @@ struct MainWindowView: View {
                                       ideal: DS.Layout.inspectorIdeal,
                                       max: DS.Layout.inspectorMax)
         }
+        .modifier(LanguageNavigationPresentation(service: app.language))
         .navigationTitle(windowTitle)
         .navigationSubtitle(windowSubtitle)
         .sheet(item: $app.paletteMode) { mode in

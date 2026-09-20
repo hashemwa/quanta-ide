@@ -28,6 +28,8 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
+"$(cd "$(dirname "$0")/.." && pwd)/scripts/native-tools" verify "$APP"
+
 VERSION="${2:-$(defaults read "$APP/Contents/Info" CFBundleShortVersionString)}"
 OUT="$HOME/Desktop/Quanta-${VERSION}.dmg"
 STAGE="$(mktemp -d)/dmg"

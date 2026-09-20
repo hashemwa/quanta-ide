@@ -32,6 +32,7 @@ app_path() { printf '%s/%s.app' "$(products_dir "$1")" "$APP_NAME"; }
 
 build() {
   local config="$1"
+  "$PROJECT_DIR/scripts/native-tools" prepare
   printf '%s▸ building %s%s\n' "$bold" "$config" "$off"
   local log="$CACHE_DIR/last-build.log"
   mkdir -p "$CACHE_DIR"
@@ -41,6 +42,7 @@ build() {
   local rc=${PIPESTATUS[0]}
   set -e
   if (( rc == 0 )); then
+    "$PROJECT_DIR/scripts/native-tools" verify "$(app_path "$config")"
     printf '%s✓ %s build ok%s\n' "$green" "$config" "$off"
   elif grep -q "database is locked" "$log"; then
     printf '%s✗ another build is already running%s (Xcode, or an agent) — retry when it finishes\n' \
@@ -108,6 +110,7 @@ case "$cmd" in
   run)               build "$config"; relaunch "$config" ;;
   release)           config="Release"; build "$config"; relaunch "$config" ;;
   test)
+    "$PROJECT_DIR/scripts/native-tools" prepare
     printf '%s▸ testing (%s)%s\n' "$bold" "$config" "$off"
     log="$CACHE_DIR/last-test.log"
     mkdir -p "$CACHE_DIR"

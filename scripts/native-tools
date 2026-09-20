@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CACHE="$ROOT/.build/native-tools"
+mkdir -p "$CACHE"
+fetch() {
+  local name="$1" url="$2" checksum="$3"
+  if [[ ! -f "$CACHE/$name" ]] || [[ "$(shasum -a 256 "$CACHE/$name" | awk '{print $1}')" != "$checksum" ]]; then
+    curl --fail --location --retry 2 --silent --show-error "$url" -o "$CACHE/$name.download"
+    [[ "$(shasum -a 256 "$CACHE/$name.download" | awk '{print $1}')" == "$checksum" ]] || { echo "Checksum failed: $name" >&2; exit 1; }
+    mv "$CACHE/$name.download" "$CACHE/$name"
+  fi
+}
+prepare() {
+  fetch ty-arm-0.0.82.tar.gz https://github.com/astral-sh/ty/releases/download/0.0.82/ty-aarch64-apple-darwin.tar.gz 7777fd0e16196cbfe19166888c963aa05bcd319137b40b7d90fc505a253b673e
+  fetch ty-intel-0.0.82.tar.gz https://github.com/astral-sh/ty/releases/download/0.0.82/ty-x86_64-apple-darwin.tar.gz e4d3ea9c822a01ef8b621db384aa724b46e94641c03d5f54e6ec0e5cd18a468e
+  fetch duckdb-1.5.5.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/libduckdb-osx-universal.zip 7b5b8915cc382d0708636fe6385c0cdad5a61c9ff8ba2638b3e2141640783155
+  if [[ ! -f "$CACHE/prepared-0.0.82-1.5.5" ]]; then
+    tar -xzf "$CACHE/ty-arm-0.0.82.tar.gz" -C "$CACHE"
+    tar -xzf "$CACHE/ty-intel-0.0.82.tar.gz" -C "$CACHE"
+    lipo -create "$CACHE/ty-aarch64-apple-darwin/ty" "$CACHE/ty-x86_64-apple-darwin/ty" -output "$CACHE/ty"
+    unzip -qo "$CACHE/duckdb-1.5.5.zip" -d "$CACHE/duckdb"
+    touch "$CACHE/prepared-0.0.82-1.5.5"
+  fi
+}
+case "${1:-prepare}" in
+  prepare) prepare ;;
+  embed)
+    prepare
+    APP="${2:?App bundle path required}"
+    [[ -d "$APP/Contents/MacOS" ]] || exit 1
+    mkdir -p "$APP/Contents/Frameworks"
+    cp "$CACHE/ty" "$APP/Contents/MacOS/ty"
+    cp "$CACHE/duckdb/libduckdb.dylib" "$APP/Contents/Frameworks/libduckdb.dylib"
+    chmod +x "$APP/Contents/MacOS/ty"
+    SIGN="${EXPANDED_CODE_SIGN_IDENTITY:--}"
+    [[ -n "$SIGN" ]] || SIGN=-
+    codesign --force --sign "$SIGN" "$APP/Contents/MacOS/ty" "$APP/Contents/Frameworks/libduckdb.dylib"
+    codesign --force --sign "$SIGN" --preserve-metadata=identifier,entitlements,flags "$APP"
+    ;;
+  verify)
+    APP="${2:?App bundle path required}"
+    [[ "$("$APP/Contents/MacOS/ty" --version | awk '{print $1 " " $2}')" == "ty 0.0.82" ]] || { echo "Bundled analyzer missing or incorrect" >&2; exit 1; }
+    [[ -f "$APP/Contents/Frameworks/libduckdb.dylib" ]] || { echo "Bundled DuckDB missing" >&2; exit 1; }
+    codesign --verify --deep --strict "$APP"
+    ;;
+  *) exit 2 ;;
+esac

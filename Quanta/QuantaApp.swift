@@ -117,6 +117,8 @@ struct QuantaCommands: Commands {
                 .keyboardShortcut("p", modifiers: [.command, .shift])
             Button("Go to Definition") { app.goToDefinition() }
                 .keyboardShortcut("j", modifiers: [.command, .control])
+            Button("Find References") { app.findReferences() }
+            Button("Rename Symbol…") { app.renameSymbol() }
             Button("Show Documentation") { app.showEditorDocumentation() }
             Button("Show Completions") { app.showEditorCompletions() }
             Button("Next Issue") { app.nextLanguageIssue() }

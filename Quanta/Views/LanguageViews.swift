@@ -19,7 +19,7 @@ struct LanguageSettingsView: View {
         } header: {
             Text("Python Analysis")
         } footer: {
-            Text("Install Node.js and Pyright (npm install -g pyright), then restart analysis. Quanta checks standard Homebrew and ~/.local/bin locations. Analysis requires a trusted workspace and interpreter; it does not run notebook cells.")
+            Text("Quanta includes the native ty analyzer; no Node.js or additional installation is required. Choose an executable only to override the bundled version. Analysis requires a trusted workspace and interpreter; it does not run notebook cells.")
                 .textSelection(.enabled)
         }
     }
@@ -60,5 +60,26 @@ struct LanguageIssuesView: View {
         let cell = document.notebook?.cells.firstIndex { $0.id == issue.editorID }
         let location = cell.map { "Cell \($0 + 1), line \(issue.line)" } ?? "Line \(issue.line)"
         return "\(location): \(issue.message)"
+    }
+}
+
+struct LanguageNavigationPresentation: ViewModifier {
+    @ObservedObject var service: PythonLanguageService
+    func body(content: Content) -> some View {
+        content.sheet(isPresented: $service.showingReferences) {
+            VStack(alignment: .leading, spacing: DS.Space.bar) {
+                Text("References").font(.headline)
+                if service.references.isEmpty {
+                    Text("No references found.").foregroundStyle(.secondary)
+                } else {
+                    List(service.references) { reference in
+                        Button(reference.label) { service.reveal(reference) }.buttonStyle(.plain)
+                    }
+                }
+                HStack { Spacer(); Button("Done") { service.showingReferences = false }.keyboardShortcut(.cancelAction) }
+            }
+            .padding(DS.Space.bar)
+            .frame(width: 520, height: 360)
+        }
     }
 }

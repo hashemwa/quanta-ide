@@ -35,12 +35,14 @@ struct LanguageDocument: Equatable {
         let source: String
     }
 
+    let notebookURI: String?
     let documentID: UUID
     let uri: String
     let text: String
     let segments: [Segment]
 
     init?(document: Document, root: URL) {
+        notebookURI = nil
         documentID = document.id
         if document.kind == .script, document.url == nil || ["py", "pyi"].contains(document.url?.pathExtension.lowercased() ?? "") {
             uri = (document.url ?? root.appendingPathComponent(".quanta-\(document.id).py")).absoluteString
@@ -59,6 +61,27 @@ struct LanguageDocument: Equatable {
             text = source
             segments = parts
         } else { return nil }
+    }
+
+    private init(documentID: UUID, notebookURI: String, uri: String, cell: NotebookCell) {
+        self.documentID = documentID
+        self.notebookURI = notebookURI
+        self.uri = uri
+        text = cell.source
+        segments = [Segment(editorID: cell.id, range: NSRange(location: 0, length: cell.source.utf16.count), source: cell.source)]
+    }
+
+    static func documents(_ document: Document, root: URL) -> [LanguageDocument] {
+        guard let notebook = document.notebook else {
+            return LanguageDocument(document: document, root: root).map { [$0] } ?? []
+        }
+        let url = document.url ?? root.appendingPathComponent(".quanta-\(document.id).ipynb")
+        return notebook.cells.filter { $0.cellType == .code }.map { cell in
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+            components.scheme = "vscode-notebook-cell"
+            components.fragment = cell.id.uuidString
+            return LanguageDocument(documentID: document.id, notebookURI: url.absoluteString, uri: components.string!, cell: cell)
+        }
     }
 
     func position(editorID: UUID, offset: Int) -> LanguagePosition? {
