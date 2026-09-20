@@ -32,28 +32,23 @@ struct LanguageIssuesView: View {
     private var issues: [LanguageDiagnostic] { service.diagnostics[document.id, default: []] }
 
     var body: some View {
-        if !issues.isEmpty {
-            HStack(spacing: DS.Space.s) {
-                Menu {
-                    ForEach(issues) { issue in
-                        Button(label(issue)) {
-                            AppState.shared.revealLanguageLocation(documentID: document.id, editorID: issue.editorID, offset: issue.range.location)
-                        }
+        Menu {
+            if issues.isEmpty {
+                Text("No issues in this document")
+            } else {
+                ForEach(issues) { issue in
+                    Button(label(issue)) {
+                        AppState.shared.revealLanguageLocation(documentID: document.id, editorID: issue.editorID, offset: issue.range.location)
                     }
-                } label: {
-                    Label("\(issues.count) \(issues.count == 1 ? "Issue" : "Issues")", systemImage: "exclamationmark.triangle")
                 }
-                .fixedSize()
-                .help("Show Python Analysis Issues")
-                Text("Python analysis").foregroundStyle(.secondary)
-                Spacer(minLength: 0)
             }
-            .font(.caption)
-            .controlSize(.small)
-            .padding(.horizontal, DS.Space.bar)
-            .frame(height: DS.Bar.secondary)
             Divider()
+            Text(service.status)
+        } label: {
+            Label("\(issues.count) Python \(issues.count == 1 ? "Issue" : "Issues")",
+                  systemImage: issues.isEmpty ? "checkmark.circle" : "exclamationmark.triangle")
         }
+        .help(issues.isEmpty ? "Python Analysis — No Issues" : "Show \(issues.count) Python Analysis \(issues.count == 1 ? "Issue" : "Issues")")
     }
 
     private func label(_ issue: LanguageDiagnostic) -> String {

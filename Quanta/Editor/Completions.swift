@@ -27,6 +27,7 @@ struct InspectionInfo {
     let doc: String
 }
 
+@MainActor
 final class CompletionPanel {
     static let shared = CompletionPanel()
 
@@ -67,7 +68,7 @@ final class CompletionPanel {
         if scrollObserver == nil {
             scrollObserver = NotificationCenter.default.addObserver(
                 forName: NSScrollView.willStartLiveScrollNotification, object: nil,
-                queue: .main) { [weak self] _ in self?.hide() }
+                queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.hide() } }
         }
     }
 
@@ -170,14 +171,7 @@ final class CompletionPanel {
         panel.isOpaque = false
         panel.hasShadow = true
 
-        let effect = NSVisualEffectView()
-        effect.material = .menu
-        effect.state = .active
-        effect.wantsLayer = true
-        effect.layer?.cornerRadius = DS.Radius.panel
-        effect.layer?.masksToBounds = true
-        effect.layer?.borderWidth = 0.5
-        effect.layer?.borderColor = NSColor.separatorColor.cgColor
+        let content = NSView()
 
         let table = NSTableView()
         table.headerView = nil
@@ -199,15 +193,15 @@ final class CompletionPanel {
         scroll.drawsBackground = false
         scroll.autohidesScrollers = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        effect.addSubview(scroll)
+        content.addSubview(scroll)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: effect.topAnchor, constant: 4),
-            scroll.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -4),
-            scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 4),
-            scroll.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -4),
+            scroll.topAnchor.constraint(equalTo: content.topAnchor, constant: 4),
+            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -4),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 4),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -4),
         ])
 
-        panel.contentView = effect
+        panel.contentView = FloatingPanelSurface.make(content: content)
         self.panel = panel
         self.tableView = table
     }

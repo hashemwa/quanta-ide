@@ -209,6 +209,7 @@ struct DetailSplitView: View {
             ToolbarItem(placement: .principal) { KernelStatusMenu() }
             ToolbarSpacer(.flexible)
             ToolbarItemGroup(placement: .primaryAction) {
+                languageIssues
                 splitButton
                 consoleButton
             }
@@ -216,9 +217,17 @@ struct DetailSplitView: View {
             ToolbarItemGroup {
                 HistoryControls()
                 KernelStatusMenu()
+                languageIssues
                 splitButton
                 consoleButton
             }
+        }
+    }
+
+    @ViewBuilder
+    private var languageIssues: some View {
+        if let document = app.activeDocument, document.kind == .notebook || document.kind == .script {
+            LanguageIssuesView(service: app.language, document: document)
         }
     }
 
