@@ -225,10 +225,32 @@ def dataframe_payload(obj, offset=0, limit=30, name=None, max_cols=150, head_tai
 
     rows = []
     index = []
+    original_rows = []
+    original_index = []
+    copy_budget = 4_000_000
+    def original(value):
+        nonlocal copy_budget
+        try:
+            if isinstance(value, str):
+                if len(value) > min(1_000_000, copy_budget):
+                    return None
+                text = value
+            else:
+                text = str(value)
+            size = len(text.encode("utf-8"))
+            if size > min(1_000_000, copy_budget):
+                return None
+            copy_budget -= size
+            return text
+        except Exception:
+            return None
     for window in windows:
         rows.extend([_fmt_cell(v) for v in row]
                     for row in window.itertuples(index=False, name=None))
         index.extend(_fmt_cell(i) for i in window.index)
+        original_rows.extend([original(v) for v in row]
+                             for row in window.itertuples(index=False, name=None))
+        original_index.extend(original(i) for i in window.index)
     preview = windows[0].head(10)
     try:
         text = preview.to_string(max_cols=12)
@@ -250,6 +272,8 @@ def dataframe_payload(obj, offset=0, limit=30, name=None, max_cols=150, head_tai
         "cols_truncated": cols_truncated,
         "rows_truncated": rows_truncated,
         "head_count": head_count,
+        "original_rows": original_rows,
+        "original_index": original_index,
         "text": _clean(text),
     }
 

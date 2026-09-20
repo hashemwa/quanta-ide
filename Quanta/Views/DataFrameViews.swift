@@ -197,9 +197,12 @@ final class DataFrameTableView: NSTableView {
         menu.autoenablesItems = false
 
         if menuRow >= 0, menuColumn >= 0, source.dataRow(forTableRow: menuRow) != nil {
-            menu.addItem(item("Copy Cell", #selector(copyCellAction)))
+            menu.addItem(item("Copy Cell Preview", #selector(copyCellAction)))
+            let original = item("Copy Original Value", #selector(copyOriginalCellAction))
+            original.isEnabled = source.payload?.originalRows != nil
+            menu.addItem(original)
         }
-        let rowsTitle = selectionCount > 1 ? "Copy \(selectionCount) Rows" : "Copy Row"
+        let rowsTitle = selectionCount > 1 ? "Copy \(selectionCount) Row Previews" : "Copy Row Preview"
         let primary = item(rowsTitle, #selector(copyRowsAction))
         primary.keyEquivalent = "c"
         primary.keyEquivalentModifierMask = .command
@@ -209,10 +212,16 @@ final class DataFrameTableView: NSTableView {
         alt.keyEquivalentModifierMask = [.command, .option]
         alt.isAlternate = true
         menu.addItem(alt)
+        let originals = item("Copy Original Row Values", #selector(copyOriginalRowsAction))
+        originals.isEnabled = source.payload?.originalRows != nil
+        menu.addItem(originals)
         menu.addItem(.separator())
         if menuColumn >= 1 {
             menu.addItem(item("Copy Column Name", #selector(copyColumnNameAction)))
-            menu.addItem(item("Copy Column Values", #selector(copyColumnValuesAction)))
+            menu.addItem(item("Copy Column Previews (Loaded Rows)", #selector(copyColumnValuesAction)))
+            let original = item("Copy Original Column Values (Loaded Rows)", #selector(copyOriginalColumnAction))
+            original.isEnabled = source.payload?.originalRows != nil
+            menu.addItem(original)
             menu.addItem(.separator())
         }
         menu.addItem(item("Copy as Markdown Table", #selector(copyMarkdownAction)))
@@ -264,6 +273,31 @@ final class DataFrameTableView: NSTableView {
         let values = source.rowValues(payload, dataRow: dataRow)
         guard menuColumn < values.count else { return }
         setPasteboard(values[menuColumn])
+    }
+
+    private func copyOriginal(rows: [Int], columns: [Int], scalar: Bool = false) {
+        guard let payload = copySource?.payload else { return }
+        guard let values = payload.originalValues(rows: rows, columns: columns) else {
+            AppState.shared.userNotice = "Original values are unavailable in this preview. Reload the table, or copy the value directly in Python. Values exceeding the preview's copy limit are never shortened and copied as originals."
+            return
+        }
+        if scalar, let value = values.first?.first { setPasteboard(value) }
+        else { setPasteboard(DataFrameClipboard.tsv(header: nil, rows: values), tabular: true) }
+    }
+
+    @objc private func copyOriginalCellAction(_ sender: Any?) {
+        guard let row = copySource?.dataRow(forTableRow: menuRow), menuColumn >= 0 else { return }
+        copyOriginal(rows: [row], columns: [menuColumn], scalar: true)
+    }
+
+    @objc private func copyOriginalRowsAction(_ sender: Any?) {
+        guard let payload = copySource?.payload else { return }
+        copyOriginal(rows: targetRows(), columns: Array(0...payload.columns.count))
+    }
+
+    @objc private func copyOriginalColumnAction(_ sender: Any?) {
+        guard let payload = copySource?.payload, menuColumn >= 1 else { return }
+        copyOriginal(rows: Array(payload.rows.indices), columns: [menuColumn])
     }
 
     @objc private func copyColumnNameAction(_ sender: Any?) {

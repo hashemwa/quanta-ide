@@ -84,6 +84,32 @@ class RichOutputTests(unittest.TestCase):
         self.assertIn("image/svg+xml", result["mime_bundle"])
         self.assertEqual(result["mime_bundle"]["image/jpeg"], "anBlZy1ieXRlcw==")
 
+    def test_original_dataframe_values_preserve_precision_strings_and_sorted_rows(self):
+        try:
+            import pandas
+        except ImportError:
+            self.skipTest("pandas is not installed")
+        code = "import pandas as pd\ndf = pd.DataFrame({'text': ['x' * 350 + '\\nend', 'second'], 'value': [1.2345678901234567, 2.0]})\ndf"
+        messages = exchange([
+            {"id": "setup", "op": "execute", "code": code},
+            {"id": "sorted", "op": "df", "name": "df", "sort_column": 1, "ascending": False},
+        ])
+        original = next(m["payload"] for m in messages if m.get("id") == "setup" and m.get("type") == "dataframe")
+        self.assertNotEqual(original["rows"][0][0], original["original_rows"][0][0])
+        self.assertEqual(original["original_rows"][0][0], "x" * 350 + "\nend")
+        self.assertEqual(original["original_rows"][0][1], "1.2345678901234567")
+        sorted_rows = next(m["payload"]["original_rows"] for m in messages if m.get("id") == "sorted")
+        self.assertEqual(sorted_rows[1], original["original_rows"][0])
+
+    def test_original_value_copy_limit_is_explicit_not_a_truncated_string(self):
+        try:
+            import pandas
+        except ImportError:
+            self.skipTest("pandas is not installed")
+        messages = exchange([{"id": "large", "op": "execute", "code": "import pandas as pd\npd.DataFrame({'text': ['x' * 1_000_001]})"}])
+        payload = next(m["payload"] for m in messages if m.get("type") == "dataframe")
+        self.assertIsNone(payload["original_rows"][0][0])
+
     def test_dataframe_has_portable_table_and_native_snapshot(self):
         try:
             import pandas

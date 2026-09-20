@@ -109,6 +109,8 @@ struct DataFramePayload {
     var dtypes: [String]
     var index: [String]
     var rows: [[String]]
+    var originalRows: [[String?]]?
+    var originalIndex: [String?]?
     var offset: Int
     var totalRows: Int
     var totalCols: Int
@@ -123,6 +125,8 @@ struct DataFramePayload {
               let rawRows = dict["rows"] as? [[Any]] else { return nil }
         self.columns = columns
         self.rows = rawRows.map { row in row.map { value in "\(value)" } }
+        self.originalRows = (dict["original_rows"] as? [[Any]])?.map { $0.map { $0 as? String } }
+        self.originalIndex = (dict["original_index"] as? [Any])?.map { $0 as? String }
         self.dtypes = dict["dtypes"] as? [String] ?? Array(repeating: "", count: columns.count)
         self.index = dict["index"] as? [String] ?? []
         self.name = dict["name"] as? String
@@ -156,9 +160,33 @@ struct DataFramePayload {
     }
 
     mutating func appendPage(_ other: DataFramePayload) {
+        if originalRows != nil, let page = other.originalRows { originalRows?.append(contentsOf: page) }
+        else { originalRows = nil }
+        if originalIndex != nil, let page = other.originalIndex { originalIndex?.append(contentsOf: page) }
+        else { originalIndex = nil }
         rows.append(contentsOf: other.rows)
         index.append(contentsOf: other.index)
         contentVersion = UUID()
+    }
+
+    func originalValue(row: Int, column: Int) -> String? {
+        if column == 0, let originalIndex, originalIndex.indices.contains(row) { return originalIndex[row] }
+        guard let originalRows, originalRows.indices.contains(row),
+              originalRows[row].indices.contains(column - 1) else { return nil }
+        return originalRows[row][column - 1]
+    }
+
+    func originalValues(rows selected: [Int], columns selectedColumns: [Int]) -> [[String]]? {
+        var result: [[String]] = []
+        for row in selected {
+            var values: [String] = []
+            for column in selectedColumns {
+                guard let value = originalValue(row: row, column: column) else { return nil }
+                values.append(value)
+            }
+            result.append(values)
+        }
+        return result
     }
 
     var tsv: String {
