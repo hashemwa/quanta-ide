@@ -21,7 +21,7 @@ are in `Quanta/Resources/Terminal/DEPENDENCIES.md`.
 
 ## Automated checks
 
-`.github/workflows/ci.yml` runs the existing build and unit-test commands on macOS 15
+`.github/workflows/ci.yml` runs the existing build and unit-test commands on macOS 26
 with Xcode 26.3, and the Python bridge suite on Python 3.11 and 3.13. Bridge checks run
 both without site packages and with optional scientific packages installed. Failed
 macOS runs retain the build/test logs as artifacts. CI activates after the workflow
