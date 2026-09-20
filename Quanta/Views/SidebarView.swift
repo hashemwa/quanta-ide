@@ -25,6 +25,8 @@ struct SidebarView: View {
                 filesPane
             case .search:
                 searchPane
+            case .data:
+                DataNavigatorView(browser: app.dataBrowser)
             case .sourceControl:
                 SourceControlPanel()
             }

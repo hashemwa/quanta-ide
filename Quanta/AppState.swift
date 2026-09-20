@@ -36,6 +36,7 @@ final class AppState: ObservableObject {
     @Published var variables: [VariableInfo] = []
     let console = ConsoleModel()
     let plots = PlotHistory()
+    let dataBrowser = DataBrowser()
     @Published var kernelStatus: KernelStatus = .stopped
     let selection = CellSelection()
     var selectedCellID: UUID? {
@@ -615,6 +616,7 @@ final class AppState: ObservableObject {
     }
 
     func openFile(_ url: URL, recordSession: Bool = true) {
+        if let source = LocalDataSource(url: url) { openData(source); return }
         let resolvedURL = url.resolvingSymlinksInPath().standardizedFileURL
         if let existing = openDocuments.first(where: {
             $0.url?.resolvingSymlinksInPath().standardizedFileURL == resolvedURL
@@ -711,6 +713,7 @@ final class AppState: ObservableObject {
         endRunChain(in: document)
         clearDraft(for: document)
         let position = openDocuments.firstIndex { $0.id == document.id } ?? openDocuments.count
+        document.dataSession?.stop()
         openDocuments.removeAll { $0.id == document.id }
         if primarySplitDocumentID == document.id {
             primarySplitDocumentID = openDocuments.first { $0.id != splitDocumentID }?.id
@@ -767,7 +770,7 @@ final class AppState: ObservableObject {
             case .notebook:
                 guard let notebook = document.notebook else { return false }
                 try notebook.serializedData().write(to: target, options: .atomic)
-            case .dataFrame, .diff:
+            case .dataSource, .dataFrame, .diff:
                 break
             }
             clearDraft(for: document)
@@ -800,6 +803,7 @@ final class AppState: ObservableObject {
     var runCommandTitle: String {
         switch activeDocument?.kind {
         case .notebook: return "Run All Cells"
+        case .dataSource: return "Run Query"
         case .dataFrame: return "Reload Table"
         case .diff: return "Reload Changes"
         default: return "Run File"
@@ -808,7 +812,7 @@ final class AppState: ObservableObject {
 
     var runCommandIcon: String {
         switch activeDocument?.kind {
-        case .dataFrame, .diff: return "arrow.clockwise"
+        case .dataSource, .dataFrame, .diff: return "arrow.clockwise"
         default: return "play.fill"
         }
     }
@@ -816,6 +820,7 @@ final class AppState: ObservableObject {
     var runCommandHelp: String {
         switch activeDocument?.kind {
         case .notebook: return "Run all cells (⌘R)"
+        case .dataSource: return "Run query (⌘R)"
         case .dataFrame: return "Reload table (⌘R)"
         case .diff: return "Reload changes (⌘R)"
         default: return "Run file (⌘R)"
@@ -834,6 +839,8 @@ final class AppState: ObservableObject {
             runScript(document)
         case .notebook:
             runAllCells(in: document)
+        case .dataSource:
+            document.dataSession?.run()
         case .dataFrame:
             reloadDataFrame(document)
         case .diff:
@@ -1940,7 +1947,7 @@ final class AppState: ObservableObject {
             find.isVisible = true
             find.focusRequest += 1
             recomputeFind(in: document, resetIndex: false)
-        case .dataFrame, .diff:
+        case .dataSource, .dataFrame, .diff:
             break
         }
     }
@@ -2170,7 +2177,7 @@ final class AppState: ObservableObject {
             guard draftFingerprints[document.id] != fingerprint,
                   let serialized = try? notebook.serializedData() else { return }
             data = serialized
-        case .dataFrame, .diff:
+        case .dataSource, .dataFrame, .diff:
             return
         }
         draftFingerprints[document.id] = fingerprint

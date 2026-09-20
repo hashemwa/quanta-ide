@@ -161,6 +161,8 @@ extension AppState {
             IDECommand(id: "show-documentation", title: "Show Documentation", shortcut: "⇧Tab", action: showEditorDocumentation),
             IDECommand(id: "find-references", title: "Find References", shortcut: "", action: findReferences),
             IDECommand(id: "rename-symbol", title: "Rename Symbol…", shortcut: "", action: renameSymbol),
+            IDECommand(id: "open-data", title: "Open Data Source…", shortcut: "", action: openDataPanel),
+            IDECommand(id: "show-data", title: "Show Data", shortcut: "⌘3", action: { self.showSidebarPane(.data) }),
             IDECommand(id: "show-completions", title: "Show Completions", shortcut: "⌃Space", action: showEditorCompletions),
             IDECommand(id: "next-issue", title: "Next Python Analysis Issue", shortcut: "", action: nextLanguageIssue),
             IDECommand(id: "restart-analysis", title: "Restart Python Analysis", shortcut: "", action: { self.language.restart() }),

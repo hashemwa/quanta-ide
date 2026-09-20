@@ -22,7 +22,10 @@ struct MainWindowView: View {
         }
         .inspector(isPresented: Binding(get: { app.showVariables },
                                         set: { app.setVariablesVisible($0) })) {
-            VariablesPanel()
+            Group {
+                if let session = app.activeDocument?.dataSession { DataColumnInspector(session: session) }
+                else { VariablesPanel() }
+            }
                 .toolbar { inspectorToolbar }
                 .inspectorColumnWidth(min: DS.Layout.inspectorMin,
                                       ideal: DS.Layout.inspectorIdeal,

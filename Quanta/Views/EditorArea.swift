@@ -157,6 +157,8 @@ struct DocumentContentView: View {
             if let notebook = document.notebook {
                 NotebookView(document: document, notebook: notebook)
             }
+        case .dataSource:
+            if let session = document.dataSession { DataBrowserTabView(session: session, documentID: document.id) }
         case .dataFrame:
             DataFrameTabView(document: document)
         case .diff:

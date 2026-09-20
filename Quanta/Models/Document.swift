@@ -5,6 +5,7 @@ final class Document: ObservableObject, Identifiable {
     enum Kind: Equatable {
         case script
         case notebook
+        case dataSource
         case dataFrame
         case diff
     }
@@ -20,6 +21,7 @@ final class Document: ObservableObject, Identifiable {
 
     @Published var notebook: Notebook?
 
+    private(set) var dataSession: DataSession?
     let dataFrameName: String?
     @Published var dataFrame: DataFramePayload?
     @Published var dataFrameError: String?
@@ -87,6 +89,16 @@ final class Document: ObservableObject, Identifiable {
         self.draftKey = ""
     }
 
+    init(data session: DataSession) {
+        kind = .dataSource
+        dataSession = session
+        url = session.source.url
+        dataFrameName = nil
+        untitledName = session.source.name
+        diffSource = nil
+        draftKey = ""
+    }
+
     var isFileBacked: Bool {
         kind == .script || kind == .notebook
     }
@@ -103,7 +115,7 @@ final class Document: ObservableObject, Identifiable {
         switch kind {
         case .script: return "curlybraces"
         case .notebook: return "text.book.closed"
-        case .dataFrame: return "tablecells"
+        case .dataSource, .dataFrame: return "tablecells"
         case .diff: return "plus.forwardslash.minus"
         }
     }

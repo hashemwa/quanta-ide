@@ -5,10 +5,12 @@ import Foundation
 enum SidebarPane: String, CaseIterable {
     case files
     case sourceControl
+    case data
     case search
 
     var title: String {
         switch self {
+        case .data: return "Data"
         case .files: return "Files"
         case .search: return "Search"
         case .sourceControl: return "Source Control"
@@ -17,6 +19,7 @@ enum SidebarPane: String, CaseIterable {
 
     var icon: String {
         switch self {
+        case .data: return "externaldrive"
         case .files: return "folder"
         case .search: return "magnifyingglass"
         case .sourceControl: return "arrow.triangle.branch"
@@ -25,6 +28,7 @@ enum SidebarPane: String, CaseIterable {
 
     var help: String {
         switch self {
+        case .data: return "Show Data (⌘3)"
         case .files: return "Show Files (⌘1)"
         case .search: return "Search in Workspace (⇧⌘F)"
         case .sourceControl: return "Show Source Control (⌘2)"
@@ -587,7 +591,7 @@ extension AppState {
                             ?? notebook.cells.first?.id
                     }
                 }
-            case .dataFrame, .diff:
+            case .dataSource, .dataFrame, .diff:
                 return
             }
             document.isDirty = false

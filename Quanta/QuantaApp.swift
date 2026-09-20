@@ -103,6 +103,12 @@ struct QuantaCommands: Commands {
     @ObservedObject var selection: CellSelection
 
     var body: some Commands {
+        CommandMenu("Data") {
+            Button("Open Data Source…") { app.openDataPanel() }
+            Button("Show Data") { app.showSidebarPane(.data) }.keyboardShortcut("3", modifiers: .command)
+            Button("Run Query") { app.activeDocument?.dataSession?.run() }.disabled(app.activeDocument?.dataSession == nil)
+            Button("Stop Query") { app.activeDocument?.dataSession?.stop() }.disabled(app.activeDocument?.dataSession == nil)
+        }
         CommandMenu("Navigate") {
             Button("Back") { app.navigateHistory(-1) }
                 .keyboardShortcut("[", modifiers: .command)

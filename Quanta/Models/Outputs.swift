@@ -142,7 +142,8 @@ struct DataFramePayload {
     func isNumericColumn(_ i: Int) -> Bool {
         guard i >= 0, i < dtypes.count else { return false }
         let d = dtypes[i].lowercased()
-        return d.hasPrefix("int") || d.hasPrefix("float") || d.hasPrefix("uint")
+        return ["int", "float", "uint", "tinyint", "smallint", "bigint", "hugeint", "utinyint",
+                "usmallint", "ubigint", "uhugeint", "double", "real", "decimal", "numeric"].contains { d.hasPrefix($0) }
     }
 
     var columnSummary: String {

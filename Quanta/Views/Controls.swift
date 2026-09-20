@@ -675,6 +675,8 @@ struct SearchField: NSViewRepresentable {
     var focusRequest: Int
     @Binding var handledFocusRequest: Int
     let onSubmit: () -> Void
+    var submitsImmediately: Bool? = nil
+    var allowsEmptySubmission = false
 
     func makeNSView(context: Context) -> NSSearchField {
         let field = FocusableSearchField()
@@ -687,7 +689,7 @@ struct SearchField: NSViewRepresentable {
         field.target = context.coordinator
         field.action = #selector(Coordinator.submit(_:))
         field.sendsWholeSearchString = true
-        field.sendsSearchStringImmediately = style == .filter
+        field.sendsSearchStringImmediately = submitsImmediately ?? (style == .filter)
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         applyStyle(to: field)
@@ -756,7 +758,7 @@ struct SearchField: NSViewRepresentable {
 
         @objc func submit(_ sender: NSSearchField) {
             parent.text = sender.stringValue
-            guard !sender.stringValue.isEmpty else { return }
+            guard parent.allowsEmptySubmission || !sender.stringValue.isEmpty else { return }
             parent.onSubmit()
         }
     }
