@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS build and unit tests
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check SDK
+        run: xcrun --sdk macosx --show-sdk-version
+      - name: Build
+        run: ./scripts/quanta build
+      - name: Unit tests
+        run: ./scripts/quanta test
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-failure-logs
+          path: .build/last-*.log
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  python:
+    name: Python bridge (${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Standard-library-only bridge
+        run: python -S scripts/test-ui-workflows.py
+      - name: Install optional scientific packages
+        run: python -m pip install numpy pandas matplotlib plotly
+      - name: Scientific bridge
+        run: python scripts/test-ui-workflows.py

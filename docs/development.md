@@ -19,6 +19,14 @@ Python interpreter containing pandas to verify kernel-side inspection and table 
 Terminal rendering uses locally bundled xterm.js assets; licenses and pinned versions
 are in `Quanta/Resources/Terminal/DEPENDENCIES.md`.
 
+## Automated checks
+
+`.github/workflows/ci.yml` runs the existing build and unit-test commands on macOS 15
+with Xcode 26.3, and the Python bridge suite on Python 3.11 and 3.13. Bridge checks run
+both without site packages and with optional scientific packages installed. Failed
+macOS runs retain the build/test logs as artifacts. CI activates after the workflow
+is pushed; a local test pass is not a hosted CI result.
+
 ## Architecture
 
 - `Quanta/AppState.swift` owns the workspace, open documents, execution, and session state.
@@ -31,6 +39,19 @@ are in `Quanta/Resources/Terminal/DEPENDENCIES.md`.
 Cell views observe their own state rather than the entire app model. Keep kernel I/O off
 the main thread, and preserve unsaved edits when files change externally. The app is
 unsandboxed so it can launch the user's Python interpreter and work with local files.
+
+Workspace trust gates Python version probes, startup, execution, and kernel-backed
+inspection. `WorkspaceTrust` remembers exact canonical folder paths; trusting a parent
+does not automatically trust child projects. Saved custom interpreter paths require an
+explicit interpreter selection before they can be probed or launched outside a trusted
+workspace environment. This is a Python execution policy, not an operating-system sandbox.
+
+Opening another trusted workspace creates a pending `KernelTransition` when either
+the directory or interpreter differs from the running session. Execution waits for the
+user's restart-or-keep choice. Interpreter preferences change only after confirmation.
+The bridge includes its current directory in each execution completion, so the session
+display follows `os.chdir()` as well as workspace restarts. An unavailable directory is
+reported as unknown rather than retaining a stale path.
 
 ## Release packaging
 
