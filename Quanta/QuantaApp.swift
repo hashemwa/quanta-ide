@@ -282,9 +282,8 @@ struct QuantaCommands: Commands {
             Button("Restart Kernel and Run All") { app.restartAndRunAll() }
                 .disabled(app.activeDocument?.kind != .notebook)
             Divider()
-            Button("Interrupt Execution") { app.interruptKernel() }
+            ExecutionStopButton(app: app)
                 .keyboardShortcut(".", modifiers: .command)
-                .disabled(app.kernelStatus != .busy)
             Button("Restart Kernel") { app.restartKernel() }
                 .keyboardShortcut("r", modifiers: [.command, .control])
         }

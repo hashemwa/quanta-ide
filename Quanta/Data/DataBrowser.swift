@@ -83,6 +83,7 @@ final class DataSession: ObservableObject {
         }
     }
     func stop() {
+        guard isLoading else { return }
         generation += 1
         cancellation?.cancel()
         cancellation = nil

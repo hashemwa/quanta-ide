@@ -351,6 +351,11 @@ final class AppState: ObservableObject {
         persistSession()
     }
 
+    func interruptActiveExecution() {
+        if let session = activeDocument?.dataSession { session.stop() }
+        else { interruptKernel() }
+    }
+
     func interruptKernel() {
         if let id = runningChainDocumentID,
            let document = openDocuments.first(where: { $0.id == id }) {
@@ -812,7 +817,7 @@ final class AppState: ObservableObject {
 
     var runCommandIcon: String {
         switch activeDocument?.kind {
-        case .dataSource, .dataFrame, .diff: return "arrow.clockwise"
+        case .dataFrame, .diff: return "arrow.clockwise"
         default: return "play.fill"
         }
     }

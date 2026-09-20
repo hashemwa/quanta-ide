@@ -119,11 +119,36 @@ struct RunControls: View {
         }
         .help(app.runCommandHelp)
         .disabled(app.activeDocument == nil)
-        Button { app.interruptKernel() } label: {
-            Label("Stop", systemImage: "stop.fill")
+        ExecutionStopButton(app: app, title: "Stop")
+            .help("Interrupt execution (⌘.)")
+    }
+}
+
+struct ExecutionStopButton: View {
+    @ObservedObject var app: AppState
+    var title = "Interrupt Execution"
+
+    var body: some View {
+        if let session = app.activeDocument?.dataSession {
+            DataQueryStopButton(session: session, title: title)
+        } else {
+            Button { app.interruptKernel() } label: {
+                Label(title, systemImage: "stop.fill")
+            }
+            .disabled(app.kernelStatus != .busy)
         }
-        .help("Interrupt execution (⌘.)")
-        .disabled(app.kernelStatus != .busy)
+    }
+}
+
+private struct DataQueryStopButton: View {
+    @ObservedObject var session: DataSession
+    let title: String
+
+    var body: some View {
+        Button { session.stop() } label: {
+            Label(title, systemImage: "stop.fill")
+        }
+        .disabled(!session.isLoading)
     }
 }
 
