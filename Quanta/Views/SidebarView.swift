@@ -183,20 +183,8 @@ struct SidebarView: View {
 
     private var searchList: some View {
         List {
-            ForEach(Array(Set(searchResults.map(\.fileURL))).sorted { $0.path < $1.path }, id: \.self) { url in
-                Section {
-                    ForEach(searchResults.filter { $0.fileURL == url }) { result in
-                        Button { app.openSearchResult(result) } label: {
-                            VStack(alignment: .leading, spacing: DS.Space.xxs) {
-                                Text(result.cellIndex.map { "Cell \($0 + 1) · line \(result.line)" } ?? "Line \(result.line)")
-                                    .font(.caption).foregroundStyle(.secondary)
-                                Text(highlighted(result.preview)).font(.caption.monospaced()).lineLimit(2)
-                            }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                        }.buttonStyle(.plain).help("\(url.path):\(result.line)")
-                    }
-                } header: {
-                    Text(app.relativePath(url)).lineLimit(1).truncationMode(.middle).help(url.path)
-                }
+            ForEach(searchFiles, id: \.self) { url in
+                searchSection(url)
             }
         }
         .listStyle(.sidebar)
@@ -214,6 +202,34 @@ struct SidebarView: View {
             searchedQuery = nil
             searchResults = []
         }
+    }
+
+    private var searchFiles: [URL] {
+        Array(Set(searchResults.map(\.fileURL))).sorted { $0.path < $1.path }
+    }
+
+    private func searchSection(_ url: URL) -> some View {
+        Section {
+            ForEach(searchResults.filter { $0.fileURL == url }) { result in
+                searchRow(result)
+            }
+        } header: {
+            Text(app.relativePath(url)).lineLimit(1).truncationMode(.middle).help(url.path)
+        }
+    }
+
+    private func searchRow(_ result: AppState.FileSearchResult) -> some View {
+        let location = result.cellIndex.map { "Cell \($0 + 1) · line \(result.line)" } ?? "Line \(result.line)"
+        return Button { app.openSearchResult(result) } label: {
+            VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                Text(location).font(.caption).foregroundStyle(.secondary)
+                Text(highlighted(result.preview)).font(.caption.monospaced()).lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("\(result.fileURL.path):\(result.line)")
     }
 
     private var searchFooter: some View {
