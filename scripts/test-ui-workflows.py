@@ -79,14 +79,34 @@ class NotebookCompatTests(unittest.TestCase):
         self.assertEqual(done["status"], "ok")
         self.assertFalse(any(m.get("type") == "error" for m in messages))
 
-        follow = exchange([
-            {"id": "magic_only", "op": "execute", "code": "%matplotlib notebook\n"},
-            {"id": "config", "op": "execute",
-             "code": "%config InlineBackend.figure_format = 'svg'\nx = 3\n"},
+    def test_unsupported_commands_fail_before_any_cell_code_runs(self):
+        commands = ["%matplotlib notebook", "%matplotlib widget", "%config InlineBackend.figure_format = 'svg'",
+                    "%precision 3", "%pylab inline", "%gui qt", "%automagic", "%timeit 1 + 1",
+                    "%pip install pandas", "%conda install pandas", "!echo hello", "%%bash\necho hello",
+                    "files = !ls", "duration = %time 1 + 1"]
+        for command in commands:
+            with self.subTest(command=command):
+                messages = exchange([
+                    {"id": "unsupported", "op": "execute", "code": "sentinel = 1\n" + command},
+                    {"id": "check", "op": "execute", "code": "'sentinel' in globals()"},
+                ])
+                error = next(m for m in messages if m.get("id") == "unsupported" and m.get("type") == "error")
+                self.assertEqual(error["ename"], "UnsupportedNotebookCommand")
+                self.assertIn("not supported", error["evalue"])
+                self.assertIn("line 2", error["traceback"])
+                done = next(m for m in messages if m.get("id") == "unsupported" and m.get("type") == "done")
+                self.assertEqual(done["status"], "error")
+                result = next(m for m in messages if m.get("id") == "check" and m.get("type") == "result")
+                self.assertEqual(result["text"], "False")
+
+    def test_multiline_modulo_and_command_strings_remain_python(self):
+        messages = exchange([
+            {"id": "valid", "op": "execute",
+             "code": "%matplotlib inline\ndivisor = 3\nvalue = (10\n%divisor)\npayload = '!ls; %timeit; %%bash'\nvalue"},
         ])
-        statuses = {m["id"]: m["status"] for m in follow if m.get("type") == "done"}
-        self.assertEqual(statuses["magic_only"], "ok")
-        self.assertEqual(statuses["config"], "ok")
+        self.assertFalse(any(m.get("type") == "error" for m in messages))
+        result = next(m for m in messages if m.get("type") == "result")
+        self.assertEqual(result["text"], "1")
 
     def test_magic_text_inside_a_string_is_left_alone(self):
         messages = exchange([
@@ -102,7 +122,7 @@ class NotebookCompatTests(unittest.TestCase):
     def test_magic_beside_a_single_line_string_is_still_ignored(self):
         messages = exchange([
             {"id": "cfg", "op": "execute",
-             "code": "%config InlineBackend.figure_format = 'svg'\nvalue = 'kept'\nprint(value)\n"},
+             "code": "%matplotlib inline # already provided\nvalue = 'kept'\nprint(value)\n"},
         ])
         done = next(m for m in messages if m.get("type") == "done")
         self.assertEqual(done["status"], "ok")
@@ -118,12 +138,20 @@ class NotebookCompatTests(unittest.TestCase):
         self.assertEqual(frame["line"], 4)
         self.assertEqual(frame["code"], "boom = value + undefined_name")
 
+    def test_ordinary_syntax_error_after_modulo_is_not_a_magic(self):
+        messages = exchange([
+            {"id": "syntax", "op": "execute", "code": "divisor = 3\nvalue = (10\n%divisor)\nif True print(1)"},
+        ])
+        error = next(m for m in messages if m.get("type") == "error")
+        self.assertEqual(error["ename"], "SyntaxError")
+        self.assertIn("line 4", error["traceback"])
+
     def test_unknown_magic_still_fails(self):
         messages = exchange([
             {"id": "time", "op": "execute", "code": "%time x = 1\n"},
         ])
         errors = [m for m in messages if m.get("type") == "error"]
-        self.assertEqual(errors[0]["ename"], "SyntaxError")
+        self.assertEqual(errors[0]["ename"], "UnsupportedNotebookCommand")
 
     def test_mbox_and_textnormal_latex_render(self):
         try:

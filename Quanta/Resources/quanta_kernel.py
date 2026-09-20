@@ -673,9 +673,15 @@ def _traceback_frames(e):
         tb = tb.tb_next
     return frames
 
-_NOOP_MAGIC = re.compile(
-    r"^[ \t]*%{1,2}(?:matplotlib|config|pylab|gui|precision|automagic)\b"
+_NOTEBOOK_COMMAND = re.compile(
+    r"^[ \t]*(?:[A-Za-z_]\w*(?:[ \t]*,[ \t]*[A-Za-z_]\w*)*[ \t]*=[ \t]*)?(%{1,2}[A-Za-z_]\w*|!!?)"
 )
+_INLINE_MATPLOTLIB = re.compile(r"^[ \t]*%matplotlib[ \t]+inline[ \t]*(?:#[^\r\n]*)?[\r\n]*$")
+
+
+class UnsupportedNotebookCommand(SyntaxError):
+    pass
+
 
 _STRING_TOKENS = frozenset(
     getattr(tokenize, name) for name in (
@@ -696,24 +702,40 @@ def _rows_inside_multiline_strings(code):
     return rows
 
 
-def _blank_noop_magics(code):
+def _parse_notebook_code(code, filename):
     lines = code.splitlines(True)
-    hits = [i for i, line in enumerate(lines) if _NOOP_MAGIC.match(line)]
-    if not hits:
-        return code
     protected = _rows_inside_multiline_strings(code)
-    for i in hits:
-        if i + 1 in protected:
-            continue
-        lines[i] = lines[i][len(lines[i].rstrip("\r\n")):]
-    return "".join(lines)
+    for i, line in enumerate(lines):
+        if i + 1 not in protected and _INLINE_MATPLOTLIB.fullmatch(line):
+            lines[i] = "\n" if line.endswith("\n") else ""
+    try:
+        return ast.parse("".join(lines), filename=filename)
+    except SyntaxError as error:
+        for i, line in enumerate(lines):
+            command = _NOTEBOOK_COMMAND.match(line)
+            if command is None or i + 1 in protected or i + 1 != error.lineno:
+                continue
+            name = command.group(1)
+            if name == "%pip" or name == "%conda":
+                advice = "Install packages in the selected environment using the terminal."
+            elif name.startswith("!"):
+                advice = "Run shell commands in the terminal or use Python's subprocess module."
+            elif name == "%matplotlib":
+                advice = "Quanta supports inline plots; use %matplotlib inline or ordinary matplotlib code."
+            else:
+                advice = "Use ordinary Python, or run this notebook with an IPython kernel in Jupyter."
+            raise UnsupportedNotebookCommand(
+                f"{name} is not supported by Quanta's Python runner. {advice}",
+                (filename, i + 1, command.start(1) + 1, line),
+            ) from None
+        raise
 
 
 def run_code(msg):
     global _current_id, _exec_count, _stream_budget, _interruptible
     _current_id = msg.get("id")
     _stream_budget = MAX_STREAM_BYTES
-    code = _blank_noop_magics(msg.get("code", ""))
+    code = msg.get("code", "")
     _exec_count += 1
 
     filename = msg.get("filename") or f"<cell {_exec_count}>"
@@ -726,7 +748,7 @@ def run_code(msg):
     linecache.cache[filename] = (len(code), None, code.splitlines(True), filename)
     compiling = True
     try:
-        tree = ast.parse(code, filename=filename)
+        tree = _parse_notebook_code(code, filename)
         result_name = None
         last_expr = None
         if tree.body and isinstance(tree.body[-1], ast.Expr):
@@ -763,7 +785,7 @@ def run_code(msg):
     except SyntaxError as e:
         status = "error"
         if compiling:
-            emit({"id": _current_id, "type": "error", "ename": "SyntaxError",
+            emit({"id": _current_id, "type": "error", "ename": type(e).__name__,
                   "evalue": _clean(str(e)),
                   "traceback": _clean("".join(traceback.format_exception_only(type(e), e)))})
         else:
