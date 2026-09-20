@@ -88,6 +88,17 @@ enum DS {
         case neutral, error, warning
     }
 
+    enum StatusColors {
+        static let warning = color(light: 0x805B00, dark: 0xF5D04C)
+        static let success = color(light: 0x176B36, dark: 0x73D99A)
+
+        private static func color(light: Int, dark: Int) -> Color {
+            Color(nsColor: NSColor(name: nil) { appearance in
+                NSColor(hex: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light)
+            })
+        }
+    }
+
     enum Stream {
         static let stderrRule = Color.orange
     }

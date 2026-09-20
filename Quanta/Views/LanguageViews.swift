@@ -47,7 +47,11 @@ struct LanguageIssuesView: View {
         } label: {
             Label("\(issues.count) Python \(issues.count == 1 ? "Issue" : "Issues")",
                   systemImage: issues.isEmpty ? "checkmark.circle" : "exclamationmark.triangle")
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(issues.isEmpty ? DS.StatusColors.success : DS.StatusColors.warning)
         }
+        .menuIndicator(.hidden)
+        .accessibilityLabel(issues.isEmpty ? "Python analysis: no issues" : "Python analysis: \(issues.count) issues")
         .help(issues.isEmpty ? "Python Analysis — No Issues" : "Show \(issues.count) Python Analysis \(issues.count == 1 ? "Issue" : "Issues")")
     }
 

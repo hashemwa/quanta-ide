@@ -206,10 +206,14 @@ struct DetailSplitView: View {
         if #available(macOS 26.0, *) {
             ToolbarItemGroup(placement: .navigation) { HistoryControls() }
             ToolbarSpacer(.fixed)
-            ToolbarItem(placement: .principal) { KernelStatusMenu() }
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: DS.Space.s) {
+                    KernelStatusMenu()
+                    languageIssues
+                }
+            }
             ToolbarSpacer(.flexible)
             ToolbarItemGroup(placement: .primaryAction) {
-                languageIssues
                 splitButton
                 consoleButton
             }
