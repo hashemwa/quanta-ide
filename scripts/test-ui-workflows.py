@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import pathlib
 import subprocess
@@ -217,6 +219,57 @@ class NotebookCompatTests(unittest.TestCase):
         ])
         errors = [m for m in messages if m.get("type") == "error"]
         self.assertEqual(errors[0]["ename"], "UnsupportedNotebookCommand")
+
+    def test_plot_theme_toggle_preserves_matplotlib_rendering(self):
+        try:
+            import matplotlib
+        except ImportError:
+            self.skipTest("matplotlib is not installed")
+        code = "\n".join([
+            "import matplotlib.pyplot as plt, io, hashlib",
+            "fig, ax = plt.subplots()",
+            "ax.plot([1, 2], [3, 4], color='purple')",
+            "ax.set_title('Original colors', color='green')",
+            "buffer = io.BytesIO()",
+            "fig.savefig(buffer, format='png', dpi=144, bbox_inches='tight')",
+            "print(hashlib.sha256(buffer.getvalue()).hexdigest())",
+        ])
+        commands = []
+        for label, enabled in [("original", False), ("adapted", True), ("original_again", False)]:
+            commands.extend([
+                {"op": "config", "appearance": "dark", "adapt_plot_theme": enabled},
+                {"id": label, "op": "execute", "code": code},
+            ])
+        messages = exchange(commands)
+        self.assertFalse([m for m in messages if m.get("type") == "error"])
+        for label in ["original", "adapted", "original_again"]:
+            emitted = next(m for m in messages if m.get("id") == label and m.get("mime") == "image/png")
+            actual = hashlib.sha256(base64.b64decode(emitted["data"])).hexdigest()
+            expected = "".join(m.get("text", "") for m in messages if m.get("id") == label and m.get("type") == "stream").strip()
+            if label == "adapted":
+                self.assertNotEqual(actual, expected)
+            else:
+                self.assertEqual(actual, expected)
+
+    def test_plot_theme_toggle_preserves_plotly_layout(self):
+        try:
+            import plotly
+        except ImportError:
+            self.skipTest("plotly is not installed")
+        code = "import plotly.graph_objects as go\nfig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))\nfig.update_layout(template='plotly_white', paper_bgcolor='ivory', plot_bgcolor='lavender', font_color='navy')\nfig"
+        messages = exchange([
+            {"op": "config", "appearance": "dark", "adapt_plot_theme": False},
+            {"id": "original", "op": "execute", "code": code},
+            {"op": "config", "adapt_plot_theme": True},
+            {"id": "adapted", "op": "execute", "code": code},
+        ])
+        layouts = {m["id"]: m["mime_bundle"]["application/vnd.plotly.v1+json"]["layout"]
+                   for m in messages if m.get("type") == "plotlyhtml"}
+        self.assertEqual(layouts["original"]["paper_bgcolor"], "ivory")
+        self.assertEqual(layouts["original"]["plot_bgcolor"], "lavender")
+        self.assertEqual(layouts["original"]["font"]["color"], "navy")
+        self.assertEqual(layouts["adapted"]["paper_bgcolor"], "rgba(0,0,0,0)")
+        self.assertEqual(layouts["adapted"]["plot_bgcolor"], "rgba(0,0,0,0)")
 
     def test_mbox_and_textnormal_latex_render(self):
         try:

@@ -417,6 +417,13 @@ struct SettingsView: View {
                 } footer: {
                     Text("Running a notebook changes outputs, execution counts and metadata. With this on, the Source Control panel only lists a notebook when its cell sources differ.")
                 }
+                Section {
+                    Toggle("Adapt plots to app appearance", isOn: $app.adaptsPlotTheme)
+                } header: {
+                    Text("Plots")
+                } footer: {
+                    Text("Match generated Matplotlib and Plotly plots to light or dark mode. Turn off to preserve the plot’s own colors and background. Applies to newly generated plots; rerun existing cells to update their outputs.")
+                }
                 Section("Navigator") {
                     Toggle("Show hidden files", isOn: $app.showsHiddenFiles)
                 }

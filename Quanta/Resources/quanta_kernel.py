@@ -27,6 +27,7 @@ warnings.filterwarnings("ignore", message=".*FigureCanvasAgg is non-interactive.
 warnings.filterwarnings("ignore", message=".*which is a non-GUI backend.*")
 
 _dark_appearance = False
+_adapt_plot_theme = True
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 MAX_STREAM_BYTES = 2_000_000
@@ -342,7 +343,7 @@ def _record_tick_colors(ax, restores):
                     pass
 
 def _style_figure(fig):
-    if not _is_default_white(fig.get_facecolor()):
+    if not _adapt_plot_theme or not _is_default_white(fig.get_facecolor()):
         return None
     fg = _appearance_fg()
     restores = []
@@ -407,7 +408,9 @@ def emit_figures():
                 restores = None
             buf = io.BytesIO()
             try:
-                if restores is not None:
+                if not _adapt_plot_theme:
+                    fig.savefig(buf, format="png", dpi=144, bbox_inches="tight")
+                elif restores is not None:
                     fig.savefig(buf, format="png", dpi=144, bbox_inches="tight",
                                 transparent=True)
                 else:
@@ -453,11 +456,11 @@ def _try_plotly(obj):
     except Exception:
         return False
     fig = go.Figure(obj)
-    if _dark_appearance:
+    if _adapt_plot_theme and _dark_appearance:
         fig.update_layout(template="plotly_dark",
                           paper_bgcolor="rgba(0,0,0,0)",
                           plot_bgcolor="rgba(0,0,0,0)")
-    else:
+    elif _adapt_plot_theme:
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)")
 
     png = None
@@ -1286,7 +1289,10 @@ def main():
             elif op == "inspect":
                 handle_inspect(msg)
             elif op == "config":
-                globals()["_dark_appearance"] = msg.get("appearance") == "dark"
+                if "appearance" in msg:
+                    globals()["_dark_appearance"] = msg["appearance"] == "dark"
+                if isinstance(msg.get("adapt_plot_theme"), bool):
+                    globals()["_adapt_plot_theme"] = msg["adapt_plot_theme"]
             elif op == "shutdown":
                 break
         except Exception:

@@ -103,6 +103,12 @@ final class AppState: ObservableObject {
     @Published var wrapsCode = QuantaDefaults.store.object(forKey: "QuantaWrapsCode") as? Bool ?? true {
         didSet { QuantaDefaults.store.set(wrapsCode, forKey: "QuantaWrapsCode") }
     }
+    @Published var adaptsPlotTheme = QuantaDefaults.store.object(forKey: "QuantaAdaptsPlotTheme") as? Bool ?? true {
+        didSet {
+            QuantaDefaults.store.set(adaptsPlotTheme, forKey: "QuantaAdaptsPlotTheme")
+            pushAppearance()
+        }
+    }
     @Published private(set) var cellRevision = 0
     var handledFileSearchFocusRequest = 0
 
@@ -390,7 +396,7 @@ final class AppState: ObservableObject {
 
     func pushAppearance() {
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        kernel.notify(["op": "config", "appearance": dark ? "dark" : "light"])
+        kernel.notify(["op": "config", "appearance": dark ? "dark" : "light", "adapt_plot_theme": adaptsPlotTheme])
     }
 
     private func clearRunningFlags() {
