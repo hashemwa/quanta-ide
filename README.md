@@ -58,16 +58,29 @@ for supported commands and current output limitations.
 | ⇧Tab | Show documentation or call signature |
 | ⌃⌘J | Go to definition |
 
-For completion, diagnostics, and definition navigation before running code, install
-[Node.js](https://nodejs.org/) and [Pyright](https://github.com/microsoft/pyright)
-(`npm install -g pyright`). Open a trusted workspace, select its Python interpreter,
-and check **Settings → Editor → Python Analysis**. Quanta finds standard Homebrew and
-`~/.local/bin` installations; **Choose Executable…** supports other locations.
+Quanta bundles the native [ty](https://docs.astral.sh/ty/) analyzer. No Node.js, npm,
+or language-server installation is required. Open a trusted workspace, select its
+Python interpreter, and check **Settings → Editor → Python Analysis**.
 
-Analysis covers Python scripts and code cells in notebook order, including unsaved
-edits. Underlined issues have tooltips; the document's **Issues** menu jumps to each
-location. Runtime completion remains available as a fallback. This first integration
-does not provide auto-import edits, rename, or find-all-references.
+Suggestions appear while typing names, imports, and attributes, before running code.
+Completions include type details, function placeholders, and automatic imports;
+**Tab** advances through placeholders. Parameter help opens at function calls.
+Use **Navigate → Find References** or **Rename Symbol…** to navigate and refactor.
+Rename previews the affected files, keeps edits unsaved, and supports Undo. Notebook
+cells are synchronized through LSP's notebook protocol; Markdown is excluded from
+Python analysis. Runtime completion supplements static analysis when needed.
+
+Use **Data → Open Data Source…** to browse local SQLite/DuckDB databases and CSV,
+TSV, or Parquet files without starting Python. **⌘3** opens the Data navigator.
+Tables open in editor tabs with a column inspector. The SQL button exposes a read-only
+query editor; filters and sorting apply to the query before pagination. Pages contain
+up to 200 rows and can be exported as CSV. **Data Actions → Open Loading Code in
+Notebook** creates a notebook with reproducible Python loading code.
+
+Queries have a Stop action, a 10-second limit, and a 4 MB result-page budget. DuckDB
+also has a 128 MB memory limit. Inspector statistics describe the current page only.
+Database writes, remote connections, and full-dataset profiling are deferred.
+See [Data browser development](docs/data-browser.md) to contribute additional sources.
 
 Select or hover over a cell and open its **+** menu to insert **Code** or **Markdown**
 above or below it. The same choices appear in the cell's context menu, the notebook

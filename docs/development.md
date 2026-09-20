@@ -27,15 +27,16 @@ both without site packages and with optional scientific packages installed. Fail
 macOS runs retain the build/test logs as artifacts. CI activates after the workflow
 is pushed; a local test pass is not a hosted CI result.
 
-The macOS job also installs Pyright 1.1.414 and exercises the real language server.
-Locally, that integration test uses a standard Pyright installation or an explicit path:
+Builds fetch checksum-pinned native ty 0.0.82 and DuckDB 1.5.5 artifacts into the
+ignored `.build/native-tools` cache. The shared Xcode scheme embeds and signs universal
+macOS binaries in the application. The first build needs network access; subsequent
+builds use the verified cache. The app never installs tools into users' Python environments.
 
-```sh
-TEST_RUNNER_QUANTA_TEST_PYRIGHT=/absolute/path/to/pyright-langserver ./scripts/quanta test
-```
-
-Without Pyright, only the live-server test is skipped; mapping, protocol framing, and
-workspace-trust tests still run. The app never downloads or installs a server automatically.
+The suite exercises the bundled analyzer, notebook cell synchronization, completion
+edits, rename undo, native SQLite/DuckDB, CSV/Parquet previews, read-only enforcement,
+original values, page limits, and cancellation. Missing bundled tools fail these tests.
+An explicit `TEST_RUNNER_QUANTA_TEST_TY=/absolute/path/to/ty` overrides the analyzer
+for compatibility testing. No Node.js test dependency remains.
 
 ## Architecture
 
@@ -43,7 +44,7 @@ workspace-trust tests still run. The app never downloads or installs a server au
 - `Quanta/Kernel/` discovers Python environments and manages a subprocess over JSON-lines stdio.
 - `Quanta/Resources/quanta_kernel.py` provides execution, variable inspection, completion, and rich output using the Python standard library. pandas, numpy, matplotlib, and Plotly are optional integrations.
 - `Quanta/Editor/` wraps AppKit TextKit 1 editors. `Quanta/Views/Controls.swift` defines shared UI tokens and controls.
-- `Quanta/Language/` owns the optional Pyright process, LSP framing, document synchronization, UTF-16 mapping, and static editor actions.
+- `Quanta/Language/` owns the bundled ty process, LSP framing, document synchronization, UTF-16 mapping, and static editor actions.
 - `Quanta/Models/` reads and writes notebooks in Jupyter-compatible JSON. Native DataFrame viewers use paged `NSTableView` tables.
 - `Quanta/Git/` handles repository status, staging, and diffs. Notebook comparisons ignore outputs and execution counts.
 
@@ -65,7 +66,7 @@ display follows `os.chdir()` as well as workspace restarts. An unavailable direc
 reported as unknown rather than retaining a stale path.
 
 Python analysis requires a trusted workspace and trusted selected interpreter because
-Pyright can probe Python to resolve imports. It runs separately from the execution
+Environment discovery may inspect the selected Python installation. It runs separately from the execution
 kernel. Interpreter/workspace changes restart analysis; closing or renaming documents
 sends the corresponding LSP close/open notifications. Server failures remain visible in
 Editor settings and require a restart or configuration change, avoiding crash loops.
@@ -73,13 +74,18 @@ Native workspace file events invalidate the server's import caches when modules 
 created, changed, renamed, or deleted. Changes to installed libraries outside the workspace
 may require **Restart Python Analysis**.
 
-Each notebook is presented as an in-memory Python file beside its notebook, with code
-cells joined in document order and Markdown omitted. No temporary source file is written
-into the workspace. Cell IDs and UTF-16 offsets map diagnostics, completions, and
-definitions back to the original editors. This models document order, not kernel execution
-history. Unsupported IPython syntax is not translated. Versioned diagnostics and request
-results are discarded after the corresponding source changes; requests have cancellation
-and timeouts. Automatic imports and server-initiated workspace edits are disabled.
+Notebooks use LSP 3.17 notebook synchronization, with stable cell UUIDs in
+`vscode-notebook-cell` URIs (the URI convention accepted by ty). Script files use normal
+file URIs. Code-cell insertions, deletions, reordering and Markdown conversions update
+notebook structure separately from text changes. No temporary source file is written
+into the workspace. Analysis models document order, not kernel execution history.
+Unsupported IPython syntax is not translated. Versioned diagnostics and request
+results are discarded after source changes; requests have cancellation and timeouts.
+Completions apply validated, nonoverlapping edits as one undo operation. Server-initiated
+workspace edits are rejected; user-requested rename is reviewed and applied to unsaved
+editor models. Non-Python file operations and files outside the workspace are rejected.
+
+See [local Data browser architecture](data-browser.md) for provider and query constraints.
 
 ## Release packaging
 
