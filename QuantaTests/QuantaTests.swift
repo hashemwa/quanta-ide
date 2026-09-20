@@ -205,7 +205,7 @@ final class NotebookExporterTests: XCTestCase {
         let html = NotebookExporter.html(from: sampleNotebook(), title: "t.ipynb")
         XCTAssertTrue(html.contains("<h1>Title</h1>"))
         XCTAssertTrue(html.contains("<b>bold</b>"))
-        XCTAssertTrue(html.contains("print(x)"))
+        XCTAssertTrue(html.contains("<span class=\"syntax-builtin\">print</span>(x)"))
         XCTAssertTrue(html.contains("<pre class=\"out\">1"))
         XCTAssertTrue(html.contains("[3]"))
     }

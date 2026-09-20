@@ -35,7 +35,7 @@ enum NotebookExporter {
             case .code:
                 let count = cell.executionCount.map(String.init) ?? " "
                 body += "<div class=\"cell\"><div class=\"prompt\">[\(count)]</div>"
-                body += "<pre class=\"code\">\(escape(cell.source))</pre></div>\n"
+                body += "<pre class=\"code\">\(highlightedPython(cell.source))</pre></div>\n"
                 for output in cell.outputs {
                     body += outputHTML(output)
                 }
@@ -53,6 +53,7 @@ enum NotebookExporter {
         .prompt { color: #8e8e93; font: 11px ui-monospace, monospace; padding-top: 12px;
                   min-width: 34px; text-align: right; }
         .code { background: #f5f5f7; flex: 1; margin: 0; }
+        \(syntaxStyles)
         .out { background: none; padding: 4px 12px 4px 54px; margin: 0; white-space: pre-wrap; }
         .err { color: #d70015; background: #fff1f0; margin-left: 42px; }
         img { max-width: 100%; margin: 8px 0 8px 42px; }
@@ -80,6 +81,7 @@ enum NotebookExporter {
           body { max-width: none; margin: 0; padding: 0; background: white; color: black; }
           pre, .code { white-space: pre-wrap; overflow-wrap: anywhere; }
           .code, .md code { background: #f5f5f7; }
+          .code { \(syntaxVariables(dark: false)) }
           .err { color: #a00; background: #fff1f0; }
           .cell { display: block; }
           .prompt { float: left; padding-right: 8px; }
@@ -90,6 +92,39 @@ enum NotebookExporter {
           img { max-height: 8in; object-fit: contain; }
         }
         </style><script>\(preparationScript)</script></head><body>\(body)</body></html>
+        """
+    }
+
+    static func highlightedPython(_ source: String) -> String {
+        let key = NSAttributedString.Key("QuantaSyntaxKind")
+        let styled = NSMutableAttributedString(string: source)
+        for token in PythonHighlighter.tokens(source) {
+            styled.addAttribute(key, value: token.kind.rawValue, range: token.range)
+        }
+        var html = ""
+        styled.enumerateAttribute(key, in: NSRange(location: 0, length: styled.length)) { value, range, _ in
+            let text = escape((source as NSString).substring(with: range))
+            if let kind = value as? String { html += "<span class=\"syntax-\(kind)\">\(text)</span>" }
+            else { html += text }
+        }
+        return html
+    }
+
+    private static func syntaxVariables(dark: Bool) -> String {
+        PythonHighlighter.Kind.allCases.map {
+            "--syntax-\($0.rawValue):\(EditorTheme.syntaxHex($0, dark: dark));"
+        }.joined()
+    }
+
+    private static var syntaxStyles: String {
+        let rules = PythonHighlighter.Kind.allCases.map {
+            ".code .syntax-\($0.rawValue){color:var(--syntax-\($0.rawValue))}"
+        }.joined()
+        return """
+        .code { \(syntaxVariables(dark: false)) print-color-adjust:exact; -webkit-print-color-adjust:exact; }
+        \(rules)
+        @media (prefers-color-scheme: dark) { .code { \(syntaxVariables(dark: true)) } }
+        :root[data-quanta-print] .code { \(syntaxVariables(dark: false)) }
         """
     }
 

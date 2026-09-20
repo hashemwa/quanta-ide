@@ -31,6 +31,7 @@ final class NotebookPDFRenderer: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         let script = #"""
         if (window.quantaExportReady) await window.quantaExportReady;
+        document.documentElement.dataset.quantaPrint = 'true';
         const style = document.createElement('style');
         style.textContent = `:root{color-scheme:light}body{width:720px;max-width:720px;margin:0;padding:0;background:white;color:black}
           pre,.code{white-space:pre-wrap;overflow-wrap:anywhere}.code,.md code{background:#f5f5f7}

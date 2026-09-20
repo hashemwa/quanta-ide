@@ -22,7 +22,7 @@ enum PythonHighlighter {
 
     static let stringPrefixes: Set<String> = ["r", "b", "f", "u", "rb", "br", "fr", "rf", "t", "tr", "rt"]
 
-    enum Kind { case keyword, builtin, definition, string, comment, number, decorator }
+    enum Kind: String, CaseIterable { case keyword, builtin, definition, string, comment, number, decorator }
     struct Token {
         let range: NSRange
         let kind: Kind
