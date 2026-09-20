@@ -4,6 +4,7 @@ import base64
 import builtins
 import datetime
 import io
+import html as html_escape
 import json
 import linecache
 import math
@@ -62,6 +63,10 @@ def _finite(v):
     return f if math.isfinite(f) else None
 
 def emit(obj):
+    if _current_id is not None and obj.get("id") == _current_id and "mime_bundle" not in obj:
+        bundle = _portable_output(obj)
+        if bundle:
+            obj["mime_bundle"] = bundle
     with _lock:
         sys.__stdout__.write("\n" + json.dumps(obj) + "\n")
         sys.__stdout__.flush()
@@ -441,12 +446,6 @@ def _try_plotly(obj):
               "data": base64.b64encode(png).decode()})
 
     js_path = os.path.join(os.path.dirname(plotly.__file__), "package_data", "plotly.min.js")
-    if not os.path.exists(js_path):
-        if png is None:
-            emit({"id": _current_id, "type": "result",
-                  "text": "Plotly figure — this plotly install has no bundled plotly.min.js "
-                          "and no kaleido; nothing to render inline."})
-        return True
     html_fig = fig
     try:
 
@@ -470,24 +469,68 @@ def _try_plotly(obj):
     emit({"id": _current_id, "type": "plotlyhtml",
           "html": html, "js_path": js_path,
           "height": float(_finite(fig.layout.height) or 450.0),
-          "has_png": png is not None})
+          "has_png": png is not None,
+          "mime_bundle": dict({"application/vnd.plotly.v1+json": json.loads(fig.to_json()),
+                               "text/plain": "Plotly figure"},
+                              **({"image/png": base64.b64encode(png).decode()} if png else {}))})
     return True
 
 def _try_rich_repr(obj):
-    repr_png = getattr(obj, "_repr_png_", None)
-    if callable(repr_png):
+    bundle = {}
+    metadata = {}
+    method = getattr(obj, "_repr_mimebundle_", None)
+    if callable(method):
         try:
-            data = repr_png()
+            result = method()
+            if isinstance(result, tuple):
+                result, metadata = result
+            if isinstance(result, dict):
+                bundle.update(result)
         except Exception:
-            data = None
-        if isinstance(data, str) and data:
-            emit({"id": _current_id, "type": "display", "mime": "image/png",
-                  "data": data.strip()})
+            pass
+    for name, mime in [("_repr_html_", "text/html"), ("_repr_svg_", "image/svg+xml"),
+                       ("_repr_png_", "image/png"), ("_repr_jpeg_", "image/jpeg"),
+                       ("_repr_json_", "application/json")]:
+        if mime in bundle:
+            continue
+        method = getattr(obj, name, None)
+        if not callable(method):
+            continue
+        try:
+            value = method()
+            if isinstance(value, tuple):
+                value, details = value
+                if isinstance(details, dict):
+                    metadata[mime] = details
+            if isinstance(value, (bytes, bytearray)):
+                value = base64.b64encode(value).decode() if mime.startswith("image/") and mime != "image/svg+xml" else value.decode("utf-8")
+            if value is not None:
+                json.dumps(value, allow_nan=False)
+                bundle[mime] = value
+        except Exception:
+            pass
+    if bundle:
+        normalized = {}
+        for mime, value in bundle.items():
+            if not isinstance(mime, str):
+                continue
+            try:
+                if isinstance(value, (bytes, bytearray)):
+                    value = base64.b64encode(value).decode() if mime in ("image/png", "image/jpeg") else value.decode("utf-8")
+                json.dumps(value, allow_nan=False)
+                normalized[mime] = value
+            except Exception:
+                continue
+        bundle = normalized
+    if bundle:
+        try:
+            bundle.setdefault("text/plain", _capped(_clean(repr(obj)), MAX_REPR_CHARS))
+            json.dumps([bundle, metadata], allow_nan=False)
+            emit({"id": _current_id, "type": "rich", "mime_bundle": bundle,
+                  "metadata": metadata if isinstance(metadata, dict) else {}})
             return True
-        if isinstance(data, (bytes, bytearray)) and data:
-            emit({"id": _current_id, "type": "display", "mime": "image/png",
-                  "data": base64.b64encode(data).decode()})
-            return True
+        except Exception:
+            pass
     repr_latex = getattr(obj, "_repr_latex_", None)
     if callable(repr_latex):
         try:
@@ -601,6 +644,34 @@ def _try_jsonlike(obj):
           "summary": "%s · %d items" % (type(obj).__name__, len(obj)),
           "text": _capped(_clean(r), 2000)})
     return True
+
+def _portable_output(message):
+    kind = message.get("type")
+    payload = message.get("payload", {})
+    if kind == "display" and message.get("mime") == "image/png":
+        return {"image/png": message["data"]}
+    if kind == "dataframe":
+        escape = lambda value: html_escape.escape(str(value))
+        headers = "".join("<th>" + escape(c) + "</th>" for c in ["Index"] + payload["columns"])
+        rows = []
+        for i, row in enumerate(payload["rows"]):
+            index = payload.get("index", [])
+            label = index[i] if i < len(index) else i
+            rows.append("<tr>" + "".join("<td>" + escape(v) + "</td>" for v in [label] + row) + "</tr>")
+        caption = "Display preview: %s of %s rows, %s of %s columns" % (len(payload["rows"]), payload["total_rows"], len(payload["columns"]), payload["total_cols"])
+        html = "<table><caption>" + caption + "</caption><thead><tr>" + headers + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+        return {"text/plain": payload["text"], "text/html": html,
+                "application/vnd.quanta.dataframe+json": payload}
+    if kind == "ndarray":
+        return {"text/plain": payload["text"], "application/json": payload,
+                "application/vnd.quanta.ndarray+json": payload}
+    if kind == "objectcard":
+        card = {k: message[k] for k in ("title", "subtitle", "fields", "badges", "text")}
+        return {"text/plain": card["text"], "application/json": card,
+                "application/vnd.quanta.objectcard+json": card}
+    if kind == "jsontree":
+        return {"text/plain": message["text"], "application/json": message["data"]}
+    return None
 
 def emit_result(obj, name_hint):
     payload = dataframe_payload(obj, name=name_hint, max_cols=40, head_tail=True)

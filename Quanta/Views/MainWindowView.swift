@@ -153,6 +153,7 @@ struct DetailSplitView: View {
         VStack(spacing: 0) {
             EditorAreaView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
                 .layoutPriority(1)
             if app.showConsole {
                 PanelResizeHandle(height: $app.consoleHeight,

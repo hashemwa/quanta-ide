@@ -5,7 +5,6 @@ struct VariablesPanel: View {
     @EnvironmentObject var app: AppState
     @State private var selected: String?
     @State private var query = ""
-    @State private var showingSearch = false
     @State private var typeFilter = "All Types"
     @State private var sortByType = false
     @State private var inspected: VariableInfo?
@@ -21,32 +20,6 @@ struct VariablesPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelBar(height: DS.Bar.primary) {
-                IconMenu(typeFilter == "All Types" ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill",
-                         help: "Filter and Sort Variables", glass: true) {
-                    Picker("Type", selection: $typeFilter) {
-                        Text("All Types").tag("All Types")
-                        ForEach(Array(Set(app.variables.map(\.typeName))).sorted(), id: \.self) { Text($0).tag($0) }
-                    }.pickerStyle(.inline)
-                    Divider()
-                    Picker("Sort", selection: $sortByType) {
-                        Text("Name").tag(false)
-                        Text("Type").tag(true)
-                    }.pickerStyle(.inline)
-                }
-                IconButton("magnifyingglass", help: "Search Variables", isActive: showingSearch, glass: true) {
-                    showingSearch.toggle()
-                    if !showingSearch { query = "" }
-                }
-                IconButton("arrow.clockwise", help: "Refresh Variables", glass: true) { app.refreshVariables() }
-                Spacer(minLength: DS.Space.s)
-            }
-            if showingSearch {
-                PanelSearchBar(prompt: "Find variables", text: $query) {
-                    query = ""
-                    showingSearch = false
-                }
-            }
             if typeFilter != "All Types" {
                 PanelBar {
                     Text(typeFilter).font(.caption).foregroundStyle(.secondary)
@@ -66,7 +39,7 @@ struct VariablesPanel: View {
                     VariableRowView(variable: variable, changed: app.changedVariables.contains(variable.name), inspect: { inspected = variable })
                         .tag(variable.name)
                 }
-                .listStyle(.inset)
+                .listStyle(.sidebar)
                 .overlay {
                     if visibleVariables.isEmpty {
                         ContentUnavailableView {
@@ -78,10 +51,22 @@ struct VariablesPanel: View {
                         }
                     }
                 }
-                Text(visibleVariables.count == app.variables.count
-                     ? "\(app.variables.count) variables"
-                     : "\(visibleVariables.count) of \(app.variables.count) variables")
-                    .font(.caption).foregroundStyle(.secondary).padding(DS.Space.s)
+            }
+            PanelBar(height: DS.Bar.footer) {
+                IconButton("arrow.clockwise", help: "Refresh Variables", glass: true) { app.refreshVariables() }
+                FilterField(text: $query, prompt: "Filter Variables")
+                IconMenu(typeFilter == "All Types" ? "ellipsis" : "line.3.horizontal.decrease.circle.fill",
+                         help: "Filter and Sort Variables", glass: true) {
+                    Picker("Type", selection: $typeFilter) {
+                        Text("All Types").tag("All Types")
+                        ForEach(Array(Set(app.variables.map(\.typeName))).sorted(), id: \.self) { Text($0).tag($0) }
+                    }.pickerStyle(.inline)
+                    Divider()
+                    Picker("Sort", selection: $sortByType) {
+                        Text("Name").tag(false)
+                        Text("Type").tag(true)
+                    }.pickerStyle(.inline)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

@@ -66,6 +66,8 @@ struct ScrollingCodeEditor: NSViewRepresentable {
         if let documentID { EditorRegistry.shared.register(tv, for: documentID) }
 
         let scroll = NSScrollView()
+        scroll.wantsLayer = true
+        scroll.layer?.masksToBounds = true
         scroll.documentView = tv
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = !wrapsLines

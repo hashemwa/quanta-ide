@@ -35,6 +35,7 @@ final class AppState: ObservableObject {
     private var isNavigatingHistory = false
     @Published var variables: [VariableInfo] = []
     let console = ConsoleModel()
+    let plots = PlotHistory()
     @Published var kernelStatus: KernelStatus = .stopped
     let selection = CellSelection()
     var selectedCellID: UUID? {
@@ -848,11 +849,12 @@ final class AppState: ObservableObject {
         if document.url != nil && document.isDirty {
             guard save(document) else { return }
         }
-        revealConsole(force: true)
+        if bottomPane == .plots { setConsoleVisible(true) } else { revealConsole(force: true) }
         appendConsole(.input, "run \(document.displayName)")
+        let plotOrigin = plots.beginRun(document: document)
         kernel.execute(code: document.text, filename: document.url?.path) { [weak self] message in
             guard let self else { return true }
-            return self.handleConsoleExecution(message)
+            return self.handleConsoleExecution(message, plotOrigin: plotOrigin)
         }
     }
 
@@ -864,13 +866,14 @@ final class AppState: ObservableObject {
             return
         }
         appendConsole(.input, code)
+        let plotOrigin = plots.beginRun(document: nil)
         kernel.execute(code: code) { [weak self] message in
             guard let self else { return true }
-            return self.handleConsoleExecution(message)
+            return self.handleConsoleExecution(message, plotOrigin: plotOrigin)
         }
     }
 
-    private func handleConsoleExecution(_ message: [String: Any]) -> Bool {
+    private func handleConsoleExecution(_ message: [String: Any], plotOrigin: PlotOrigin) -> Bool {
         switch message["type"] as? String {
         case "stream":
             let name = message["name"] as? String ?? "stdout"
@@ -887,19 +890,13 @@ final class AppState: ObservableObject {
                 ?? ((message["payload"] as? [String: Any])?["text"] as? String)
                 ?? ""
             appendConsole(.result, text)
-        case "plotlyhtml":
-            break
-        case "display":
-            if let b64 = message["data"] as? String,
-               let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) {
-                let dir = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("QuantaPlots", isDirectory: true)
-                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                let file = dir.appendingPathComponent("plot-\(UUID().uuidString.prefix(8)).png")
-                if (try? data.write(to: file)) != nil {
-                    NSWorkspace.shared.open(file)
-                }
+        case "rich":
+            if let bundle = message["mime_bundle"] as? [String: Any] {
+                appendConsole(.result, RichOutput.text(bundle["text/plain"]))
+                plots.consume(message, origin: plotOrigin)
             }
+        case "plotlyhtml", "display":
+            plots.consume(message, origin: plotOrigin)
         case "error":
             let ename = message["ename"] as? String ?? "Error"
             let evalue = message["evalue"] as? String ?? ""
@@ -949,14 +946,23 @@ final class AppState: ObservableObject {
         cell.isQueued = false
         cell.runStartedAt = Date()
         document.isDirty = true
+        let plotOrigin = plots.beginRun(document: document, cell: cell)
         kernel.execute(code: cell.source) { [weak self, weak cell, weak document] message in
             guard let self else { return true }
             guard let cell else {
                 let type = message["type"] as? String
                 return type == "done" || type == "dead"
             }
-            return self.handleCellExecution(message, cell: cell, document: document,
-                                            advance: advance, completion: completion)
+            let finished = self.handleCellExecution(message, cell: cell, document: document,
+                                                    advance: advance, completion: completion)
+            if let bundle = message["mime_bundle"] as? [String: Any], !cell.outputs.isEmpty {
+                cell.outputs[cell.outputs.count - 1].raw = RichOutput.raw(bundle, metadata: message["metadata"] as? [String: Any] ?? [:])
+            }
+            if ["display", "plotlyhtml", "rich"].contains(message["type"] as? String ?? ""),
+               let output = cell.outputs.last {
+                self.plots.record(output, origin: plotOrigin)
+            }
+            return finished
         }
     }
 
@@ -977,6 +983,11 @@ final class AppState: ObservableObject {
                let b64 = message["data"] as? String,
                let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) {
                 cell.outputs.append(CellOutput(kind: .image(data: data, image: NSImage(data: data))))
+            }
+        case "rich":
+            flushStreams(into: cell)
+            if let bundle = message["mime_bundle"] as? [String: Any] {
+                cell.outputs.append(CellOutput(kind: RichOutput.kind(bundle), raw: RichOutput.raw(bundle, metadata: message["metadata"] as? [String: Any] ?? [:])))
             }
         case "plotlyhtml":
             flushStreams(into: cell)

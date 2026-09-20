@@ -158,16 +158,7 @@ final class Notebook: ObservableObject {
                           traceback: tb.strippingANSI, frames: [])
         case "execute_result", "display_data":
             let data = dict["data"] as? [String: Any] ?? [:]
-            if let pngRaw = data["image/png"] {
-                let b64 = joinedText(pngRaw).replacingOccurrences(of: "\n", with: "")
-                if let imgData = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) {
-                    return .image(data: imgData, image: NSImage(data: imgData))
-                }
-            }
-            if let plain = data["text/plain"] {
-                return .executeResult(text: joinedText(plain).strippingANSI)
-            }
-            return .unsupported(mime: data.keys.sorted().first ?? "empty")
+            return RichOutput.kind(data)
         default:
             return .unsupported(mime: dict["output_type"] as? String ?? "unknown")
         }
@@ -246,6 +237,7 @@ final class Notebook: ObservableObject {
 
     private func serializeOutput(_ output: CellOutput, executionCount: Int?) -> [String: Any]? {
         if let raw = output.raw { return raw }
+        if let bundle = RichOutput.bundle(output) { return RichOutput.raw(bundle) }
         switch output.kind {
         case .stream(let name, let text):
             return ["output_type": "stream", "name": name,
@@ -275,8 +267,10 @@ final class Notebook: ObservableObject {
             return textResult(payload.text, executionCount: executionCount)
         case .objectCard(let payload):
             return textResult(payload.text, executionCount: executionCount)
-        case .unsupported:
-            return nil
+        case .rich(let bundle):
+            return RichOutput.raw(bundle)
+        case .unsupported(let mime):
+            return textResult("Unsupported output: \(mime)", executionCount: executionCount)
         }
     }
 

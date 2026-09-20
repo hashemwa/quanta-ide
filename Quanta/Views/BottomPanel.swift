@@ -5,6 +5,8 @@ struct BottomPanel: View {
     @EnvironmentObject private var app: AppState
     @ObservedObject private var terminal = AppState.shared.terminal
 
+    @State private var plotSelection: UUID?
+    @State private var plotAllFiles = false
     @State private var consoleQuery = ""
     @State private var consoleScope = "All"
     @State private var showingSearch = false
@@ -12,6 +14,7 @@ struct BottomPanel: View {
     private static let paneSegments: [IconSegmentedControl<BottomPane>.Segment] = [
         .init(value: .console, title: BottomPane.console.rawValue, help: "Console"),
         .init(value: .terminal, title: BottomPane.terminal.rawValue, help: "Terminal"),
+        .init(value: .plots, title: BottomPane.plots.rawValue, help: "Plots"),
     ]
 
     var body: some View {
@@ -33,7 +36,9 @@ struct BottomPanel: View {
                     }
                     IconButton("arrow.clockwise", help: "Restart Terminal Session…", glass: true) { app.newTerminalSession() }
                     IconButton("trash", help: "Clear Terminal Scrollback", glass: true) { terminal.clear() }
-                } else {
+                } else if app.bottomPane == .plots {
+                    PlotsToolbar(history: app.plots, selection: $plotSelection, allFiles: $plotAllFiles)
+                } else if app.bottomPane == .console {
                     if consoleScope != "All" {
                         Text(consoleScope).font(.caption).foregroundStyle(.secondary)
                     }
@@ -58,6 +63,7 @@ struct BottomPanel: View {
                 }
             }
             ZStack {
+                if app.bottomPane == .plots { PlotsPanel(history: app.plots, selection: $plotSelection, allFiles: $plotAllFiles) }
                 ConsoleView(query: consoleQuery, scope: consoleScope)
                     .opacity(app.bottomPane == .console ? 1 : 0)
                     .allowsHitTesting(app.bottomPane == .console)
@@ -68,8 +74,13 @@ struct BottomPanel: View {
                     .accessibilityHidden(app.bottomPane != .terminal)
             }
         }
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipped()
         .onAppear { _ = terminal.webView() }
-        .onChange(of: app.bottomPane) { _, pane in if pane == .terminal { app.showTerminal() } }
+        .onChange(of: app.bottomPane) { _, pane in
+            if pane == .terminal { app.showTerminal() }
+            if pane == .plots { app.showPlots() }
+        }
     }
 
     @ViewBuilder

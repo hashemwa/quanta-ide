@@ -13,10 +13,12 @@ struct PlotlyFigureView: View {
     @StateObject private var controller = PlotlyController()
     @State private var panMode = false
 
+    private var rendererPath: String { PlotlyWebView.availableScriptPath(jsPath) ?? "" }
+
     var body: some View {
-        if !jsPath.isEmpty, FileManager.default.fileExists(atPath: jsPath) {
+        if !rendererPath.isEmpty {
             VStack(alignment: .leading, spacing: DS.Space.xxs) {
-                PlotlyWebView(html: html, jsPath: jsPath, cacheKey: cacheKey,
+                PlotlyWebView(html: html, jsPath: rendererPath, cacheKey: cacheKey,
                               controller: controller)
                     .frame(maxWidth: DS.Layout.outputMaxWidth)
                     .frame(height: CGFloat(height) + 16)
@@ -66,7 +68,7 @@ struct PlotlyFigureView: View {
             IconButton("doc.on.doc", help: "Copy Image") { controller.copyPNG() }
                 .disabled(controller.isExporting)
             IconButton("macwindow.badge.plus", help: "Open in separate window (⌥⌘P)") {
-                PlotWindow.open(html: html, jsPath: jsPath)
+                PlotWindow.open(html: html, jsPath: rendererPath)
             }
             IconButton("square.and.arrow.down", help: "Save as PNG…") {
                 controller.savePNG()
@@ -192,6 +194,22 @@ struct PlotlyWebView: NSViewRepresentable {
     private static var viewCache: [UUID: WKWebView] = [:]
     private static var viewOrder: [UUID] = []
 
+    static func availableScriptPath(_ path: String) -> String? {
+        if !path.isEmpty, FileManager.default.isReadableFile(atPath: path) { return path }
+        return RichOutput.bundledPlotlyPath
+    }
+
+    static func document(html: String, script: String, fillsWindow: Bool = false) -> String {
+        """
+        <!doctype html><html><head><meta charset="utf-8">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; base-uri 'none'; form-action 'none'">
+        <style>
+        html, body { margin: 0; padding: 0; background: transparent; }
+        \(fillsWindow ? ".plotly-graph-div { height: 100vh !important; width: 100vw !important; }" : "")
+        </style><script>\(script.replacingOccurrences(of: "</script", with: "<\\/script"))</script></head><body>\(html)</body></html>
+        """
+    }
+
     static func script(at path: String) -> String? {
         if let cached = scriptCache[path] { return cached.isEmpty ? nil : cached }
         let script = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
@@ -211,6 +229,7 @@ struct PlotlyWebView: NSViewRepresentable {
 
     static func makeConfiguration() -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
         let featuresSel = NSSelectorFromString("_features")
         let setSel = NSSelectorFromString("_setEnabled:forFeature:")
         guard WKPreferences.responds(to: featuresSel),
@@ -229,21 +248,21 @@ struct PlotlyWebView: NSViewRepresentable {
         return configuration
     }
 
+    func makeCoordinator() -> RichOutputView.Coordinator { RichOutputView.Coordinator() }
+
     func makeNSView(context: Context) -> WKWebView {
         if let cached = Self.viewCache[cacheKey], cached.superview == nil {
             Self.viewOrder.removeAll { $0 == cacheKey }
             Self.viewOrder.append(cacheKey)
             controller?.webView = cached
+            cached.navigationDelegate = context.coordinator
             return cached
         }
         let webView = NotebookEmbeddedWebView(frame: .zero, configuration: Self.makeConfiguration())
+        webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
         let script = Self.script(at: jsPath) ?? ""
-        let document = """
-        <!doctype html><html><head><meta charset="utf-8"><style>
-        html, body { margin: 0; padding: 0; background: transparent; }
-        </style><script>\(script)</script></head><body>\(html)</body></html>
-        """
+        let document = Self.document(html: html, script: script)
         webView.loadHTMLString(document, baseURL: nil)
         Self.viewCache[cacheKey] = webView
         Self.viewOrder.removeAll { $0 == cacheKey }
@@ -344,19 +363,16 @@ enum PlotWindow {
         }
     }
     private static let closeDelegate = CloseDelegate()
+    private static let navigationDelegate = RichOutputView.Coordinator()
 
     private static let defaultSize = NSSize(width: 960, height: 640)
 
     static func open(html: String, jsPath: String) {
         let script = PlotlyWebView.script(at: jsPath) ?? ""
-        let document = """
-        <!doctype html><html><head><meta charset="utf-8"><style>
-        html, body { margin: 0; padding: 0; background: transparent; }
-        .plotly-graph-div { height: 100vh !important; width: 100vw !important; }
-        </style><script>\(script)</script></head><body>\(html)</body></html>
-        """
+        let document = PlotlyWebView.document(html: html, script: script, fillsWindow: true)
         let webView = PlotZoomableWebView(frame: NSRect(origin: .zero, size: defaultSize),
                                           configuration: PlotlyWebView.makeConfiguration())
+        webView.navigationDelegate = navigationDelegate
         webView.setValue(false, forKey: "drawsBackground")
         webView.loadHTMLString(document, baseURL: nil)
         present(webView, size: defaultSize)

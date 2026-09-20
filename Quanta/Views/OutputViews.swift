@@ -66,6 +66,11 @@ struct OutputItemView: View {
         case .objectCard(let payload):
             ObjectCardView(payload: payload)
 
+        case .rich(let bundle):
+            RichOutputView(bundle: bundle)
+                .frame(height: DS.Layout.richOutputHeight)
+                .accessibilityLabel("Rich notebook output")
+
         case .unsupported(let mime):
             Label("Rich output (\(mime)) — not rendered yet, preserved on save",
                   systemImage: "doc.richtext")

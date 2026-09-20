@@ -11,6 +11,7 @@ private func resizePTY(_ master: Int32, _ rows: UInt16, _ columns: UInt16)
 enum BottomPane: String, CaseIterable {
     case console = "Console"
     case terminal = "Terminal"
+    case plots = "Plots"
 }
 
 final class TerminalSession: NSObject, ObservableObject {

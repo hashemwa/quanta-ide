@@ -51,6 +51,10 @@ enum DS {
         static let tabMaxWidth: CGFloat = 220
         static let outputMaxWidth: CGFloat = 760
         static let outputMaxHeight: CGFloat = 620
+        static let richOutputHeight: CGFloat = 300
+        static let plotListWidth: CGFloat = 190
+        static let plotThumbnailHeight: CGFloat = 64
+        static let plotsDefaultHeight: CGFloat = 360
         static let plotControlsMinWidth: CGFloat = 96
         static let consoleMinHeight: CGFloat = 100
         static let consoleDefaultHeight: CGFloat = 180

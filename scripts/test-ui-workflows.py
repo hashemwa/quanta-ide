@@ -10,7 +10,8 @@ KERNEL = pathlib.Path(__file__).resolve().parents[1] / "Quanta/Resources/quanta_
 
 def exchange(messages):
     wire = "".join(json.dumps(message) + "\n" for message in messages + [{"op": "shutdown"}])
-    result = subprocess.run([sys.executable, str(KERNEL)], input=wire, capture_output=True, text=True, timeout=30)
+    command = [sys.executable] + (["-S"] if sys.flags.no_site else []) + [str(KERNEL)]
+    result = subprocess.run(command, input=wire, capture_output=True, text=True, timeout=30)
     if result.returncode:
         raise AssertionError(result.stderr)
     decoded = []
@@ -67,6 +68,44 @@ class InspectionTests(unittest.TestCase):
         self.assertEqual([r[0] for r in results["original"]["payload"]["rows"]], ["20", "3", "1", "8"])
         self.assertEqual(results["empty"]["payload"]["total_rows"], 0)
         self.assertEqual(results["invalid"]["type"], "df_error")
+
+
+class RichOutputTests(unittest.TestCase):
+    def test_mime_bundle_and_metadata_are_preserved(self):
+        messages = exchange([{"id": "rich", "op": "execute", "code": "class Rich:\n    def _repr_mimebundle_(self):\n        return ({'text/html': '<b>hello</b>', 'application/json': {'x': [1, 2]}, 'application/vnd.example+json': {'keep': True}}, {'text/html': {'isolated': True}})\nRich()"}])
+        result = next(m for m in messages if m.get("type") == "rich")
+        self.assertEqual(result["mime_bundle"]["application/json"], {"x": [1, 2]})
+        self.assertIn("text/plain", result["mime_bundle"])
+        self.assertEqual(result["metadata"]["text/html"], {"isolated": True})
+
+    def test_svg_and_binary_jpeg_representations(self):
+        messages = exchange([{"id": "rich", "op": "execute", "code": "class Rich:\n    def _repr_svg_(self):\n        return '<svg xmlns=\"http://www.w3.org/2000/svg\"/>'\n    def _repr_jpeg_(self):\n        return b'jpeg-bytes'\nRich()"}])
+        result = next(m for m in messages if m.get("type") == "rich")
+        self.assertIn("image/svg+xml", result["mime_bundle"])
+        self.assertEqual(result["mime_bundle"]["image/jpeg"], "anBlZy1ieXRlcw==")
+
+    def test_dataframe_has_portable_table_and_native_snapshot(self):
+        try:
+            import pandas
+        except ImportError:
+            self.skipTest("pandas is not installed")
+        messages = exchange([{"id": "df", "op": "execute", "code": "import pandas as pd\npd.DataFrame({'name': ['<script>bad</script>']})"}])
+        result = next(m for m in messages if m.get("type") == "dataframe")
+        bundle = result["mime_bundle"]
+        self.assertIn("&lt;script&gt;", bundle["text/html"])
+        self.assertNotIn("<script>", bundle["text/html"])
+        self.assertEqual(bundle["application/vnd.quanta.dataframe+json"]["columns"], ["name"])
+
+    def test_plotly_retains_structured_data_without_kaleido(self):
+        try:
+            import plotly
+        except ImportError:
+            self.skipTest("plotly is not installed")
+        messages = exchange([{"id": "plot", "op": "execute", "code": "import plotly.graph_objects as go\ngo.Figure(data=[go.Scatter(x=[1, 2], y=[3, 4])])"}])
+        result = next(m for m in messages if m.get("type") == "plotlyhtml")
+        figure = result["mime_bundle"]["application/vnd.plotly.v1+json"]
+        self.assertEqual(figure["data"][0]["y"], [3, 4])
+        self.assertIn("text/plain", result["mime_bundle"])
 
 
 class NotebookCompatTests(unittest.TestCase):

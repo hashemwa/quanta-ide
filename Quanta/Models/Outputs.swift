@@ -185,6 +185,7 @@ struct CellOutput: Identifiable {
         case ndarray(NDArrayPayload)
         case jsonTree(JSONTreePayload)
         case objectCard(ObjectCardPayload)
+        case rich([String: Any])
         case unsupported(mime: String)
     }
 

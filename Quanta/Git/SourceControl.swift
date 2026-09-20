@@ -4,8 +4,8 @@ import Foundation
 
 enum SidebarPane: String, CaseIterable {
     case files
-    case search
     case sourceControl
+    case search
 
     var title: String {
         switch self {

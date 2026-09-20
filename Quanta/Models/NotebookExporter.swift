@@ -71,6 +71,14 @@ enum NotebookExporter {
     }
 
     private static func outputHTML(_ output: CellOutput) -> String {
+        if let bundle = RichOutput.bundle(output) {
+            if let figure = bundle[RichOutput.plotlyMIME] as? [String: Any],
+               let document = RichOutput.plotlyDocument(figure) {
+                return "<iframe sandbox=\"allow-scripts\" referrerpolicy=\"no-referrer\" style=\"width:100%;height:500px;border:0\" srcdoc=\"\(RichOutput.escape(document))\"></iframe>\n"
+            }
+            let document = RichOutput.safeDocument(RichOutput.staticHTML(bundle))
+            return "<iframe sandbox=\"\" referrerpolicy=\"no-referrer\" style=\"width:100%;height:360px;border:0\" srcdoc=\"\(RichOutput.escape(document))\"></iframe>\n"
+        }
         switch output.kind {
         case .stream(_, let text), .executeResult(let text):
             return "<pre class=\"out\">\(escape(String(text.prefix(20_000))))</pre>\n"
@@ -90,8 +98,10 @@ enum NotebookExporter {
             return "<pre class=\"out\">\(escape(payload.text))</pre>\n"
         case .objectCard(let payload):
             return "<pre class=\"out\">\(escape(payload.text))</pre>\n"
-        case .unsupported:
-            return ""
+        case .rich(let bundle):
+            return "<pre class=\"out\">\(escape(RichOutput.text(bundle["text/plain"])))</pre>\n"
+        case .unsupported(let mime):
+            return "<pre class=\"out\">Unsupported output: \(escape(mime))</pre>\n"
         }
     }
 

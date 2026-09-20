@@ -128,6 +128,7 @@ struct QuantaCommands: Commands {
                 .keyboardShortcut("`", modifiers: .control)
             Button("New Terminal Session…") { app.newTerminalSession() }
             Button("Show Console") { app.showPythonConsole() }
+            Button("Show Plots") { app.showPlots() }
         }
         CommandGroup(replacing: .newItem) {
             Button("New Notebook") { app.newNotebook() }
