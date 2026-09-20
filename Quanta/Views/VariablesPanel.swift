@@ -28,11 +28,7 @@ struct VariablesPanel: View {
                 }
             }
             if app.variables.isEmpty {
-                ContentUnavailableView {
-                    Label("No Variables", systemImage: "cube.transparent")
-                } description: {
-                    Text("Run some code to populate the kernel namespace.")
-                }
+                ContentUnavailableView("No Variables", systemImage: "cube.transparent")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(visibleVariables, selection: $selected) { variable in

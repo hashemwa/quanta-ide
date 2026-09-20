@@ -61,8 +61,7 @@ struct PlotsPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             if records.isEmpty {
-                ContentUnavailableView("No Plots", systemImage: "chart.xyaxis.line",
-                                       description: Text("Run code that produces a figure, or choose All Files and Console."))
+                ContentUnavailableView("No Plots", systemImage: "chart.xyaxis.line")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HStack(spacing: 0) {
