@@ -800,7 +800,7 @@ def run_code(msg):
         except Exception:
             pass
         emit({"id": _current_id, "type": "done", "status": status,
-              "execution_count": _exec_count})
+              "execution_count": _exec_count, "cwd": execution_directory()})
         _current_id = None
 
 def safe_repr(v, limit=80, short=False):
@@ -1093,7 +1093,7 @@ def _handle_internal_error(op, msg):
         emit({"id": msg.get("id"), "type": "error", "ename": "KernelInternalError",
               "evalue": "bridge error while executing", "traceback": err})
         emit({"id": msg.get("id"), "type": "done", "status": "error",
-              "execution_count": _exec_count})
+              "execution_count": _exec_count, "cwd": execution_directory()})
     elif op == "vars":
         emit({"id": msg.get("id"), "type": "vars", "variables": []})
     elif op == "variable":
@@ -1121,6 +1121,12 @@ def _plotly_js_path():
     except Exception:
         pass
     return None
+
+def execution_directory():
+    try:
+        return os.getcwd()
+    except OSError:
+        return None
 
 def main():
     signal.signal(signal.SIGINT, _sigint_handler)

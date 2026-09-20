@@ -244,6 +244,9 @@ struct QuantaCommands: Commands {
                 .disabled(app.activeDocument?.kind != .notebook)
         }
         CommandMenu("Run") {
+            Button("Trust Workspace…") { app.requestWorkspaceTrust() }
+                .disabled(app.workspace == nil || app.isWorkspaceTrusted)
+            Divider()
             Button("Run Cell") { app.runSelectedCell() }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!app.activeDocumentIsRunnable)

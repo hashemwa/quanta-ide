@@ -34,6 +34,24 @@ struct MainWindowView: View {
             CommandPalette(mode: mode).environmentObject(app)
         }
         .onAppear { app.bootstrap() }
+        .alert("Trust this workspace?", isPresented: Binding(
+            get: { app.workspaceTrustRequest != nil },
+            set: { if !$0 { app.workspaceTrustRequest = nil } }
+        ), presenting: app.workspaceTrustRequest) { url in
+            Button("Trust and Enable Python") { app.trustWorkspace(url) }
+            Button("Browse Without Running", role: .cancel) { app.workspaceTrustRequest = nil }
+        } message: { url in
+            Text("Trusting \(url.path) allows Quanta to probe and launch its Python environments and run code. Only trust folders whose contents and source you trust.")
+        }
+        .alert("Change Python session?", isPresented: Binding(
+            get: { app.kernelTransition != nil },
+            set: { if !$0 { app.kernelTransition = nil } }
+        ), presenting: app.kernelTransition) { transition in
+            Button("Restart in Workspace", role: .destructive) { app.applyKernelTransition(transition) }
+            Button("Keep Current Session", role: .cancel) { app.keepKernelSession() }
+        } message: { transition in
+            Text("Restarting clears all Python variables and stops current work.\n\nInterpreter: \(transition.python)\nDirectory: \(transition.workspace?.path ?? FileManager.default.homeDirectoryForCurrentUser.path)\n\nThe current session uses: \(app.executionDirectoryLabel)")
+        }
         .onChange(of: colorScheme) { _, _ in app.pushAppearance() }
         .onChange(of: app.sidebarRevealRequest) { _, _ in
             if columnVisibility == .detailOnly {
@@ -291,6 +309,16 @@ struct KernelStatusMenu: View {
 
     var body: some View {
         Menu {
+            if !app.isWorkspaceTrusted {
+                Text("Restricted Workspace")
+                Button("Trust Workspace…") { app.requestWorkspaceTrust() }
+                Divider()
+            }
+            if app.kernel.isRunning {
+                Text("Interpreter: \(app.kernel.executable ?? "Unknown")")
+                Text("Directory: \(app.executionDirectoryLabel)")
+                Divider()
+            }
             ForEach(Self.sections, id: \.0) { kind, title in
                 let envs = app.environments.filter { $0.kind == kind }
                 if !envs.isEmpty {
@@ -371,14 +399,15 @@ struct KernelStatusMenu: View {
     }
 
     private var title: String {
+        if !app.isWorkspaceTrusted { return "Restricted Workspace" }
         let name = app.environmentName
         let version = app.kernelPythonVersion
             ?? app.pythonPath.flatMap { app.environmentVersions[$0] }
         let base: String
         if let version, !version.isEmpty {
-            base = "\(name) — Python \(version)"
+            base = "\(name) — Python \(version)" + directorySuffix
         } else {
-            base = name
+            base = name + directorySuffix
         }
         switch app.kernelStatus {
         case .idle: return base
@@ -393,10 +422,16 @@ struct KernelStatusMenu: View {
         var parts: [String] = []
         if let version = app.kernelPythonVersion { parts.append("Python \(version)") }
         parts.append(app.kernelStatus.label)
+        parts.append("Directory: \(app.executionDirectoryLabel)")
         if let path = app.pythonPath {
             parts.append((path as NSString).abbreviatingWithTildeInPath)
         }
         return parts.joined(separator: " · ")
+    }
+
+    private var directorySuffix: String {
+        guard app.kernelUsesDifferentDirectory else { return "" }
+        return " · Session: \(app.kernel.workingDirectory?.lastPathComponent ?? "Unknown")"
     }
 
     private func rowTitle(_ env: PythonEnvironment) -> String {

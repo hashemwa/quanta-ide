@@ -196,6 +196,10 @@ private struct VariableInspector: View {
     private func load() {
         root = nil
         error = nil
+        guard app.isWorkspaceTrusted, app.kernelTransition == nil else {
+            error = "Trust this workspace and choose a Python session before inspecting variables."
+            return
+        }
         guard app.kernelStatus == .idle else { error = "Wait for the kernel to finish, then refresh."; return }
         let token = UUID()
         request = token

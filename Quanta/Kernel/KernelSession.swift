@@ -26,6 +26,8 @@ final class KernelSession {
     var onStatusChange: ((KernelStatus) -> Void)?
     var onOrphanMessage: (([String: Any]) -> Void)?
     private(set) var readyInfo: [String: Any]?
+    private(set) var executable: String?
+    private(set) var workingDirectory: URL?
 
     private var process: Process?
     private var stdinHandle: FileHandle?
@@ -47,6 +49,8 @@ final class KernelSession {
         let gen = generation
         status = .starting
         readyInfo = nil
+        executable = python
+        self.workingDirectory = workingDirectory
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: python)
@@ -220,6 +224,13 @@ final class KernelSession {
     }
 
     private func processMessage(_ msg: [String: Any]) {
+        if let type = msg["type"] as? String, type == "ready" || type == "done" {
+            if let cwd = msg["cwd"] as? String {
+                workingDirectory = URL(fileURLWithPath: cwd)
+            } else if msg["cwd"] is NSNull {
+                workingDirectory = nil
+            }
+        }
         if msg["type"] as? String == "ready" {
             readyInfo = msg
             onOrphanMessage?(msg)

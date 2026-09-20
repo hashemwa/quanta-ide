@@ -2,6 +2,7 @@ import json
 import pathlib
 import subprocess
 import sys
+import tempfile
 import unittest
 
 KERNEL = pathlib.Path(__file__).resolve().parents[1] / "Quanta/Resources/quanta_kernel.py"
@@ -22,6 +23,17 @@ def exchange(messages):
 
 
 class InspectionTests(unittest.TestCase):
+    def test_execution_reports_directory_after_chdir_and_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            messages = exchange([
+                {"id": "move", "op": "execute", "code": f"import os; os.chdir({directory!r})"},
+                {"id": "error", "op": "execute", "code": "raise ValueError('test')"},
+            ])
+            completed = {m["id"]: m for m in messages if m.get("type") == "done"}
+            self.assertEqual(pathlib.Path(completed["move"]["cwd"]).resolve(), pathlib.Path(directory).resolve())
+            self.assertEqual(completed["error"]["cwd"], completed["move"]["cwd"])
+            self.assertEqual(completed["error"]["status"], "error")
+
     def test_nested_variable_preview_and_cycle_limit(self):
         messages = exchange([
             {"id": "setup", "op": "execute", "code": "nested = {'scores': [1, {'value': 7}]}\ncycle = []\ncycle.append(cycle)"},

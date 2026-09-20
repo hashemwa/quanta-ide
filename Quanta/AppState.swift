@@ -74,6 +74,8 @@ final class AppState: ObservableObject {
     }
     private lazy var consoleUserHidden = !showConsole
     @Published var consoleRevealPending = false
+    @Published var workspaceTrustRequest: URL?
+    @Published var kernelTransition: KernelTransition?
     @Published var pythonPath: String?
     @Published var kernelBanner = "No kernel"
     @Published var environments: [PythonEnvironment] = []
@@ -152,8 +154,10 @@ final class AppState: ObservableObject {
     }
 
     private func probeVersions() {
+        guard isWorkspaceTrusted else { return }
         for env in environments
-        where environmentVersions[env.executable] == nil
+        where WorkspaceTrust.allows(env, workspace: workspace?.rootURL)
+            && environmentVersions[env.executable] == nil
             && !versionProbesInFlight.contains(env.executable) {
             versionProbesInFlight.insert(env.executable)
             let executable = env.executable
@@ -179,12 +183,24 @@ final class AppState: ObservableObject {
     }
 
     func startKernel() {
+        guard isWorkspaceTrusted, kernelTransition == nil else { return }
         guard let script = kernelScriptURL() else {
             appendConsole(.system, "Internal error: quanta_kernel.py missing from the app bundle.")
             return
         }
         refreshEnvironments()
-        let chosen = pythonPath ?? PythonLocator.preferred(from: environments)?.executable
+        let allowed = environments.filter { WorkspaceTrust.allows($0, workspace: workspace?.rootURL) }
+        let chosen: String?
+        if let selected = pythonPath {
+            chosen = allowed.first { $0.executable == selected }?.executable
+            if chosen == nil {
+                kernelBanner = "Interpreter unavailable"
+                userNotice = "The selected Python interpreter is unavailable or not trusted in this workspace. Choose an interpreter from the kernel menu."
+                return
+            }
+        } else {
+            chosen = PythonLocator.preferred(from: allowed)?.executable
+        }
         guard let python = chosen else {
             kernelBanner = "No Python found"
             appendConsole(.system, "No Python 3 interpreter found. Install one (python.org, Homebrew, or conda) and pick it from the kernel menu.")
@@ -245,6 +261,7 @@ final class AppState: ObservableObject {
     }
 
     func restartKernel(confirm: Bool = true) {
+        guard allowExecution() else { return }
         if confirm, !variables.isEmpty,
            !QuantaDefaults.store.bool(forKey: "QuantaSuppressRestartConfirm") {
             let alert = NSAlert()
@@ -340,10 +357,14 @@ final class AppState: ObservableObject {
     }
 
     func selectPython(_ path: String) {
-        QuantaDefaults.store.set(path, forKey: PythonLocator.defaultsKey)
-        pythonPath = path
-        cancelPendingRunAll()
-        restartKernel(confirm: false)
+        guard allowExecution() else { return }
+        let transition = KernelTransition(workspace: workspace?.rootURL, python: path,
+                                          rememberInterpreter: true)
+        if kernel.isRunning {
+            kernelTransition = transition
+        } else {
+            applyKernelTransition(transition)
+        }
     }
 
     func choosePythonManually() {
@@ -484,14 +505,14 @@ final class AppState: ObservableObject {
         workspaceWatcher = WorkspaceWatcher(url: url) { [weak self] in
             self?.refreshWorkspace()
         }
+        kernelTransition = nil
+        workspaceTrustRequest = nil
         refreshEnvironments()
-        if let wsEnv = environments.first(where: { $0.kind == .workspace }),
-           pythonPath != wsEnv.executable {
-            appendConsole(.system, "Workspace environment detected (\(wsEnv.name)) — switching kernel.")
-            pythonPath = wsEnv.executable
-            restartKernel(confirm: false)
-        } else if !kernel.isRunning {
-            startKernel()
+        if isWorkspaceTrusted {
+            synchronizeWorkspaceKernel()
+        } else {
+            workspaceTrustRequest = url
+            appendConsole(.system, "Restricted workspace: Python probing and execution are disabled until you trust this folder.")
         }
     }
 
@@ -817,6 +838,7 @@ final class AppState: ObservableObject {
     }
 
     func runScript(_ document: Document) {
+        guard allowExecution() else { return }
         startKernelIfNeeded()
         guard kernel.isRunning else {
             revealConsole(force: true)
@@ -835,6 +857,7 @@ final class AppState: ObservableObject {
     }
 
     func runConsoleInput(_ code: String) {
+        guard allowExecution() else { return }
         startKernelIfNeeded()
         guard kernel.isRunning else {
             appendConsole(.system, "Kernel is not running — cannot execute.")
@@ -902,6 +925,10 @@ final class AppState: ObservableObject {
             cell.isEditingMarkdown = false
             if advance { advanceSelection(after: cell, in: document) }
             completion?(true)
+            return
+        }
+        guard allowExecution() else {
+            completion?(false)
             return
         }
         startKernelIfNeeded()
@@ -1077,6 +1104,7 @@ final class AppState: ObservableObject {
     }
 
     func runAllCells(in document: Document) {
+        guard allowExecution() else { return }
         guard let notebook = document.notebook,
               !notebook.cells.contains(where: { $0.isRunning }) else { return }
         notebook.cells.forEach { $0.isQueued = $0.cellType == .code }
@@ -1173,6 +1201,7 @@ final class AppState: ObservableObject {
     }
 
     private func runCellSequence(_ cells: [NotebookCell], in document: Document) {
+        guard allowExecution() else { return }
         guard !cells.isEmpty, runningChainDocumentID == nil else { return }
         runningChainDocumentID = document.id
         runningChainCellIDs = cells.map(\.id)
@@ -1299,8 +1328,8 @@ final class AppState: ObservableObject {
             latexPending[key]?.append(completion)
             return
         }
-        guard kernel.isRunning else {
-            completion(.failure("kernel not running"))
+        guard isWorkspaceTrusted, kernelTransition == nil, kernel.isRunning else {
+            completion(.failure("Python rendering requires a trusted workspace and a running kernel"))
             return
         }
         latexPending[key] = [completion]
@@ -1338,7 +1367,7 @@ final class AppState: ObservableObject {
     }
 
     func refreshVariables() {
-        guard kernel.isRunning else { return }
+        guard isWorkspaceTrusted, kernelTransition == nil, kernel.isRunning else { return }
         kernel.request(["op": "vars"]) { [weak self] message in
             guard let self else { return true }
             switch message["type"] as? String {
@@ -1404,8 +1433,8 @@ final class AppState: ObservableObject {
     private func fetchDataFrame(name: String, offset: Int, limit: Int, filter: String = "",
                                 sortColumn: Int? = nil, ascending: Bool = true,
                                 completion: @escaping (DataFramePayload?, String?) -> Void) {
-        guard kernel.isRunning else {
-            completion(nil, "Kernel is not running")
+        guard isWorkspaceTrusted, kernelTransition == nil, kernel.isRunning else {
+            completion(nil, "Data inspection requires a trusted workspace and a running kernel")
             return
         }
         var request: [String: Any] = ["op": "df", "name": name, "offset": offset, "limit": limit,
@@ -1435,7 +1464,10 @@ final class AppState: ObservableObject {
 
     func requestCompletions(code: String, cursor: Int,
                             reply: @escaping ([String], Int, Int) -> Void) {
-        guard kernel.isRunning, kernelStatus == .idle else { return }
+        guard isWorkspaceTrusted, kernelTransition == nil, kernel.isRunning, kernelStatus == .idle else {
+            reply([], cursor, cursor)
+            return
+        }
         kernel.request(["op": "complete", "code": code, "cursor": cursor]) { message in
             switch message["type"] as? String {
             case "completions":
@@ -1453,7 +1485,7 @@ final class AppState: ObservableObject {
 
     func requestInspection(code: String, cursor: Int,
                            reply: @escaping (InspectionInfo?) -> Void) {
-        guard kernel.isRunning, kernelStatus == .idle else {
+        guard isWorkspaceTrusted, kernelTransition == nil, kernel.isRunning, kernelStatus == .idle else {
             reply(nil)
             return
         }
@@ -1859,6 +1891,7 @@ final class AppState: ObservableObject {
     }
 
     func restartAndRunAll() {
+        guard allowExecution() else { return }
         guard let document = activeDocument, document.kind == .notebook else { return }
         clearAllOutputs(in: document)
         pendingRunAllDocumentID = document.id
@@ -1876,7 +1909,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func cancelPendingRunAll() {
+    func cancelPendingRunAll() {
         pendingRunAllDocumentID = nil
     }
 
