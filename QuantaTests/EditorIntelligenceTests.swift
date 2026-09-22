@@ -4,17 +4,6 @@ import XCTest
 
 @MainActor
 final class EditorIntelligenceTests: XCTestCase {
-    func testCompletionReplacesTheWholeIdentifier() throws {
-        let document = Document(script: URL(fileURLWithPath: "/tmp/test.py"), text: "sample.transform")
-        let snapshot = try XCTUnwrap(LanguageDocument(document: document, root: URL(fileURLWithPath: "/tmp")))
-        let completion = try XCTUnwrap(CodeCompletion.parse(["label": "transform"], snapshot: snapshot, editorID: document.id, offset: 11))
-        XCTAssertEqual(completion.edit.range, NSRange(location: 7, length: 9))
-        let transaction = try XCTUnwrap(CompletionTransaction(source: document.text, completion: completion))
-        let text = NSMutableString(string: document.text)
-        for edit in transaction.edits.reversed() { text.replaceCharacters(in: edit.range, with: edit.text) }
-        XCTAssertEqual(text as String, document.text)
-    }
-
     func testImportInsertionAtCompletionStart() throws {
         var completion = CodeCompletion(label: "Path", range: NSRange(location: 0, length: 4))
         completion.additionalEdits = [CompletionEdit(range: NSRange(location: 0, length: 0), text: "from pathlib import Path\n")]

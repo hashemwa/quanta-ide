@@ -7,9 +7,20 @@
       buildImplicitDependencies = "YES"
       buildArchitectures = "Automatic">
       <PostActions>
-         <ExecutionAction ActionType="Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
-            <ActionContent title="Embed native analysis and data engines" scriptText="&quot;$SRCROOT/scripts/native-tools&quot; embed &quot;$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME&quot;&#10;">
-               <EnvironmentBuildable><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="17282778302AC6C600FE88DD" BuildableName="Quanta.app" BlueprintName="Quanta" ReferencedContainer="container:Quanta.xcodeproj"/></EnvironmentBuildable>
+         <ExecutionAction
+            ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
+            <ActionContent
+               title = "Embed native data engine"
+               scriptText = "&quot;$SRCROOT/scripts/native-tools&quot; embed &quot;$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME&quot;&#10;">
+               <EnvironmentBuildable>
+                  <BuildableReference
+                     BuildableIdentifier = "primary"
+                     BlueprintIdentifier = "17282778302AC6C600FE88DD"
+                     BuildableName = "Quanta.app"
+                     BlueprintName = "Quanta"
+                     ReferencedContainer = "container:Quanta.xcodeproj">
+                  </BuildableReference>
+               </EnvironmentBuildable>
             </ActionContent>
          </ExecutionAction>
       </PostActions>

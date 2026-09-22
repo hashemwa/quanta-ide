@@ -10,14 +10,11 @@ final class QuantaTextView: NSTextView {
     var onFocusChange: ((Bool) -> Void)?
     var onLayoutChange: (() -> Void)?
     var onEscape: (() -> Void)?
-    var languageEditorID: UUID?
     var completionProvider: ((String, Int, @escaping ([CodeCompletion]) -> Void) -> Void)?
     var inspectionProvider: ((String, Int, @escaping (InspectionInfo?) -> Void) -> Void)?
     var snippetRanges: [NSRange] = []
     private var completionWork: DispatchWorkItem?
     private var completionGeneration = 0
-    private var appliedDiagnostics: [LanguageDiagnostic] = []
-    private var diagnosticSource = ""
     private(set) var lastEditedRange = NSRange(location: 0, length: 0)
 
     override func shouldChangeText(in affectedCharRange: NSRange,
@@ -93,7 +90,6 @@ final class QuantaTextView: NSTextView {
     override func didChangeText() {
         completionWork?.cancel()
         completionGeneration += 1
-        applyLanguageDiagnostics([])
         super.didChangeText()
         if CompletionPanel.shared.isShowing(for: self) {
             CompletionPanel.shared.refresh(from: self)
@@ -195,56 +191,6 @@ final class QuantaTextView: NSTextView {
             DocumentationPopover.show(info, for: self)
         }
         return true
-    }
-
-    func applyLanguageDiagnostics(_ diagnostics: [LanguageDiagnostic]) {
-        guard diagnostics != appliedDiagnostics || (!diagnostics.isEmpty && diagnosticSource != string) else { return }
-        let full = NSRange(location: 0, length: string.utf16.count)
-        if !appliedDiagnostics.isEmpty {
-            layoutManager?.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
-            layoutManager?.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
-        }
-        textStorage?.beginEditing()
-        if !appliedDiagnostics.isEmpty { textStorage?.removeAttribute(.toolTip, range: full) }
-        appliedDiagnostics = diagnostics
-        diagnosticSource = diagnostics.isEmpty ? "" : string
-        for diagnostic in diagnostics {
-            var range = diagnostic.range
-            guard range.location >= 0, range.location < full.length else { continue }
-            range.length = min(max(1, range.length), full.length - range.location)
-            let color: NSColor = diagnostic.severity == 1 ? .systemRed : .systemOrange
-            (string as NSString).enumerateSubstrings(in: range, options: .byLines) { text, lineRange, _, _ in
-                guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                self.layoutManager?.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue,
-                                                           .underlineColor: color], forCharacterRange: lineRange)
-            }
-            textStorage?.addAttribute(.toolTip, value: diagnostic.message, range: range)
-        }
-        textStorage?.endEditing()
-    }
-
-    @objc func goToLanguageDefinition(_ sender: Any?) {
-        guard let id = languageEditorID else { return }
-        AppState.shared.language.definition(editorID: id, code: string, offset: selectedRange().location)
-    }
-
-    @objc func findLanguageReferences(_ sender: Any?) { AppState.shared.findReferences() }
-    @objc func renameLanguageSymbol(_ sender: Any?) { AppState.shared.renameSymbol() }
-
-    override func menu(for event: NSEvent) -> NSMenu? {
-        let menu = super.menu(for: event) ?? NSMenu()
-        if languageEditorID != nil {
-            menu.addItem(.separator())
-            let item = NSMenuItem(title: "Go to Definition", action: #selector(goToLanguageDefinition), keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-            for (title, action) in [("Find References", #selector(findLanguageReferences)), ("Rename Symbol…", #selector(renameLanguageSymbol))] {
-                let command = NSMenuItem(title: title, action: action, keyEquivalent: "")
-                command.target = self
-                menu.addItem(command)
-            }
-        }
-        return menu
     }
 
     override func insertNewline(_ sender: Any?) {

@@ -31,7 +31,6 @@ struct MainWindowView: View {
                                       ideal: DS.Layout.inspectorIdeal,
                                       max: DS.Layout.inspectorMax)
         }
-        .modifier(LanguageNavigationPresentation(service: app.language))
         .navigationTitle(windowTitle)
         .navigationSubtitle(windowSubtitle)
         .sheet(item: $app.paletteMode) { mode in
@@ -209,7 +208,6 @@ struct DetailSplitView: View {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: DS.Space.s) {
                     KernelStatusMenu()
-                    languageIssues
                 }
             }
             ToolbarSpacer(.flexible)
@@ -221,17 +219,9 @@ struct DetailSplitView: View {
             ToolbarItemGroup {
                 HistoryControls()
                 KernelStatusMenu()
-                languageIssues
                 splitButton
                 consoleButton
             }
-        }
-    }
-
-    @ViewBuilder
-    private var languageIssues: some View {
-        if let document = app.activeDocument, document.kind == .notebook || document.kind == .script {
-            LanguageIssuesView(service: app.language, document: document)
         }
     }
 

@@ -56,19 +56,10 @@ for supported commands and current output limitations.
 | ⌘. | Interrupt execution |
 | ⌃Space | Show completions |
 | ⇧Tab | Show documentation or call signature |
-| ⌃⌘J | Go to definition |
 
-Quanta bundles the native [ty](https://docs.astral.sh/ty/) analyzer. No Node.js, npm,
-or language-server installation is required. Open a trusted workspace, select its
-Python interpreter, and check **Settings → Editor → Python Analysis**.
-
-Suggestions appear while typing names, imports, and attributes, before running code.
-Completions include type details, function placeholders, and automatic imports;
-**Tab** advances through placeholders. Parameter help opens at function calls.
-Use **Navigate → Find References** or **Rename Symbol…** to navigate and refactor.
-Rename previews the affected files, keeps edits unsaved, and supports Undo. Notebook
-cells are synchronized through LSP's notebook protocol; Markdown is excluded from
-Python analysis. Runtime completion supplements static analysis when needed.
+Python syntax coloring is implemented in the native editor. Completions and parameter
+help use the selected notebook kernel, so they reflect the live session without bundling
+a separate analyzer or language-server runtime.
 
 Use **Data → Open Data Source…** to browse local SQLite/DuckDB databases and CSV,
 TSV, or Parquet files without starting Python. **⌘3** opens the Data navigator.

@@ -27,7 +27,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard AppState.shared.confirmDiscardingUnsavedChanges() else { return .terminateCancel }
         AppState.shared.terminal.stop()
         AppState.shared.kernel.stop()
-        AppState.shared.language.stop()
         return .terminateNow
     }
 }
@@ -121,14 +120,8 @@ struct QuantaCommands: Commands {
                 .keyboardShortcut("p", modifiers: .command)
             Button("Command Palette…") { app.paletteMode = .commands }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
-            Button("Go to Definition") { app.goToDefinition() }
-                .keyboardShortcut("j", modifiers: [.command, .control])
-            Button("Find References") { app.findReferences() }
-            Button("Rename Symbol…") { app.renameSymbol() }
             Button("Show Documentation") { app.showEditorDocumentation() }
             Button("Show Completions") { app.showEditorCompletions() }
-            Button("Next Issue") { app.nextLanguageIssue() }
-            Button("Restart Python Analysis") { app.language.restart() }
             Divider()
             Button("Reopen Closed Tab") { app.reopenClosedDocument() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
@@ -455,7 +448,6 @@ struct SettingsView: View {
                 } footer: {
                     Text("⌘+ and ⌘− adjust the size from the keyboard; outputs, tables and the console follow.")
                 }
-                LanguageSettingsView(service: app.language)
             }
             .formStyle(.grouped)
             .frame(width: 480)

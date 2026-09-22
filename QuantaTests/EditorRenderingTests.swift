@@ -48,56 +48,14 @@ final class EditorRenderingTests: XCTestCase {
         XCTAssertEqual(storage.attribute(.foregroundColor, at: call.location, effectiveRange: nil) as? NSColor, EditorTheme.builtin)
     }
 
-    func testDiagnosticsDoNotRepeatedlyMutateTextAndClearOnTyping() throws {
+    func testTextViewOnlyRequestsLayoutWhenItsWidthChanges() {
         let view = CodeEditorFactory.makeTextView()
-        view.string = "value\n"
-        let storage = try XCTUnwrap(view.textStorage)
-        let layout = try XCTUnwrap(view.layoutManager)
-        let edits = StorageEdits()
-        storage.delegate = edits
-        view.applyLanguageDiagnostics([])
-        view.applyLanguageDiagnostics([])
-        XCTAssertTrue(edits.ranges.isEmpty)
-        let diagnostic = LanguageDiagnostic(editorID: UUID(), range: NSRange(location: 0, length: 5),
-                                            message: "Unresolved name", severity: 1, line: 0)
-        view.applyLanguageDiagnostics([diagnostic])
-        XCTAssertEqual(layout.temporaryAttribute(.underlineStyle, atCharacterIndex: 0, effectiveRange: nil) as? Int,
-                       NSUnderlineStyle.single.rawValue)
-        XCTAssertEqual(storage.attribute(.toolTip, at: 0, effectiveRange: nil) as? String, diagnostic.message)
-        edits.ranges = []
-        view.applyLanguageDiagnostics([diagnostic])
-        XCTAssertTrue(edits.ranges.isEmpty)
-        view.didChangeText()
-        XCTAssertNil(layout.temporaryAttribute(.underlineStyle, atCharacterIndex: 0, effectiveRange: nil))
-        XCTAssertNil(storage.attribute(.toolTip, at: 0, effectiveRange: nil))
-        edits.ranges = []
-        view.didChangeText()
-        XCTAssertTrue(edits.ranges.isEmpty)
-    }
-
-    func testDiagnosticRenderingSkipsEmptyLineFragments() throws {
-        let view = CodeEditorFactory.makeTextView()
-        view.setFrameSize(NSSize(width: 300, height: 150))
-        view.string = "x\n\n  \ny"
-        let layout = try XCTUnwrap(view.layoutManager)
-        let diagnostic = LanguageDiagnostic(editorID: UUID(), range: NSRange(location: 0, length: view.string.utf16.count),
-                                            message: "Incomplete expression", severity: 1, line: 0)
-        view.applyLanguageDiagnostics([diagnostic])
-        for index in [0, 6] {
-            XCTAssertEqual(layout.temporaryAttribute(.underlineStyle, atCharacterIndex: index, effectiveRange: nil) as? Int,
-                           NSUnderlineStyle.single.rawValue)
-        }
-        for index in 1...5 {
-            XCTAssertNil(layout.temporaryAttribute(.underlineStyle, atCharacterIndex: index, effectiveRange: nil))
-        }
-        let point = LanguageDiagnostic(editorID: diagnostic.editorID, range: NSRange(location: 1, length: 0),
-                                       message: diagnostic.message, severity: 1, line: 0)
-        view.applyLanguageDiagnostics([point])
-        XCTAssertNil(layout.temporaryAttribute(.underlineStyle, atCharacterIndex: 1, effectiveRange: nil))
-        view.applyLanguageDiagnostics([diagnostic])
-        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        XCTAssertGreaterThan(bitmap.pixelsWide, 0)
+        var updates = 0
+        view.onLayoutChange = { updates += 1 }
+        view.setFrameSize(NSSize(width: 300, height: 40))
+        view.setFrameSize(NSSize(width: 300, height: 80))
+        view.setFrameSize(NSSize(width: 420, height: 80))
+        XCTAssertEqual(updates, 2)
     }
 
 }

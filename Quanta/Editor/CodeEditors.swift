@@ -29,27 +29,14 @@ enum CodeEditorFactory {
         tv.typingAttributes = [.font: EditorTheme.font, .foregroundColor: EditorTheme.text]
         tv.textContainerInset = NSSize(width: DS.Space.xs, height: DS.Space.s)
         tv.inlinePredictionType = .no
-        tv.completionProvider = { [weak tv] code, cursor, reply in
+        tv.completionProvider = { code, cursor, reply in
             let app = AppState.shared
-            let runtime = {
-                app.requestCompletions(code: code, cursor: cursor) { matches, start, end in
-                    reply(matches.map { CodeCompletion(label: $0, range: NSRange(location: start, length: max(0, end - start))) })
-                }
-            }
-            guard let id = tv?.languageEditorID else { runtime(); return }
-            app.language.suggestions(editorID: id, code: code, offset: cursor) { items in
-                if items.isEmpty { runtime() } else { reply(items) }
+            app.requestCompletions(code: code, cursor: cursor) { matches, start, end in
+                reply(matches.map { CodeCompletion(label: $0, range: NSRange(location: start, length: max(0, end - start))) })
             }
         }
-        tv.inspectionProvider = { [weak tv] code, cursor, reply in
-            let app = AppState.shared
-            guard let id = tv?.languageEditorID else {
-                app.requestInspection(code: code, cursor: cursor, reply: reply); return
-            }
-            app.language.inspect(editorID: id, code: code, offset: cursor) { info in
-                if let info { reply(info) }
-                else { app.requestInspection(code: code, cursor: cursor, reply: reply) }
-            }
+        tv.inspectionProvider = { code, cursor, reply in
+            AppState.shared.requestInspection(code: code, cursor: cursor, reply: reply)
         }
         return tv
     }
@@ -130,7 +117,6 @@ struct ScrollingCodeEditor: NSViewRepresentable {
             tv.setSelectedRange(NSRange(location: min(sel.location, length), length: 0))
             context.coordinator.ruler?.needsDisplay = true
         }
-        AppState.shared.language.applyDiagnostics(to: tv)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -192,19 +178,21 @@ struct GrowingCodeEditor: NSViewRepresentable {
         context.coordinator.parent = self
         tv.onCommand = onCommand
         tv.onEscape = onEscape
-        if tv.string != text, !tv.hasMarkedText() {
+        let textChanged = tv.string != text && !tv.hasMarkedText()
+        if textChanged {
             tv.string = text
             context.coordinator.undoManager.removeAllActions()
             if let storage = tv.textStorage { PythonHighlighter.highlight(storage) }
         }
-        context.coordinator.scheduleMeasure()
-        AppState.shared.language.applyDiagnostics(to: tv)
+        context.coordinator.scheduleMeasure(force: textChanged)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: GrowingCodeEditor
         weak var textView: QuantaTextView?
         private var measureScheduled = false
+        private var forceMeasurement = false
+        private var measuredWidth: CGFloat = -1
         let undoManager = UndoManager()
 
         init(_ parent: GrowingCodeEditor) { self.parent = parent }
@@ -219,22 +207,31 @@ struct GrowingCodeEditor: NSViewRepresentable {
                     PythonHighlighter.highlight(storage, editedRange: tv.lastEditedRange)
                 }
             }
-            scheduleMeasure()
+            scheduleMeasure(force: true)
         }
 
-        func scheduleMeasure() {
+        func scheduleMeasure(force: Bool = false) {
+            if !force, let width = textView?.bounds.width, width > 0,
+               abs(width - measuredWidth) <= 0.5 { return }
+            forceMeasurement = forceMeasurement || force
             guard !measureScheduled else { return }
             measureScheduled = true
             DispatchQueue.main.async { [weak self] in
-                self?.measureScheduled = false
-                self?.measureNow()
+                guard let self else { return }
+                self.measureScheduled = false
+                let force = self.forceMeasurement
+                self.forceMeasurement = false
+                self.measureNow(force: force)
             }
         }
 
-        private func measureNow() {
+        private func measureNow(force: Bool) {
             guard let tv = textView,
                   let layoutManager = tv.layoutManager,
                   let container = tv.textContainer else { return }
+            let width = tv.bounds.width
+            guard width > 0, force || abs(width - measuredWidth) > 0.5 else { return }
+            measuredWidth = width
             layoutManager.ensureLayout(for: container)
             let used = layoutManager.usedRect(for: container)
             let newHeight = max(used.height + tv.textContainerInset.height * 2 + 2, 30)

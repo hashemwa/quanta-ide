@@ -5,7 +5,6 @@ final class EditorRegistry {
     private var map: [UUID: NSHashTable<QuantaTextView>] = [:]
 
     func register(_ textView: QuantaTextView, for id: UUID) {
-        textView.languageEditorID = id
         map = map.filter { !$0.value.allObjects.isEmpty }
         let views = map[id] ?? NSHashTable<QuantaTextView>.weakObjects()
         views.add(textView)
@@ -20,6 +19,17 @@ final class EditorRegistry {
 
     var allViews: [QuantaTextView] { map.values.flatMap(\.allObjects) }
 
+}
+
+extension AppState {
+    var focusedCodeEditor: QuantaTextView? {
+        (NSApp.keyWindow?.firstResponder as? QuantaTextView)
+            ?? selectedCellID.flatMap { EditorRegistry.shared.view(for: $0) }
+            ?? activeDocumentID.flatMap { EditorRegistry.shared.view(for: $0) }
+    }
+
+    func showEditorDocumentation() { focusedCodeEditor?.requestDocumentation() }
+    func showEditorCompletions() { focusedCodeEditor?.requestCompletions() }
 }
 
 struct InspectionInfo {
@@ -48,22 +58,19 @@ final class CompletionPanel {
     private var scrollObserver: NSObjectProtocol?
 
     func show(matches: [CodeCompletion], for textView: QuantaTextView) {
-        guard let first = matches.first, textView.window != nil else { hide(); return }
+        guard textView.window != nil else { hide(); return }
         host = textView
-        allMatches = matches
         source = textView.string
-        replaceStart = first.edit.range.location
+        allMatches = Self.valid(matches, sourceLength: (source as NSString).length)
         refilter()
-        guard !filtered.isEmpty else {
+        guard let first = filtered.first else {
             hide()
             return
         }
+        replaceStart = first.edit.range.location
         buildPanelIfNeeded()
         reload()
         position(near: textView)
-        if let panel, let parent = textView.window, panel.parent == nil {
-            parent.addChildWindow(panel, ordered: .above)
-        }
         panel?.orderFront(nil)
         if scrollObserver == nil {
             scrollObserver = NotificationCenter.default.addObserver(
@@ -74,7 +81,6 @@ final class CompletionPanel {
 
     func hide() {
         if let panel {
-            panel.parent?.removeChildWindow(panel)
             panel.orderOut(nil)
         }
         if let scrollObserver {
@@ -84,6 +90,15 @@ final class CompletionPanel {
         host = nil
         allMatches = []
         filtered = []
+    }
+
+    static func valid(_ matches: [CodeCompletion], sourceLength: Int) -> [CodeCompletion] {
+        matches.filter {
+            $0.edit.range.location >= 0
+                && $0.edit.range.length >= 0
+                && $0.edit.range.location <= sourceLength
+                && $0.edit.range.length <= sourceLength - $0.edit.range.location
+        }
     }
 
     func caretMoved(in textView: QuantaTextView) {
@@ -167,6 +182,8 @@ final class CompletionPanel {
                             backing: .buffered, defer: true)
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = true
+        panel.level = .popUpMenu
+        panel.collectionBehavior = [.transient, .fullScreenAuxiliary]
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
@@ -234,6 +251,7 @@ final class CompletionPanel {
                 origin.y = rect.maxY + 2
             }
             origin.x = min(origin.x, screen.visibleFrame.maxX - panel.frame.width - 8)
+            origin.x = max(origin.x, screen.visibleFrame.minX + 8)
         }
         panel.setFrameOrigin(origin)
     }
@@ -248,6 +266,7 @@ private final class CompletionDataSource: NSObject, NSTableViewDataSource, NSTab
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?,
                    row: Int) -> NSView? {
+        guard owner.rows.indices.contains(row) else { return nil }
         let id = NSUserInterfaceItemIdentifier("cell")
         let field: NSTextField
         if let reused = tableView.makeView(withIdentifier: id, owner: nil) as? NSTextField {

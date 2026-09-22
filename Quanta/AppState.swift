@@ -113,7 +113,6 @@ final class AppState: ObservableObject {
     var handledFileSearchFocusRequest = 0
 
     let kernel = KernelSession()
-    let language = PythonLanguageService()
     private var bootstrapped = false
     private var versionProbesInFlight = Set<String>()
     private var latexCache: [String: LatexResult] = [:]
@@ -131,7 +130,6 @@ final class AppState: ObservableObject {
             self?.handleOrphan(message)
         }
         configureSourceControl()
-        language.observe(self)
     }
 
     func bootstrap() {

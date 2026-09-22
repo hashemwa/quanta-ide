@@ -48,39 +48,6 @@ struct CodeCompletion {
         return remaining.isEmpty ? 2 : nil
     }
 
-    static func parse(_ item: [String: Any], snapshot: LanguageDocument, editorID: UUID, offset: Int) -> CodeCompletion? {
-        guard let label = item["label"] as? String,
-              let source = snapshot.segments.first(where: { $0.editorID == editorID })?.source else { return nil }
-        let prefix = (source as NSString).substring(to: offset)
-        let token = String(prefix.reversed().prefix { $0.isLetter || $0.isNumber || $0 == "_" }.reversed())
-        let suffix = String((source as NSString).substring(from: offset).prefix { $0.isLetter || $0.isNumber || $0 == "_" })
-        let rawEdit = item["textEdit"] as? [String: Any]
-        let range: NSRange
-        if let rawEdit {
-            guard let parsed = snapshot.range(rawEdit["range"] ?? rawEdit["replace"], editorID: editorID) else { return nil }
-            range = parsed
-        } else { range = NSRange(location: offset - token.utf16.count, length: token.utf16.count + suffix.utf16.count) }
-        guard range.location <= offset, NSMaxRange(range) >= offset else { return nil }
-        let text = rawEdit?["newText"] as? String ?? item["insertText"] as? String ?? label
-        let snippet: CompletionSnippet
-        if item["insertTextFormat"] as? Int == 2 {
-            guard let parsed = CompletionSnippet(text) else { return nil }
-            snippet = parsed
-        } else { snippet = CompletionSnippet(literal: text) }
-        var completion = CodeCompletion(label: label, text: snippet.text, range: range)
-        completion.placeholders = snippet.ranges
-        completion.filterText = item["filterText"] as? String ?? label
-        completion.sortText = item["sortText"] as? String ?? label
-        completion.detail = item["detail"] as? String ?? ""
-        completion.documentation = PythonLanguageService.documentation(item["documentation"])
-        completion.kind = item["kind"] as? Int ?? 0
-        for edit in item["additionalTextEdits"] as? [[String: Any]] ?? [] {
-            guard let range = snapshot.range(edit["range"], editorID: editorID), let text = edit["newText"] as? String else { return nil }
-            completion.additionalEdits.append(CompletionEdit(range: range, text: text))
-        }
-        guard CompletionTransaction(source: source, completion: completion) != nil else { return nil }
-        return completion
-    }
 }
 
 struct CompletionSnippet {

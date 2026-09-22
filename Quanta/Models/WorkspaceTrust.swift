@@ -55,7 +55,6 @@ extension AppState {
         workspaceTrustRequest = nil
         refreshEnvironments()
         synchronizeWorkspaceKernel()
-        language.restart()
     }
 
     func allowExecution() -> Bool {
