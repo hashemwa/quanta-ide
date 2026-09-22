@@ -83,7 +83,8 @@ final class AppState: ObservableObject {
     @Published var kernelBanner = "No kernel"
     @Published var environments: [PythonEnvironment] = []
     @Published var environmentVersions: [String: String] = [:]
-    let latex = LatexState()
+    let editorPresentation = EditorPresentationState(
+        fontSize: QuantaDefaults.store.object(forKey: "QuantaFontSize") as? CGFloat ?? 13)
     let git = SourceControlState()
     @Published var sidebarPane: SidebarPane =
         SidebarPane(rawValue: QuantaDefaults.store.string(forKey: "QuantaSidebarPane") ?? "") ?? .files {
@@ -449,10 +450,6 @@ final class AppState: ObservableObject {
         switch message["type"] as? String {
         case "ready":
             updateBanner()
-            latexCache = latexCache.filter {
-                if case .image = $0.value { return true }
-                return false
-            }
             var features: [String] = []
             if let f = message["features"] as? [String: Bool] {
                 features = f.filter { $0.value }.map { $0.key }.sorted()
@@ -461,7 +458,6 @@ final class AppState: ObservableObject {
                 let suffix = features.isEmpty ? "" : " (\(features.joined(separator: ", ")))"
                 appendConsole(.system, "Kernel ready — Python \(version)\(suffix)")
             }
-            latex.generation += 1
             pushAppearance()
             refreshVariables()
             if let jsPath = message["plotly_js"] as? String {
@@ -1350,9 +1346,10 @@ final class AppState: ObservableObject {
         case failure(String)
     }
 
-    func renderLatex(_ tex: String, fontSize: CGFloat, colorHex: String,
+    @MainActor
+    func renderLatex(_ tex: String, display: Bool, fontSize: CGFloat, colorHex: String,
                      completion: @escaping (LatexResult) -> Void) {
-        let key = "\(colorHex)|\(Int(fontSize))|\(tex)"
+        let key = "\(display)|\(colorHex)|\(Int(fontSize))|\(tex)"
         if let cached = latexCache[key] {
             completion(cached)
             return
@@ -1361,36 +1358,13 @@ final class AppState: ObservableObject {
             latexPending[key]?.append(completion)
             return
         }
-        guard isWorkspaceTrusted, kernelTransition == nil, kernel.isRunning else {
-            completion(.failure("Python rendering requires a trusted workspace and a running kernel"))
-            return
-        }
         latexPending[key] = [completion]
-        kernel.request(["op": "latex", "tex": tex,
-                        "fontsize": Double(fontSize), "color": colorHex]) { [weak self] message in
-            guard let self else { return true }
-            switch message["type"] as? String {
-            case "latex":
-                if let b64 = message["data"] as? String,
-                   let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters),
-                   let image = NSImage(data: data) {
-                    let depth = CGFloat((message["depth"] as? Double) ?? 0)
-                    self.finishLatex(key, with: .image(image, depth: depth), cache: true)
-                } else {
-                    self.finishLatex(key, with: .failure("malformed kernel reply"), cache: true)
-                }
-                return true
-            case "latex_error":
-                self.finishLatex(key,
-                                 with: .failure(message["error"] as? String ?? "unsupported expression"),
-                                 cache: true)
-                return true
-            case "dead":
-                self.finishLatex(key, with: .failure("kernel stopped"), cache: false)
-                return true
-            default:
-                return false
-            }
+        NotebookMathRenderer.shared.render(tex, display: display, fontSize: fontSize,
+                                            color: colorHex) { [weak self] image, depth, error in
+            guard let self else { return }
+            let result = image.map { LatexResult.image($0, depth: depth) }
+                ?? .failure(error ?? "Math rendering failed")
+            self.finishLatex(key, with: result, cache: true)
         }
     }
 
@@ -1537,7 +1511,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var scrollRequest: UUID?
+    var scrollRequest: UUID? {
+        get { editorPresentation.scrollRequest }
+        set { editorPresentation.scrollRequest = newValue }
+    }
     private var pendingDeleteTimestamp: TimeInterval = 0
 
     func enterCommandMode() {
@@ -2282,6 +2259,7 @@ final class AppState: ObservableObject {
     func setFontSize(_ size: CGFloat) {
         let clamped = max(9, min(28, size))
         editorFontSize = clamped
+        editorPresentation.fontSize = clamped
         QuantaDefaults.store.set(clamped, forKey: "QuantaFontSize")
         EditorTheme.fontSize = clamped
         for tv in EditorRegistry.shared.allViews {
@@ -2643,8 +2621,13 @@ final class AppState: ObservableObject {
     }
 }
 
-final class LatexState: ObservableObject {
-    @Published var generation = 0
+final class EditorPresentationState: ObservableObject {
+    @Published var scrollRequest: UUID?
+    @Published var fontSize: CGFloat
+
+    init(fontSize: CGFloat) {
+        self.fontSize = fontSize
+    }
 }
 
 final class CellSelection: ObservableObject {

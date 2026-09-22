@@ -48,8 +48,9 @@ final class QuantaTextView: NSTextView {
     }
 
     override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = abs(frame.width - newSize.width) > 0.5
         super.setFrameSize(newSize)
-        onLayoutChange?()
+        if widthChanged { onLayoutChange?() }
     }
 
     override func keyDown(with event: NSEvent) {

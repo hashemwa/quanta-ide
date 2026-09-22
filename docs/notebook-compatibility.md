@@ -19,6 +19,7 @@ standard-library bridge. It does not run an IPython or Jupyter kernel.
 | DataFrames | Save an HTML table preview, text fallback, and a native snapshot. Reopened snapshots do not query a variable in the current kernel. |
 | Plotly | Save structured Plotly JSON plus an available PNG fallback. Reopen interactively using a bundled offline renderer. |
 | Arrays, JSON trees and model cards | Save structured snapshots and text fallbacks; array/card snapshots retain their native views. |
+| Markdown previews | Native text wraps to the cell width. Basic HTML formatting, character entities and text alignment are supported; arbitrary HTML attributes and scripts are not. `$...$` and `$$...$$` equations use the bundled offline MathML renderer and do not require a Python kernel. Tables require a Markdown separator row, so absolute-value bars in equations remain prose. |
 | HTML export | Markdown tables, offline MathML equations, full text outputs, and sanitized rich HTML. SVG/JPEG images are embedded. Plotly embeds an offline renderer in an isolated frame and can substantially increase file size. |
 | PDF export | Paginated US Letter pages with margins, wrapped code/text, tables, equations, embedded images, and rendered Plotly figures. Figures finish rendering before capture; exports are limited to 500 pages and 35 seconds. |
 

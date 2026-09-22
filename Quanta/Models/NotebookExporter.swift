@@ -191,6 +191,15 @@ enum NotebookExporter {
                     html += "<tr>" + row.map { "<td>\(content($0))</td>" }.joined() + "</tr>"
                 }
                 html += "</tbody></table>\n"
+            case .html(let level, let alignment, let text):
+                let tag = level.map { "h\($0)" } ?? "p"
+                let css: String
+                switch alignment {
+                case .leading: css = "left"
+                case .center: css = "center"
+                case .trailing: css = "right"
+                }
+                html += "<\(tag) style=\"text-align:\(css)\">\(content(text))</\(tag)>\n"
             }
         }
         if inList { html += "</ul>\n" }
@@ -215,17 +224,24 @@ enum NotebookExporter {
     private static func decorated(_ text: String,
                                   attachments: [String: Data],
                                   baseDirectory: URL?) -> String {
-        var out = ""
+        var textWithPlaceholders = ""
+        var replacements: [(String, String)] = []
+        let prefix = UUID().uuidString
         for segment in MarkdownView.splitInlineMath(text) {
             switch segment {
-            case .text(let s):
-                out += linkedText(s)
+            case .text(let s): textWithPlaceholders += s
             case .math(let tex):
-                out += NotebookMath.html(tex, display: false)
+                let token = "QUANTA" + prefix + String(replacements.count)
+                replacements.append((token, NotebookMath.html(tex, display: false)))
+                textWithPlaceholders += token
             case .image(let alt, let url):
-                out += imageTag(alt: alt, url: url, attachments: attachments, baseDirectory: baseDirectory)
+                let token = "QUANTA" + prefix + String(replacements.count)
+                replacements.append((token, imageTag(alt: alt, url: url, attachments: attachments, baseDirectory: baseDirectory)))
+                textWithPlaceholders += token
             }
         }
+        var out = linkedText(textWithPlaceholders)
+        for (token, html) in replacements { out = out.replacingOccurrences(of: token, with: html) }
         return out
     }
 
@@ -239,12 +255,12 @@ enum NotebookExporter {
     }
 
     private static func linkedText(_ text: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^\s)]+)\)"#) else { return emphasis(escape(text)) }
+        guard let regex = try? NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^\s)]+)\)"#) else { return emphasis(safeInlineHTML(text)) }
         let source = text as NSString
         var result = ""
         var cursor = 0
         for match in regex.matches(in: text, range: NSRange(location: 0, length: source.length)) {
-            result += emphasis(escape(source.substring(with: NSRange(location: cursor, length: match.range.location - cursor))))
+            result += emphasis(safeInlineHTML(source.substring(with: NSRange(location: cursor, length: match.range.location - cursor))))
             let label = source.substring(with: match.range(at: 1))
             let target = source.substring(with: match.range(at: 2))
             if let url = URL(string: target), ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") {
@@ -252,7 +268,34 @@ enum NotebookExporter {
             } else { result += emphasis(escape(label)) }
             cursor = NSMaxRange(match.range)
         }
-        return result + emphasis(escape(source.substring(from: cursor)))
+        return result + emphasis(safeInlineHTML(source.substring(from: cursor)))
+    }
+
+    static func safeInlineHTML(_ text: String) -> String {
+        let pattern = #"</?([A-Za-z][A-Za-z0-9]*)\b[^>]*>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return escape(text) }
+        let allowed: Set<String> = ["p", "div", "span", "br", "hr", "b", "strong", "i", "em", "u", "s", "sup", "sub", "blockquote", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6"]
+        let source = text as NSString
+        var result = ""
+        var cursor = 0
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            result += escape(MarkdownView.decodedHTMLEntities(source.substring(with: NSRange(location: cursor, length: match.range.location - cursor))))
+            let tag = source.substring(with: match.range)
+            let name = source.substring(with: match.range(at: 1)).lowercased()
+            if allowed.contains(name) {
+                if tag.hasPrefix("</") { result += "</\(name)>" }
+                else {
+                    var alignment = ""
+                    if let range = tag.range(of: #"(?i)text-align\s*:\s*(right|left|center|justify)\b"#, options: .regularExpression),
+                       let value = tag[range].split(separator: ":").last {
+                        alignment = " style=\"text-align:\(value.trimmingCharacters(in: .whitespaces).lowercased())\""
+                    }
+                    result += "<\(name)\(alignment)>"
+                }
+            } else { result += escape(tag) }
+            cursor = NSMaxRange(match.range)
+        }
+        return result + escape(MarkdownView.decodedHTMLEntities(source.substring(from: cursor)))
     }
 
     private static func emphasis(_ text: String) -> String {

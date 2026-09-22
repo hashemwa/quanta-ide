@@ -5,7 +5,8 @@ struct NotebookView: View {
     @ObservedObject var document: Document
     @ObservedObject var notebook: Notebook
     @ObservedObject var find: FindState
-    @EnvironmentObject var app: AppState
+    @ObservedObject private var presentation = AppState.shared.editorPresentation
+    private var app: AppState { AppState.shared }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(document: Document, notebook: Notebook) {
@@ -50,7 +51,7 @@ struct NotebookView: View {
                     .padding(.trailing, DS.Space.xl)
                     .background(NotebookScrollMarker())
                 }
-                .onChange(of: app.scrollRequest) { _, target in
+                .onChange(of: presentation.scrollRequest) { _, target in
                     guard let target, notebook.cells.contains(where: { $0.id == target }) else { return }
                     withAnimation(reduceMotion ? nil : DS.Motion.quick) {
                         proxy.scrollTo(target, anchor: nil)
@@ -61,7 +62,6 @@ struct NotebookView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .background(CommandModeHost())
-        .environment(\.monoFontSize, app.editorFontSize - 1)
     }
 }
 
@@ -365,7 +365,7 @@ struct CellView: View {
             MarkdownView(source: cell.source.isEmpty
                          ? "*Empty markdown cell — double-click to edit*"
                          : cell.source,
-                         selectable: true,
+                         selectable: false,
                          attachments: Notebook.attachmentData(cell.extraKeys["attachments"]),
                          baseDirectory: document.url?.deletingLastPathComponent())
                 .padding(.horizontal, DS.Layout.cellTextInset)

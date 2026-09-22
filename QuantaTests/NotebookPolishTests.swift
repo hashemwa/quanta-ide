@@ -6,6 +6,56 @@ import XCTest
 
 @MainActor
 final class NotebookPolishTests: XCTestCase {
+    func testMarkdownAbsoluteValuesAreNotTables() {
+        let source = #"**Task 8.** At $x=2$: $\Delta(\epsilon) \equiv |f'(2;\epsilon)-f'(2)|$."#
+        XCTAssertEqual(MarkdownView.parse(source), [.paragraph(source)])
+        XCTAssertEqual(MarkdownView.parse("left | right"), [.paragraph("left | right")])
+        XCTAssertEqual(MarkdownView.parse("| Name | Value |\n| --- | --- |\n| x | y |"),
+                       [.table([["Name", "Value"], ["x", "y"]])])
+        let html = NotebookExporter.markdownToHTML(source)
+        XCTAssertFalse(html.contains("<table>"))
+        XCTAssertTrue(html.contains("<math"))
+        XCTAssertFalse(html.contains("$"))
+        let boldMath = NotebookExporter.markdownToHTML(#"**At $x=2$ evaluate.**"#)
+        XCTAssertTrue(boldMath.contains("<b>At <span"))
+        XCTAssertTrue(boldMath.contains("evaluate.</b>"))
+    }
+
+    func testMarkdownPreviewDecodesSafeHTMLAndKeepsNativeBlocks() {
+        let source = #"""
+        <p style="text-align: right; position:fixed" onclick="alert(1)">&#9989; Notebook Author</p>
+
+        **Task 8. Now consider the absolute value of the difference between the finite difference approximation and the exact first derivative at the point $x=2$: $\Delta(\epsilon) \equiv |f'(2;\epsilon)-f'(2)|$.**
+
+        $$\frac{1}{2} + \sum_{i=1}^n i$$
+        """#
+        let blocks = MarkdownView.parse(source)
+        XCTAssertEqual(blocks.first, .html(level: nil, alignment: .trailing, text: "✅ Notebook Author"))
+        XCTAssertEqual(blocks.count, 3)
+        XCTAssertEqual(MarkdownView.parse("### <p style=\"text-align: right;\"> &#9989; Notebook Author</p>"),
+                       [.html(level: 3, alignment: .trailing, text: "✅ Notebook Author")])
+        XCTAssertEqual(String(MarkdownView.inlineAttributed("<p style=\"text-align: right;\"> &#9989; Notebook Author</p>").characters),
+                       "✅ Notebook Author")
+        let html = NotebookExporter.markdownToHTML(source)
+        XCTAssertTrue(html.contains("text-align:right"))
+        XCTAssertTrue(html.contains("✅ Notebook Author"))
+        XCTAssertFalse(html.contains("&amp;#9989;"))
+        XCTAssertFalse(html.contains("&#9989;"))
+        XCTAssertFalse(html.contains("onclick"))
+        XCTAssertFalse(html.contains("position:fixed"))
+        XCTAssertTrue(html.contains("<mfrac>"))
+    }
+
+    func testCompletionPopupRejectsInvalidRanges() {
+        let valid = CodeCompletion(label: "value", range: NSRange(location: 2, length: 1))
+        let pastEnd = CodeCompletion(label: "past", range: NSRange(location: 5, length: 1))
+        let tooLong = CodeCompletion(label: "long", range: NSRange(location: 2, length: 4))
+        let negativeStart = CodeCompletion(label: "negative start", range: NSRange(location: -1, length: 1))
+        let negativeLength = CodeCompletion(label: "negative length", range: NSRange(location: 1, length: -1))
+        XCTAssertEqual(CompletionPanel.valid([pastEnd, valid, tooLong, negativeStart, negativeLength],
+                                             sourceLength: 3).map(\.label), ["value"])
+    }
+
     func testInsertionSelectsRequestedTypeAndPosition() {
         for type in [CellType.code, .markdown] {
             for offset in [0, 1] {
@@ -81,6 +131,20 @@ final class NotebookPolishTests: XCTestCase {
         XCTAssertFalse(html.contains("$\\frac"))
         let untrusted = NotebookMath.html(#"\href{javascript:alert(1)}{danger}"#, display: false)
         XCTAssertFalse(untrusted.contains("href=\"javascript:"))
+    }
+
+    func testNativeMarkdownMathRendererProducesAnImage() async {
+        let rendered = expectation(description: "Math rendered")
+        var result: (NSImage?, CGFloat, String?)?
+        NotebookMathRenderer.shared.render(#"\frac{1}{2} + e^{2x}"#, display: false,
+                                           fontSize: 13, color: "#f5f5f5") {
+            result = ($0, $1, $2)
+            rendered.fulfill()
+        }
+        await fulfillment(of: [rendered], timeout: 10)
+        XCTAssertNotNil(result?.0, result?.2 ?? "Math rendering failed")
+        XCTAssertGreaterThan(result?.0?.size.width ?? 0, 1)
+        XCTAssertGreaterThan(result?.0?.size.height ?? 0, 1)
     }
 
     func testExportSanitizesRichHTMLWithoutExecutingItsScripts() async throws {

@@ -235,6 +235,13 @@ enum MarkdownBlock: Equatable {
     case math(String)
     case image(alt: String, url: String)
     case table([[String]])
+    case html(level: Int?, alignment: MarkdownTextAlignment, text: String)
+}
+
+enum MarkdownTextAlignment: Equatable {
+    case leading
+    case center
+    case trailing
 }
 
 enum InlineMarkdownSegment: Equatable {
@@ -258,6 +265,10 @@ struct MarkdownView: View {
 
     private static var parseCache: [String: [MarkdownBlock]] = [:]
     private static var parseOrder: [String] = []
+    private static var inlineCache: [String: [InlineMarkdownSegment]] = [:]
+    private static var inlineOrder: [String] = []
+    private static var attributedCache: [String: AttributedString] = [:]
+    private static var attributedOrder: [String] = []
 
     static func cachedParse(_ source: String) -> [MarkdownBlock] {
         if let hit = parseCache[source] { return hit }
@@ -268,11 +279,20 @@ struct MarkdownView: View {
         return parsed
     }
 
+    static func cachedInlineSegments(_ source: String) -> [InlineMarkdownSegment] {
+        if let hit = inlineCache[source] { return hit }
+        let parsed = splitInlineMath(source)
+        inlineCache[source] = parsed
+        inlineOrder.append(source)
+        if inlineOrder.count > 800 { inlineCache[inlineOrder.removeFirst()] = nil }
+        return parsed
+    }
+
     var body: some View {
         let content = VStack(alignment: .leading, spacing: 6) {
             let parsed = MarkdownView.cachedParse(source)
-            ForEach(parsed.indices, id: \.self) { i in
-                blockView(parsed[i])
+            ForEach(parsed.indices, id: \.self) { index in
+                blockView(parsed[index])
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -304,7 +324,9 @@ struct MarkdownView: View {
             inMath = false
         }
 
-        for line in source.components(separatedBy: "\n") {
+        let lines = source.components(separatedBy: "\n")
+        var inTable = false
+        for (lineIndex, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if inCode {
                 if trimmed.hasPrefix("```") {
@@ -347,13 +369,20 @@ struct MarkdownView: View {
                 result.append(.image(alt: image.alt, url: image.url))
                 continue
             }
-            if trimmed.contains("|") {
+            if let html = htmlBlock(trimmed) {
+                flushParagraph()
+                result.append(.html(level: html.level, alignment: html.alignment, text: html.text))
+                continue
+            }
+            let nextIsSeparator = lineIndex + 1 < lines.count && isTableSeparator(lines[lineIndex + 1])
+            if trimmed.contains("|"), inTable || nextIsSeparator {
                 var cells = trimmed.split(separator: "|", omittingEmptySubsequences: false)
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                 if cells.first?.isEmpty == true { cells.removeFirst() }
                 if cells.last?.isEmpty == true { cells.removeLast() }
                 if cells.count >= 2 {
                     flushParagraph()
+                    inTable = true
                     let separator = cells.allSatisfy {
                         !$0.isEmpty && $0.trimmingCharacters(in: CharacterSet(charactersIn: "-: ")).isEmpty
                     }
@@ -368,6 +397,7 @@ struct MarkdownView: View {
                     continue
                 }
             }
+            inTable = false
             if trimmed.isEmpty {
                 flushParagraph()
                 continue
@@ -376,7 +406,11 @@ struct MarkdownView: View {
             if (1...6).contains(level), trimmed.dropFirst(level).hasPrefix(" ") {
                 flushParagraph()
                 let text = trimmed.dropFirst(level + 1).trimmingCharacters(in: .whitespaces)
-                result.append(.heading(level, text))
+                if let html = htmlBlock(String(text)) {
+                    result.append(.html(level: level, alignment: html.alignment, text: html.text))
+                } else {
+                    result.append(.heading(level, text))
+                }
                 continue
             }
             if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
@@ -389,6 +423,87 @@ struct MarkdownView: View {
         if inCode { result.append(.code(codeLines.joined(separator: "\n"))) }
         if inMath { flushMath() }
         flushParagraph()
+        return result
+    }
+
+    static func isTableSeparator(_ line: String) -> Bool {
+        var cells = line.trimmingCharacters(in: .whitespaces)
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        if cells.first?.isEmpty == true { cells.removeFirst() }
+        if cells.last?.isEmpty == true { cells.removeLast() }
+        return cells.count >= 2 && cells.allSatisfy {
+            $0.range(of: #"^:?-{3,}:?$"#, options: .regularExpression) != nil
+        }
+    }
+
+    static func htmlBlock(_ line: String) -> (level: Int?, alignment: MarkdownTextAlignment, text: String)? {
+        let pattern = #"^<(p|div|h[1-6])\b([^>]*)>(.*)</\1>\s*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return nil }
+        let source = line as NSString
+        guard let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: source.length)) else { return nil }
+        let name = source.substring(with: match.range(at: 1)).lowercased()
+        let attributes = source.substring(with: match.range(at: 2))
+        let inner = source.substring(with: match.range(at: 3))
+        let alignment: MarkdownTextAlignment
+        if attributes.range(of: #"(?i)(text-align\s*:\s*right\b|align\s*=\s*[\"']?right\b)"#, options: .regularExpression) != nil {
+            alignment = .trailing
+        } else if attributes.range(of: #"(?i)(text-align\s*:\s*center\b|align\s*=\s*[\"']?center\b)"#, options: .regularExpression) != nil {
+            alignment = .center
+        } else {
+            alignment = .leading
+        }
+        let level = name.first == "h" ? Int(name.dropFirst()) : nil
+        return (level, alignment, htmlToMarkdown(inner))
+    }
+
+    static func htmlToMarkdown(_ html: String) -> String {
+        var text = decodedHTMLEntities(html)
+        let replacements = [
+            (#"(?i)<br\s*/?>"#, "\n"),
+            (#"(?i)</?(b|strong)\b[^>]*>"#, "**"),
+            (#"(?i)</?(i|em)\b[^>]*>"#, "*"),
+            (#"(?i)</?code\b[^>]*>"#, "`"),
+            (#"(?i)</?(s|del)\b[^>]*>"#, "~~"),
+        ]
+        for (pattern, replacement) in replacements {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            text = regex.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: replacement)
+        }
+        if let tags = try? NSRegularExpression(pattern: #"</?[A-Za-z][^>]*>"#) {
+            text = tags.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: "")
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func decodedHTMLEntities(_ text: String) -> String {
+        let named = ["amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": "\u{00A0}"]
+        var result = ""
+        var index = text.startIndex
+        while index < text.endIndex {
+            guard text[index] == "&", let end = text[index...].firstIndex(of: ";") else {
+                result.append(text[index])
+                index = text.index(after: index)
+                continue
+            }
+            let valueStart = text.index(after: index)
+            let entity = String(text[valueStart..<end])
+            let replacement: String?
+            if entity.hasPrefix("#x") || entity.hasPrefix("#X") {
+                replacement = UInt32(entity.dropFirst(2), radix: 16).flatMap(UnicodeScalar.init).map(String.init)
+            } else if entity.hasPrefix("#") {
+                replacement = UInt32(entity.dropFirst(), radix: 10).flatMap(UnicodeScalar.init).map(String.init)
+            } else {
+                replacement = named[entity.lowercased()]
+            }
+            if let replacement {
+                result += replacement
+                index = text.index(after: end)
+            } else {
+                result.append(text[index])
+                index = text.index(after: index)
+            }
+        }
         return result
     }
 
@@ -549,10 +664,16 @@ struct MarkdownView: View {
     }
 
     static func inlineAttributed(_ text: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: text,
+        if let hit = attributedCache[text] { return hit }
+        let clean = htmlToMarkdown(text)
+        let attributed = (try? AttributedString(
+            markdown: clean,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
+            ?? AttributedString(clean)
+        attributedCache[text] = attributed
+        attributedOrder.append(text)
+        if attributedOrder.count > 800 { attributedCache[attributedOrder.removeFirst()] = nil }
+        return attributed
     }
 
     @ViewBuilder
@@ -573,8 +694,10 @@ struct MarkdownView: View {
                 Text("•")
                 InlineMathText(source: text, attachments: attachments, baseDirectory: baseDirectory)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .paragraph(let text):
             InlineMathText(source: text, attachments: attachments, baseDirectory: baseDirectory)
+                .frame(maxWidth: .infinity, alignment: .leading)
         case .math(let tex):
             DisplayMathView(tex: tex)
         case .image(let alt, let url):
@@ -597,6 +720,15 @@ struct MarkdownView: View {
                 .padding(DS.Space.s)
             }
             .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(.quaternary.opacity(0.5)))
+        case .html(let level, let alignment, let text):
+            Group {
+                if let level {
+                    Text(MarkdownView.inlineAttributed(text)).font(headingFont(level))
+                } else {
+                    InlineMathText(source: text, attachments: attachments, baseDirectory: baseDirectory)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: frameAlignment(alignment))
         }
     }
 
@@ -621,10 +753,18 @@ struct MarkdownView: View {
         default: return .system(size: 14, weight: .semibold)
         }
     }
+
+    private func frameAlignment(_ alignment: MarkdownTextAlignment) -> Alignment {
+        switch alignment {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+
 }
 
 struct InlineMathText: View {
-    @ObservedObject private var latex = AppState.shared.latex
     let source: String
     var attachments: [String: Data] = [:]
     var baseDirectory: URL? = nil
@@ -633,12 +773,12 @@ struct InlineMathText: View {
     @Environment(\.monoFontSize) private var monoSize
     @State private var rendered: [String: AppState.LatexResult] = [:]
 
-    private var segments: [InlineMarkdownSegment] { MarkdownView.splitInlineMath(source) }
+    private var segments: [InlineMarkdownSegment] { MarkdownView.cachedInlineSegments(source) }
 
     var body: some View {
         composed
+            .fixedSize(horizontal: false, vertical: true)
             .onAppear { fetch() }
-            .onChange(of: latex.generation) { _, _ in fetch() }
             .onChange(of: colorScheme) { _, _ in
                 rendered = [:]
                 fetch()
@@ -649,8 +789,8 @@ struct InlineMathText: View {
         var out = Text(verbatim: "")
         for segment in segments {
             switch segment {
-            case .text(let s):
-                out = out + Text(MarkdownView.inlineAttributed(s))
+            case .text(let text):
+                out = out + Text(MarkdownView.inlineAttributed(text))
             case .math(let tex):
                 if case .image(let image, let depth)? = rendered[tex] {
                     out = out + Text(Image(nsImage: image)).baselineOffset(-depth)
@@ -675,7 +815,8 @@ struct InlineMathText: View {
     private func fetch() {
         for case .math(let tex) in segments {
             if case .image? = rendered[tex] { continue }
-            app.renderLatex(tex, fontSize: 13, colorHex: MathPalette.hex(for: colorScheme)) { result in
+            app.renderLatex(tex, display: false, fontSize: 13,
+                            colorHex: MathPalette.hex(for: colorScheme)) { result in
                 rendered[tex] = result
             }
         }
@@ -683,7 +824,6 @@ struct InlineMathText: View {
 }
 
 struct DisplayMathView: View {
-    @ObservedObject private var latex = AppState.shared.latex
     let tex: String
     private var app: AppState { AppState.shared }
     @Environment(\.colorScheme) private var colorScheme
@@ -709,7 +849,6 @@ struct DisplayMathView: View {
         }
         .padding(.vertical, 4)
         .onAppear { fetch() }
-        .onChange(of: latex.generation) { _, _ in fetch() }
         .onChange(of: colorScheme) { _, _ in
             rendered = nil
             fetch()
@@ -717,8 +856,10 @@ struct DisplayMathView: View {
     }
 
     private func fetch() {
-        app.renderLatex(tex, fontSize: 16, colorHex: MathPalette.hex(for: colorScheme)) { result in
+        app.renderLatex(tex, display: true, fontSize: 16,
+                        colorHex: MathPalette.hex(for: colorScheme)) { result in
             rendered = result
         }
     }
+
 }

@@ -140,11 +140,11 @@ private struct EditorPaneView: View {
 
 struct DocumentContentView: View {
     @ObservedObject var document: Document
-    @EnvironmentObject var app: AppState
+    @ObservedObject private var presentation = AppState.shared.editorPresentation
 
     var body: some View {
         content
-            .environment(\.monoFontSize, app.editorFontSize - 1)
+            .environment(\.monoFontSize, presentation.fontSize - 1)
     }
 
     @ViewBuilder
