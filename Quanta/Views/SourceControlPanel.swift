@@ -89,7 +89,7 @@ struct SourceControlPanel: View {
 
     private var filterBar: some View {
         PanelBar(height: DS.Bar.footer) {
-            IconButton("arrow.clockwise", help: "Refresh Git Status", glass: true) {
+            IconButton("arrow.clockwise", help: "Refresh Git Status") {
                 app.refreshSourceControl()
             }
             .disabled(git.isBusy || git.isRefreshing)
@@ -97,7 +97,7 @@ struct SourceControlPanel: View {
             if git.isBusy || git.isRefreshing {
                 ActivitySlot(active: true)
             }
-            IconMenu("ellipsis", help: "Show more actions", glass: true) {
+            IconMenu("ellipsis", help: "Show more actions") {
                 Picker("Show", selection: $scope) {
                     ForEach(GitChangeScope.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }

@@ -46,10 +46,10 @@ struct VariablesPanel: View {
                 }
             }
             PanelBar(height: DS.Bar.footer) {
-                IconButton("arrow.clockwise", help: "Refresh Variables", glass: true) { app.refreshVariables() }
+                IconButton("arrow.clockwise", help: "Refresh Variables") { app.refreshVariables() }
                 FilterField(text: $query, prompt: "Filter Variables")
                 IconMenu(typeFilter == "All Types" ? "ellipsis" : "line.3.horizontal.decrease.circle.fill",
-                         help: "Filter and Sort Variables", glass: true) {
+                         help: "Filter and Sort Variables") {
                     Picker("Type", selection: $typeFilter) {
                         Text("All Types").tag("All Types")
                         ForEach(Array(Set(app.variables.map(\.typeName))).sorted(), id: \.self) { Text($0).tag($0) }

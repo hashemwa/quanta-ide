@@ -14,23 +14,23 @@ struct PlotsToolbar: View {
 
     var body: some View {
         IconMenu(allFiles ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease",
-                 help: "Filter Plots", glass: true) {
+                 help: "Filter Plots") {
             Picker("Show", selection: $allFiles) {
                 Text("Active File").tag(false)
                 Text("All Files and Console").tag(true)
             }.pickerStyle(.inline)
         }
-        IconButton("arrow.up.forward.square", help: "Reveal Plot Source", glass: true) {
+        IconButton("arrow.up.forward.square", help: "Reveal Plot Source") {
             if let selected { app.revealPlotSource(selected) }
         }
         .disabled(selected == nil || !app.openDocuments.contains { $0.id == selected?.origin.documentID })
         if let selected, let image = selected.image {
-            IconButton("doc.on.doc", help: "Copy Plot", glass: true) {
+            IconButton("doc.on.doc", help: "Copy Plot") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.writeObjects([image])
             }
-            IconButton("macwindow.badge.plus", help: "Open Plot in Window", glass: true) { PlotWindow.open(image: image) }
-            IconButton("square.and.arrow.down", help: "Save Plot as PNG…", glass: true) {
+            IconButton("macwindow.badge.plus", help: "Open Plot in Window") { PlotWindow.open(image: image) }
+            IconButton("square.and.arrow.down", help: "Save Plot as PNG…") {
                 let panel = NSSavePanel()
                 panel.allowedContentTypes = [.png]
                 panel.nameFieldStringValue = "plot.png"

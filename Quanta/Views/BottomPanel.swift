@@ -33,8 +33,8 @@ struct BottomPanel: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .help("Start a terminal session")
                     }
-                    IconButton("arrow.clockwise", help: "Restart Terminal Session…", glass: true) { app.newTerminalSession() }
-                    IconButton("trash", help: "Clear Terminal Scrollback", glass: true) { terminal.clear() }
+                    IconButton("arrow.clockwise", help: "Restart Terminal Session…") { app.newTerminalSession() }
+                    IconButton("trash", help: "Clear Terminal Scrollback") { terminal.clear() }
                 } else if app.bottomPane == .plots {
                     PlotsToolbar(history: app.plots, selection: $plotSelection, allFiles: $plotAllFiles)
                 } else if app.bottomPane == .console {
@@ -42,18 +42,18 @@ struct BottomPanel: View {
                         Text(consoleScope).font(.caption).foregroundStyle(.secondary)
                     }
                     IconMenu(consoleScope == "All" ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill",
-                             help: "Filter Console Messages", glass: true) {
+                             help: "Filter Console Messages") {
                         Picker("Messages", selection: $consoleScope) {
                             ForEach(["All", "Errors", "Output", "Commands"], id: \.self) { Text($0) }
                         }.pickerStyle(.inline)
                     }
-                    IconButton("magnifyingglass", help: "Search Console", isActive: showingSearch, glass: true) {
+                    IconButton("magnifyingglass", help: "Search Console", isActive: showingSearch) {
                         showingSearch.toggle()
                         if !showingSearch { consoleQuery = "" }
                     }
-                    IconButton("trash", help: "Clear Console (⌘K)", glass: true) { app.console.clear() }
+                    IconButton("trash", help: "Clear Console (⌘K)") { app.console.clear() }
                 }
-                IconButton("xmark", help: "Hide Panel", glass: true) { app.setConsoleVisible(false) }
+                IconButton("xmark", help: "Hide Panel") { app.setConsoleVisible(false) }
             }
             if showingSearch, app.bottomPane == .console {
                 PanelSearchBar(prompt: "Find in console", text: $consoleQuery) {

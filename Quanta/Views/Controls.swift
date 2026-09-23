@@ -237,18 +237,16 @@ struct IconButton: View {
     var isActive = false
     var size: Size? = nil
     var symbolWeight: Font.Weight = .regular
-    var glass = false
     let action: () -> Void
     @Environment(\.iconButtonSize) private var inheritedSize
 
     init(_ icon: String, help: String, isActive: Bool = false, size: Size? = nil,
-         symbolWeight: Font.Weight = .regular, glass: Bool = false, action: @escaping () -> Void) {
+         symbolWeight: Font.Weight = .regular, action: @escaping () -> Void) {
         self.icon = icon
         self.help = help
         self.isActive = isActive
         self.size = size
         self.symbolWeight = symbolWeight
-        self.glass = glass
         self.action = action
     }
 
@@ -259,16 +257,14 @@ struct IconButton: View {
                 .font(.system(size: metrics.glyph, weight: symbolWeight))
                 .frame(width: metrics.extent, height: metrics.extent)
         }
-        .buttonStyle(IconButtonStyle(isActive: isActive, shape: Self.shape(for: metrics, glass: glass),
-                                     glass: glass))
+        .buttonStyle(IconButtonStyle(isActive: isActive, shape: Self.shape(for: metrics)))
         .help(help)
         .accessibilityLabel(Self.accessibilityName(help))
         .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 
-    static func shape(for size: Size, glass: Bool = false) -> AnyShape {
-        if glass { return AnyShape(Circle()) }
-        return size == .strip ? AnyShape(Capsule())
+    static func shape(for size: Size) -> AnyShape {
+        size == .strip ? AnyShape(Capsule())
                               : AnyShape(RoundedRectangle(cornerRadius: DS.Radius.control))
     }
 
@@ -281,7 +277,6 @@ struct IconButton: View {
 struct IconButtonStyle: ButtonStyle {
     var isActive = false
     var shape: AnyShape = AnyShape(RoundedRectangle(cornerRadius: DS.Radius.control))
-    var glass = false
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -289,16 +284,8 @@ struct IconButtonStyle: ButtonStyle {
             .foregroundStyle(isActive ? Color.accentColor : Color.primary)
             .background {
                 ZStack {
-                    if glass {
-                        if #available(macOS 26.0, *) {
-                            shape.fill(.clear)
-                        } else {
-                            shape.fill(.regularMaterial)
-                        }
-                    } else {
-                        shape.fill(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.14))
-                                            : AnyShapeStyle(.clear))
-                    }
+                    shape.fill(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.14))
+                                        : AnyShapeStyle(.clear))
                     shape.fill(configuration.isPressed
                                ? AnyShapeStyle(.tertiary)
                                : hovering ? AnyShapeStyle(.quaternary)
@@ -306,39 +293,19 @@ struct IconButtonStyle: ButtonStyle {
                 }
             }
             .contentShape(shape)
-            .modifier(GlassIconChrome(shape: shape, enabled: glass))
             .scrollAwareHover($hovering)
-    }
-}
-
-private struct GlassIconChrome: ViewModifier {
-    var shape: AnyShape
-    var enabled: Bool
-
-    func body(content: Content) -> some View {
-        if enabled {
-            if #available(macOS 26.0, *) {
-                content.glassEffect(.regular, in: shape)
-            } else {
-                content.overlay(shape.stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
-            }
-        } else {
-            content
-        }
     }
 }
 
 struct IconMenu<Content: View>: View {
     let icon: String
     let help: String
-    var glass = false
     @ViewBuilder var content: Content
     @Environment(\.iconButtonSize) private var inheritedSize
 
-    init(_ icon: String, help: String, glass: Bool = false, @ViewBuilder content: () -> Content) {
+    init(_ icon: String, help: String, @ViewBuilder content: () -> Content) {
         self.icon = icon
         self.help = help
-        self.glass = glass
         self.content = content()
     }
 
@@ -351,7 +318,7 @@ struct IconMenu<Content: View>: View {
                 .frame(width: inheritedSize.extent, height: inheritedSize.extent)
         }
         .menuStyle(.button)
-        .buttonStyle(IconButtonStyle(shape: IconButton.shape(for: inheritedSize, glass: glass), glass: glass))
+        .buttonStyle(IconButtonStyle(shape: IconButton.shape(for: inheritedSize)))
         .menuIndicator(.hidden)
         .fixedSize()
         .help(help)
