@@ -267,6 +267,7 @@ struct IconButton: View {
                                      glass: glass))
         .help(help)
         .accessibilityLabel(Self.accessibilityName(help))
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 
     static func shape(for size: Size, glass: Bool = false) -> AnyShape {
@@ -390,15 +391,17 @@ struct PanelBar<Content: View>: View {
     }
 }
 
-struct NavigatorEmptyState: View {
+struct NavigatorEmptyState<Actions: View>: View {
     let title: String
     let systemImage: String
     let detail: String
+    @ViewBuilder var actions: Actions
 
-    init(_ title: String, systemImage: String, detail: String) {
+    init(_ title: String, systemImage: String, detail: String, @ViewBuilder actions: () -> Actions) {
         self.title = title
         self.systemImage = systemImage
         self.detail = detail
+        self.actions = actions()
     }
 
     var body: some View {
@@ -407,15 +410,27 @@ struct NavigatorEmptyState: View {
                 .font(.title2)
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
-            Text(title)
-                .font(.callout.weight(.medium))
-            Text(detail)
-                .font(.caption)
-                .multilineTextAlignment(.center)
+            VStack(spacing: DS.Space.m) {
+                Text(title)
+                    .font(.callout.weight(.medium))
+                Text(detail)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+            }
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
+            actions
+                .controlSize(.small)
+                .padding(.top, DS.Space.xs)
         }
-        .foregroundStyle(.secondary)
         .padding(DS.Space.xl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+extension NavigatorEmptyState where Actions == EmptyView {
+    init(_ title: String, systemImage: String, detail: String) {
+        self.init(title, systemImage: systemImage, detail: detail) { EmptyView() }
     }
 }
 
@@ -483,6 +498,7 @@ struct IconSegmentedControl<Value: Hashable>: View {
         }
         .labelsHidden()
         .modifier(PaneTabsStyle(fillsWidth: fillsWidth))
+        .buttonBorderShape(.capsule)
         .tint(nil)
     }
 }

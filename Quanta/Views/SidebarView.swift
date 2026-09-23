@@ -141,11 +141,8 @@ struct SidebarView: View {
     }
 
     private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No Folder Open", systemImage: "folder")
-        } description: {
-            Text("Open a folder to browse and search its files.")
-        } actions: {
+        NavigatorEmptyState("No Folder Open", systemImage: "folder",
+                            detail: "Open a folder to browse and search its files.") {
             Button("Open Folder…") { app.openFolderPanel() }
                 .help("Open a folder as the workspace (⇧⌘O)")
         }
@@ -192,9 +189,10 @@ struct SidebarView: View {
         .overlay {
             if searching { ProgressView() }
             else if let error = searchReport.error {
-                ContentUnavailableView("Search Error", systemImage: "exclamationmark.triangle", description: Text(error))
+                NavigatorEmptyState("Search Error", systemImage: "exclamationmark.triangle", detail: error)
             } else if searchResults.isEmpty, let query = searchedQuery {
-                ContentUnavailableView.search(text: query)
+                NavigatorEmptyState("No Results", systemImage: "magnifyingglass",
+                                    detail: "Nothing in this folder matches “\(query)”.")
             }
         }
         .onChange(of: app.workspace?.rootURL) { _, _ in

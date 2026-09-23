@@ -30,40 +30,28 @@ struct SourceControlPanel: View {
     private var content: some View {
         switch git.availability {
         case .noWorkspace:
-            ContentUnavailableView {
-                Label("No Folder Open", systemImage: "folder")
-            } description: {
-                Text("Open a folder to see its git changes.")
-            } actions: {
+            NavigatorEmptyState("No Folder Open", systemImage: "folder",
+                                detail: "Open a folder to see its git changes.") {
                 Button("Open Folder…") { app.openFolderPanel() }
                     .help("Open a folder as the workspace (⇧⌘O)")
             }
         case .gitMissing:
-            ContentUnavailableView {
-                Label("Git Not Found", systemImage: "arrow.triangle.branch")
-            } description: {
-                Text("Install the Xcode Command Line Tools, then relaunch Quanta to use source control.")
-            } actions: {
+            NavigatorEmptyState("Git Not Found", systemImage: "arrow.triangle.branch",
+                                detail: "Install the Xcode Command Line Tools, then relaunch Quanta to use source control.") {
                 Button("Install Command Line Tools…") { app.installCommandLineTools() }
             }
         case .unknown:
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .notRepository:
-            ContentUnavailableView {
-                Label("Not a Git Repository", systemImage: "arrow.triangle.branch")
-            } description: {
-                Text("\(folderName) is not under version control yet.")
-            } actions: {
+            NavigatorEmptyState("Not a Git Repository", systemImage: "arrow.triangle.branch",
+                                detail: "\(folderName) is not under version control yet.") {
                 Button("Initialize Repository") { app.initializeRepository() }
                     .disabled(git.isBusy)
             }
         case .failed(let message):
-            ContentUnavailableView {
-                Label("Git Status Failed", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(message)
-            } actions: {
+            NavigatorEmptyState("Git Status Failed", systemImage: "exclamationmark.triangle",
+                                detail: message) {
                 Button("Try Again") { app.refreshSourceControl() }
             }
         case .ready:
@@ -347,15 +335,13 @@ struct SourceControlPanel: View {
         .overlay {
             if filtered(snapshot.visibleChanges).isEmpty {
                 if filenameFilter.isEmpty {
-                    ContentUnavailableView {
-                        Label("No \(scope.rawValue) Changes", systemImage: "checkmark.circle")
-                    } description: {
-                        Text(scope == .staged ? "Stage files to include them in your next commit." : "All your changes have been staged.")
-                    } actions: {
+                    NavigatorEmptyState("No \(scope.rawValue) Changes", systemImage: "checkmark.circle",
+                                        detail: scope == .staged ? "Stage files to include them in your next commit." : "All your changes have been staged.") {
                         Button("Show All Changes") { scope = .all }
                     }
                 } else {
-                    ContentUnavailableView.search(text: filenameFilter)
+                    NavigatorEmptyState("No Results", systemImage: "magnifyingglass",
+                                        detail: "No changed file matches “\(filenameFilter)”.")
                 }
             }
         }

@@ -28,8 +28,8 @@ struct VariablesPanel: View {
                 }
             }
             if app.variables.isEmpty {
-                ContentUnavailableView("No Variables", systemImage: "cube.transparent")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                NavigatorEmptyState("No Variables", systemImage: "cube.transparent",
+                                    detail: "Run code to see the variables it defines.")
             } else {
                 List(visibleVariables, selection: $selected) { variable in
                     VariableRowView(variable: variable, changed: app.changedVariables.contains(variable.name), inspect: { inspected = variable })
@@ -38,11 +38,8 @@ struct VariablesPanel: View {
                 .listStyle(.sidebar)
                 .overlay {
                     if visibleVariables.isEmpty {
-                        ContentUnavailableView {
-                            Label("No Matching Variables", systemImage: "magnifyingglass")
-                        } description: {
-                            Text("Try another name or variable type.")
-                        } actions: {
+                        NavigatorEmptyState("No Matching Variables", systemImage: "magnifyingglass",
+                                            detail: "Try another name or variable type.") {
                             Button("Clear Filters") { query = ""; typeFilter = "All Types" }
                         }
                     }

@@ -85,10 +85,9 @@ struct BottomPanel: View {
     @ViewBuilder
     private var terminalPane: some View {
         if let error = terminal.error {
-            ContentUnavailableView {
-                Label("Terminal Couldn’t Start", systemImage: "exclamationmark.triangle")
-            } description: { Text(error) } actions: {
-                Button("Retry") { app.showTerminal() }
+            NavigatorEmptyState("Terminal Couldn’t Start", systemImage: "exclamationmark.triangle",
+                                detail: error) {
+                Button("Try Again") { app.showTerminal() }
             }
         } else {
             TerminalSurface(session: terminal)

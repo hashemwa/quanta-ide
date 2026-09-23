@@ -224,6 +224,7 @@ struct TabBarView: View {
                                 delegate: TabEndDropDelegate(app: app, insertion: $insertion,
                                                              trackingDrop: $trackingDrop))
                 }
+                .padding(.leading, DS.Space.xs)
             }
             .onChange(of: app.activeDocumentID, initial: true) { _, id in
                 guard let id else { return }
@@ -292,10 +293,11 @@ struct TabItemView: View {
         .frame(minWidth: DS.Layout.tabMinWidth, maxWidth: DS.Layout.tabMaxWidth)
         .frame(height: DS.Bar.primary)
         .background {
-            if isActive {
-                Color(nsColor: .textBackgroundColor)
-            } else if hovering {
-                Rectangle().fill(.quaternary).opacity(0.5)
+            if isActive || hovering {
+                Capsule()
+                    .fill(isActive ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.quinary))
+                    .padding(.vertical, DS.Space.xs)
+                    .padding(.horizontal, DS.Space.xxs)
             }
         }
         .overlay(alignment: insertion?.after == true ? .trailing : .leading) {
@@ -317,7 +319,7 @@ struct TabItemView: View {
                 delegate: TabReorderDropDelegate(target: document.id, width: width,
                                                  app: app, insertion: $insertion,
                                                  trackingDrop: $trackingDrop))
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { app.activeDocumentID = document.id }
         .scrollAwareHover($hovering)
         .help(document.url?.path ?? document.displayName)

@@ -61,8 +61,8 @@ struct PlotsPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             if records.isEmpty {
-                ContentUnavailableView("No Plots", systemImage: "chart.xyaxis.line")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                NavigatorEmptyState("No Plots", systemImage: "chart.xyaxis.line",
+                                    detail: "Plots from your notebooks and scripts appear here.")
             } else {
                 HStack(spacing: 0) {
                     List(records, selection: $selection) { record in
