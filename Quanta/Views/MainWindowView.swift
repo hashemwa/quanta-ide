@@ -33,8 +33,7 @@ struct MainWindowView: View {
                                       max: DS.Layout.inspectorMax)
         }
         .environment(\.monoFontSize, app.editorFontSize - 1)
-        .navigationTitle(windowTitle)
-        .navigationSubtitle(windowSubtitle)
+        .modifier(WindowTitle())
         .sheet(item: $app.paletteMode) { mode in
             CommandPalette(mode: mode).environmentObject(app)
         }
@@ -46,7 +45,7 @@ struct MainWindowView: View {
             Button("Trust and Enable Python") { app.trustWorkspace(url) }
             Button("Browse Without Running", role: .cancel) { app.workspaceTrustRequest = nil }
         } message: { url in
-            Text("Trusting \(url.path) allows Quanta to probe and launch its Python environments and run code. Only trust folders whose contents and source you trust.")
+            Text("Trusting \((url.path as NSString).abbreviatingWithTildeInPath) allows Quanta to probe and launch its Python environments and run code. Only trust folders whose contents and source you trust.")
         }
         .alert("Change Python session?", isPresented: Binding(
             get: { app.kernelTransition != nil },
@@ -55,7 +54,7 @@ struct MainWindowView: View {
             Button("Restart in Workspace", role: .destructive) { app.applyKernelTransition(transition) }
             Button("Keep Current Session", role: .cancel) { app.keepKernelSession() }
         } message: { transition in
-            Text("Restarting clears all Python variables and stops current work.\n\nInterpreter: \(transition.python)\nDirectory: \(transition.workspace?.path ?? FileManager.default.homeDirectoryForCurrentUser.path)\n\nThe current session uses: \(app.executionDirectoryLabel)")
+            Text(transitionMessage(transition))
         }
         .onChange(of: colorScheme) { _, _ in app.pushAppearance() }
         .onChange(of: app.sidebarRevealRequest) { _, _ in
@@ -65,15 +64,12 @@ struct MainWindowView: View {
         }
     }
 
-    private var windowTitle: String {
-        app.activeDocument?.displayName
-            ?? app.workspace?.rootURL.lastPathComponent
-            ?? "Quanta"
-    }
-
-    private var windowSubtitle: String {
-        guard app.activeDocument != nil, let root = app.workspace?.rootURL else { return "" }
-        return root.lastPathComponent
+    private func transitionMessage(_ transition: KernelTransition) -> String {
+        let python = (transition.python as NSString).abbreviatingWithTildeInPath
+        let directory = transition.workspace?.path ?? FileManager.default.homeDirectoryForCurrentUser.path
+        return "Restarting clears all Python variables and stops current work.\n\n"
+            + "Interpreter: \(python)\nDirectory: \((directory as NSString).abbreviatingWithTildeInPath)\n\n"
+            + "The current session uses: \(app.executionDirectoryLabel)"
     }
 
     @ToolbarContentBuilder
@@ -90,6 +86,28 @@ struct MainWindowView: View {
             }
             .help(app.showVariables ? "Hide Variables (⌥⌘0)" : "Show Variables (⌥⌘0)")
         }
+    }
+}
+
+private struct WindowTitle: ViewModifier {
+    @EnvironmentObject private var app: AppState
+    @ObservedObject private var git = AppState.shared.git
+
+    func body(content: Content) -> some View {
+        content
+            .navigationTitle(title)
+            .navigationSubtitle(subtitle)
+    }
+
+    private var title: String {
+        app.workspace?.rootURL.lastPathComponent
+            ?? app.activeDocument?.displayName
+            ?? "Quanta"
+    }
+
+    private var subtitle: String {
+        guard app.workspace != nil else { return "" }
+        return git.snapshot?.headDescription ?? ""
     }
 }
 
@@ -204,19 +222,11 @@ struct DetailSplitView: View {
     private var editorToolbar: some ToolbarContent {
         if #available(macOS 26.0, *) {
             ToolbarItemGroup(placement: .navigation) { HistoryControls() }
-            ToolbarSpacer(.fixed)
-            if #available(macOS 26.1, *) {
-                ToolbarItemGroup(placement: .principal) { RunControls() }
-                    .visibilityPriority(.high)
-                ToolbarSpacer(.fixed, placement: .principal)
-                ToolbarItem(placement: .principal) { KernelStatusMenu() }
-                    .visibilityPriority(.high)
-            } else {
-                ToolbarItemGroup(placement: .principal) { RunControls() }
-                ToolbarSpacer(.fixed, placement: .principal)
-                ToolbarItem(placement: .principal) { KernelStatusMenu() }
-            }
             ToolbarSpacer(.flexible)
+            ToolbarItem(placement: .primaryAction) { KernelStatusMenu() }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+            ToolbarItemGroup(placement: .primaryAction) { RunControls() }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
             ToolbarItemGroup(placement: .primaryAction) {
                 splitButton
                 consoleButton
@@ -224,8 +234,8 @@ struct DetailSplitView: View {
         } else {
             ToolbarItemGroup {
                 HistoryControls()
-                RunControls()
                 KernelStatusMenu()
+                RunControls()
                 splitButton
                 consoleButton
             }
@@ -415,11 +425,10 @@ struct KernelStatusMenu: View {
                 indicator
                     .font(.system(size: DS.Layout.kernelGlyph, weight: .semibold))
                     .frame(width: DS.Layout.statusSlot, height: DS.Layout.statusSlot)
-                Text(title)
+                Text(displayTitle)
                     .font(.callout)
                     .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize()
                 if let progress = app.runQueueProgress {
                     Text("\(progress.completed)/\(progress.total)")
                         .font(.caption.monospacedDigit())
@@ -430,12 +439,9 @@ struct KernelStatusMenu: View {
             .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)
-        .frame(minWidth: DS.Layout.kernelLabelMinWidth,
-               idealWidth: DS.Layout.kernelLabelWidth,
-               maxWidth: DS.Layout.kernelLabelWidth)
-        .modifier(KernelMenuSizing())
         .help(tooltip)
-        .accessibilityLabel("Interpreter: \(title)")
+        .accessibilityLabel("Interpreter: \(environmentTitle)")
+        .accessibilityValue(app.kernelStatus.label)
     }
 
     @ViewBuilder
@@ -461,24 +467,32 @@ struct KernelStatusMenu: View {
         }
     }
 
-    private var title: String {
+    private var environmentTitle: String {
         if !app.isWorkspaceTrusted { return "Restricted Workspace" }
         let name = app.environmentName
         let version = app.kernelPythonVersion
             ?? app.pythonPath.flatMap { app.environmentVersions[$0] }
-        let base: String
         if let version, !version.isEmpty {
-            base = "\(name) — Python \(version)" + directorySuffix
-        } else {
-            base = name + directorySuffix
+            return "\(name) — Python \(version)" + directorySuffix
         }
+        return name + directorySuffix
+    }
+
+    private var title: String {
+        guard app.isWorkspaceTrusted else { return environmentTitle }
         switch app.kernelStatus {
-        case .idle: return base
-        case .busy: return "\(base) · Running"
-        case .starting: return "\(base) · Starting"
-        case .dead: return "\(base) · Crashed"
-        case .stopped: return "\(base) · Off"
+        case .idle, .busy: return environmentTitle
+        case .starting: return "\(environmentTitle) · Starting"
+        case .dead: return "\(environmentTitle) · Crashed"
+        case .stopped: return "\(environmentTitle) · Off"
         }
+    }
+
+    private var displayTitle: String {
+        let limit = DS.Layout.kernelTitleLimit
+        guard title.count > limit else { return title }
+        let half = (limit - 1) / 2
+        return String(title.prefix(half)) + "…" + String(title.suffix(half))
     }
 
     private var tooltip: String {
@@ -505,12 +519,3 @@ struct KernelStatusMenu: View {
     }
 }
 
-private struct KernelMenuSizing: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.buttonSizing(.flexible)
-        } else {
-            content
-        }
-    }
-}

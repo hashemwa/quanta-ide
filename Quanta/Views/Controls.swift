@@ -65,8 +65,7 @@ enum DS {
         static let slot: CGFloat = 22
         static let iconSlot: CGFloat = 16
         static let statusSlot: CGFloat = 14
-        static let kernelLabelWidth: CGFloat = 244
-        static let kernelLabelMinWidth: CGFloat = 140
+        static let kernelTitleLimit = 44
         static let symbolGlyph: CGFloat = 10
         static let kernelGlyph: CGFloat = 12
         static let cellGutterWidth: CGFloat = 48

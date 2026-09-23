@@ -107,7 +107,8 @@ extension AppState {
 
     var executionDirectoryLabel: String {
         guard kernel.isRunning else { return "No running session" }
-        return kernel.workingDirectory?.path ?? "Unavailable"
+        guard let path = kernel.workingDirectory?.path else { return "Unavailable" }
+        return (path as NSString).abbreviatingWithTildeInPath
     }
 
     var kernelUsesDifferentDirectory: Bool {
