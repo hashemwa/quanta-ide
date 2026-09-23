@@ -587,7 +587,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         cell.source.components(separatedBy: "\n").first { !$0.isEmpty } ?? "(empty cell)"
     }
 
-    private static func durationLabel(_ seconds: Double) -> String {
+    static func durationLabel(_ seconds: Double) -> String {
         if seconds < 0.1 { return "<0.1s" }
         if seconds < 60 { return String(format: "%.1fs", seconds) }
         return "\(Int(seconds) / 60)m \(Int(seconds) % 60)s"

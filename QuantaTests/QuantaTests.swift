@@ -251,9 +251,9 @@ final class CellOperationTests: XCTestCase {
     }
 
     func testDurationLabel() {
-        XCTAssertEqual(CellView.durationLabel(0.03), "<0.1s")
-        XCTAssertEqual(CellView.durationLabel(2.34), "2.3s")
-        XCTAssertEqual(CellView.durationLabel(75), "1m 15s")
+        XCTAssertEqual(NotebookCellAppKitView.durationLabel(0.03), "<0.1s")
+        XCTAssertEqual(NotebookCellAppKitView.durationLabel(2.34), "2.3s")
+        XCTAssertEqual(NotebookCellAppKitView.durationLabel(75), "1m 15s")
     }
 }
 
