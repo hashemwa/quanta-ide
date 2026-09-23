@@ -220,6 +220,29 @@ class NotebookCompatTests(unittest.TestCase):
         errors = [m for m in messages if m.get("type") == "error"]
         self.assertEqual(errors[0]["ename"], "UnsupportedNotebookCommand")
 
+    def test_each_show_emits_its_own_figure_in_output_order(self):
+        try:
+            import matplotlib
+        except ImportError:
+            self.skipTest("matplotlib is not installed")
+        messages = exchange([
+            {"id": "plots", "op": "execute", "code": "\n".join([
+                "import matplotlib.pyplot as plt",
+                "print('first')",
+                "plt.plot([1, 2], label='one')",
+                "plt.legend()",
+                "plt.show()",
+                "print('second')",
+                "plt.plot([2, 1], label='two')",
+                "plt.legend()",
+                "plt.show()",
+                "print(len(plt.get_fignums()))",
+            ])},
+        ])
+        outputs = [m.get("text", "").strip() if m["type"] == "stream" else m["mime"]
+                   for m in messages if m.get("id") == "plots" and m.get("type") in ("stream", "display")]
+        self.assertEqual(outputs, ["first", "image/png", "second", "image/png", "0"])
+
     def test_plot_theme_toggle_preserves_matplotlib_rendering(self):
         try:
             import matplotlib

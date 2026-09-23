@@ -3,6 +3,8 @@ import ast
 import base64
 import builtins
 import datetime
+import functools
+import importlib.machinery
 import io
 import html as html_escape
 import json
@@ -430,6 +432,39 @@ def emit_figures():
         plt.close("all")
     except Exception:
         pass
+
+def _flush_figures_on_show(pyplot):
+    original = pyplot.show
+
+    @functools.wraps(original)
+    def show(*args, **kwargs):
+        if _current_id is None:
+            return original(*args, **kwargs)
+        stdout_writer.flush()
+        stderr_writer.flush()
+        emit_figures()
+
+    pyplot.show = show
+
+
+class _PyplotShowHook:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname != "matplotlib.pyplot":
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path)
+        if spec is None or not hasattr(spec.loader, "exec_module"):
+            return None
+        load = spec.loader.exec_module
+
+        def exec_module(module):
+            load(module)
+            _flush_figures_on_show(module)
+
+        spec.loader.exec_module = exec_module
+        return spec
+
+
+sys.meta_path.insert(0, _PyplotShowHook())
 
 def _is_matplotlib_result(obj):
     if "matplotlib" not in sys.modules:
