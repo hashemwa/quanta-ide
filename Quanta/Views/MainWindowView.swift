@@ -284,6 +284,16 @@ struct PanelResizeHandle: View {
             }
             .zIndex(1)
             .preference(key: PanelDragHeight.self, value: live)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Bottom Panel Height")
+            .accessibilityValue("\(Int(height)) points")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: height = min(height + DS.Layout.panelResizeStep, range.upperBound)
+                case .decrement: height = max(height - DS.Layout.panelResizeStep, range.lowerBound)
+                @unknown default: break
+                }
+            }
     }
 }
 
@@ -323,6 +333,17 @@ struct ColumnResizeHandle: View {
                     .onTapGesture(count: 2) { fraction = 0.5 }
             }
             .zIndex(1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Editor Split")
+            .accessibilityValue("\(Int((fraction * 100).rounded())) percent")
+            .accessibilityAdjustableAction { direction in
+                let range = DS.Layout.splitFractionRange
+                switch direction {
+                case .increment: fraction = min(fraction + DS.Layout.splitResizeStep, range.upperBound)
+                case .decrement: fraction = max(fraction - DS.Layout.splitResizeStep, range.lowerBound)
+                @unknown default: break
+                }
+            }
     }
 }
 

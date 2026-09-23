@@ -271,13 +271,13 @@ struct NDArrayView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                badge("ndarray \(payload.shapeLabel)", emphasized: true)
+                Pill("ndarray \(payload.shapeLabel)", tone: .strong, monospaced: true)
                     .help("shape (\(payload.shape.map(String.init).joined(separator: ", "))) · \(payload.dtype)")
-                badge(payload.dtype, emphasized: false)
+                Pill(payload.dtype, monospaced: true)
                     .help("dtype \(payload.dtype)")
                 ForEach(["min", "max", "mean", "std"], id: \.self) { key in
                     if let v = payload.stats[key] {
-                        badge("\(key) \(Self.compact(v))", emphasized: false)
+                        Pill("\(key) \(Self.compact(v))", monospaced: true)
                             .help("\(key) \(v)")
                     }
                 }
@@ -300,17 +300,6 @@ struct NDArrayView: View {
             }
         }
         .padding(.vertical, 2)
-    }
-
-    private func badge(_ text: String, emphasized: Bool) -> some View {
-        Text(text)
-            .font(.system(size: monoSize - 2, design: .monospaced))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(emphasized
-                ? Color.accentColor.opacity(0.18)
-                : Color.secondary.opacity(0.12)))
-            .foregroundStyle(emphasized ? Color.accentColor : Color.secondary)
     }
 
     static func compact(_ v: Double) -> String {
@@ -388,7 +377,7 @@ struct SparklineView: View {
                     started = true
                 }
             }
-            context.stroke(path, with: .color(.accentColor), lineWidth: 1.5)
+            context.stroke(path, with: .color(.secondary), lineWidth: 1.5)
         }
         .outputCard()
     }
@@ -513,7 +502,8 @@ struct ObjectCardView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Image(systemName: "cube")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 Text(payload.title)
                     .font(.system(size: monoSize + 1, weight: .semibold, design: .monospaced))
                 Text(payload.subtitle)
@@ -526,12 +516,7 @@ struct ObjectCardView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     ForEach(payload.badges.prefix(8), id: \.self) { badge in
-                        Text(badge)
-                            .font(.system(size: monoSize - 2, design: .monospaced))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.green.opacity(0.15)))
-                            .foregroundStyle(.green)
+                        Pill(badge, tone: .success, monospaced: true)
                     }
                 }
             }

@@ -494,12 +494,7 @@ private struct ChangeSectionHeader<Actions: View>: View {
                 .opacity(hovering ? 1 : 0)
                 .allowsHitTesting(hovering)
                 .disabled(git.isBusy)
-            Text("\(count)")
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, DS.Space.s)
-                .padding(.vertical, DS.Space.xxs)
-                .background(.quaternary, in: Capsule())
+            Pill("\(count)", tone: .strong)
                 .fixedSize()
                 .accessibilityHidden(true)
         }

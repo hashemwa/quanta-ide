@@ -40,15 +40,18 @@ struct OutputItemView: View {
         case .image(let data, let image):
             if let image {
                 ImageOutputView(data: data, image: image)
+                    .padding(.leading, DS.Layout.cellTextInset)
             } else {
                 Label("Could not decode image output", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(.leading, DS.Layout.cellTextInset)
             }
 
         case .plotlyFigure(let html, let jsPath, let data, let image, let height):
             PlotlyFigureView(html: html, jsPath: jsPath, image: image, imageData: data,
                              height: height, cacheKey: output.id)
+                .padding(.leading, DS.Layout.cellTextInset)
 
         case .error(let ename, let evalue, let traceback, let frames):
             TracebackView(ename: ename, evalue: evalue, traceback: traceback,
@@ -76,7 +79,7 @@ struct OutputItemView: View {
                   systemImage: "doc.richtext")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .padding(.leading, 4)
+                .padding(.leading, DS.Layout.cellTextInset)
         }
     }
 }

@@ -275,6 +275,12 @@ struct SidebarView: View {
                                 filtering: !fileFilter.isEmpty,
                                 statusByPath: snapshot?.statusByPath ?? [:],
                                 directoriesWithChanges: snapshot?.directoriesWithChanges ?? [])
+        .overlay {
+            if nodes.isEmpty, !fileFilter.isEmpty {
+                NavigatorEmptyState("No Results", systemImage: "magnifyingglass",
+                                    detail: "No file name matches “\(fileFilter)”.")
+            }
+        }
         .onChange(of: selectedFiles) { old, selection in
             guard selection.count == 1, let url = selection.first,
                   old != selection, url.resolvingSymlinksInPath() != app.activeDocument?.url?.resolvingSymlinksInPath() else { return }

@@ -13,8 +13,9 @@ struct DataNavigatorView: View {
                 NavigatorEmptyState("No Data Sources", systemImage: "externaldrive",
                                     detail: "Open a local database or a CSV, TSV, or Parquet file.")
             } else {
+                let visibleSources = browser.sources.filter { filter.isEmpty || $0.name.localizedCaseInsensitiveContains(filter) }
                 List(selection: $selected) {
-                    ForEach(browser.sources.filter { filter.isEmpty || $0.name.localizedCaseInsensitiveContains(filter) }) { source in
+                    ForEach(visibleSources) { source in
                         Group {
                             if let session = app.openDocuments.first(where: { $0.dataSession?.source == source })?.dataSession,
                                source.isDatabase {
@@ -31,6 +32,12 @@ struct DataNavigatorView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .overlay {
+                    if visibleSources.isEmpty {
+                        NavigatorEmptyState("No Results", systemImage: "magnifyingglass",
+                                            detail: "No data source matches “\(filter)”.")
+                    }
+                }
                 .onChange(of: selected) { _, value in
                     if let source = browser.sources.first(where: { $0.url == value }) { app.openData(source) }
                 }

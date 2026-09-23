@@ -73,13 +73,20 @@ private struct ConsoleBody: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .textBackgroundColor))
+            .overlay {
+                if visibleLines.isEmpty, !query.isEmpty || scope != "All" {
+                    NavigatorEmptyState("No Results", systemImage: "magnifyingglass",
+                                        detail: query.isEmpty ? "No \(scope.lowercased()) in the console."
+                                                              : "No console message matches “\(query)”.")
+                }
+            }
 
             Divider()
 
             HStack(spacing: DS.Space.s) {
                 Text("»")
                     .font(.system(size: app.editorFontSize - 1, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.secondary)
                 TextField("Run Python in the kernel…", text: $input)
                     .textFieldStyle(.plain)
                     .font(.system(size: app.editorFontSize - 1, design: .monospaced))
@@ -118,7 +125,7 @@ struct ConsoleLineView: View {
         HStack(alignment: .top, spacing: 6) {
             if line.kind == .input {
                 Text("»")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: DS.Space.xs) {
                 Text(ANSIRenderer.attributed(line.text.trimmingTrailingNewlines)).foregroundStyle(color)

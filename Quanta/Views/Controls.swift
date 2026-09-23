@@ -78,6 +78,9 @@ enum DS {
         static let notebookProseSpacing: CGFloat = Space.xs
         static let hairline: CGFloat = 1
         static let selectionBar: CGFloat = 3
+        static let panelResizeStep: CGFloat = 32
+        static let splitResizeStep: CGFloat = 0.05
+        static let splitFractionRange: ClosedRange<CGFloat> = 0.15...0.85
         static let commitLines = 1...5
         static let diffMarkerWidth: CGFloat = 16
         static let diffLineInset: CGFloat = 1
@@ -569,17 +572,40 @@ struct LabelMenu<Content: View, Label: View>: View {
 }
 
 struct Pill: View {
-    let text: String
+    enum Tone {
+        case neutral, strong, success
+    }
 
-    init(_ text: String) { self.text = text }
+    let text: String
+    var tone: Tone
+    var monospaced: Bool
+
+    init(_ text: String, tone: Tone = .neutral, monospaced: Bool = false) {
+        self.text = text
+        self.tone = tone
+        self.monospaced = monospaced
+    }
 
     var body: some View {
         Text(text)
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, DS.Space.xs)
-            .padding(.vertical, 1)
-            .background(Capsule().fill(.quaternary))
+            .font(monospaced ? .caption.monospaced() : .caption.monospacedDigit())
+            .fontWeight(tone == .strong ? .semibold : .regular)
+            .foregroundStyle(foreground)
+            .padding(.horizontal, DS.Space.s)
+            .padding(.vertical, DS.Space.xxs)
+            .background(Capsule().fill(background))
+    }
+
+    private var foreground: AnyShapeStyle {
+        switch tone {
+        case .neutral: AnyShapeStyle(.secondary)
+        case .strong: AnyShapeStyle(.primary)
+        case .success: AnyShapeStyle(DS.StatusColors.success)
+        }
+    }
+
+    private var background: AnyShapeStyle {
+        tone == .success ? AnyShapeStyle(DS.StatusColors.success.opacity(0.15)) : AnyShapeStyle(.quaternary)
     }
 }
 

@@ -87,7 +87,7 @@ struct VariableRowView: View {
         VStack(alignment: .leading, spacing: DS.Space.xxs) {
             HStack(spacing: DS.Space.s) {
                 if changed {
-                    Circle().fill(Color.accentColor).frame(width: DS.Layout.statusDot, height: DS.Layout.statusDot)
+                    Circle().fill(DS.StatusColors.warning).frame(width: DS.Layout.statusDot, height: DS.Layout.statusDot)
                         .help("New or changed since the previous variable refresh")
                         .accessibilityLabel("Changed")
                 }
