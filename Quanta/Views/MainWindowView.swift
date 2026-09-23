@@ -78,7 +78,10 @@ struct MainWindowView: View {
     @ToolbarContentBuilder
     private var navigatorToolbar: some ToolbarContent {
         ToolbarItem(placement: .automatic) { NavigatorToggle(columnVisibility: $columnVisibility) }
-        if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
+        if #available(macOS 26.0, *) {
+            ToolbarSpacer(.fixed)
+            ToolbarSpacer(.flexible)
+        }
         ToolbarItemGroup(placement: .primaryAction) { RunControls() }
     }
 
@@ -257,7 +260,8 @@ struct PanelResizeHandle: View {
     @State private var live: CGFloat?
 
     var body: some View {
-        Divider()
+        Color.clear
+            .frame(height: DS.Layout.hairline)
             .overlay {
                 Color.clear
                     .frame(height: 8)
