@@ -110,6 +110,18 @@ final class AppState: ObservableObject {
             pushAppearance()
         }
     }
+    @Published var appearanceMode = AppearanceMode.stored {
+        didSet {
+            QuantaDefaults.store.set(appearanceMode.rawValue, forKey: AppearanceMode.key)
+            NSApp.appearance = appearanceMode.appearance
+        }
+    }
+    @Published var theme = AppTheme.stored {
+        didSet {
+            AppTheme.current = theme
+            QuantaDefaults.store.set(theme.rawValue, forKey: AppTheme.key)
+        }
+    }
     @Published private(set) var cellRevision = 0
     var handledFileSearchFocusRequest = 0
 

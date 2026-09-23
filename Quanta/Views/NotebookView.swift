@@ -23,7 +23,7 @@ struct NotebookView: View {
             NotebookScrollView(document: document, notebook: notebook,
                                scrollRequest: presentation.scrollRequest)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(DS.Chrome.canvas)
         .background(CommandModeHost())
     }
 }
@@ -91,7 +91,7 @@ struct FindBarView: View {
             }
         }
         .padding(.horizontal, DS.Space.bar)
-        .background(.bar)
+        .background(DS.Chrome.bar)
         .onExitCommand { app.closeFind(in: document) }
     }
 

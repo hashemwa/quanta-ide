@@ -107,7 +107,7 @@ struct DiffView: View {
             .padding(.vertical, DS.Space.m)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(DS.Chrome.editor)
     }
 
     private func gutterWidth(_ diff: DiffDocument) -> CGFloat {

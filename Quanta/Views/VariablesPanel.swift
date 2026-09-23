@@ -36,6 +36,7 @@ struct VariablesPanel: View {
                         .tag(variable.name)
                 }
                 .listStyle(.sidebar)
+                .sidebarListBackground()
                 .overlay {
                     if visibleVariables.isEmpty {
                         ContentUnavailableView {

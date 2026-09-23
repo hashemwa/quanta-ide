@@ -100,6 +100,10 @@ struct NotebookNavigator: View {
             }
         }
         .font(.caption)
+        .background(DS.Chrome.backdrop)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(DS.Chrome.rule).frame(height: DS.Layout.hairline)
+        }
     }
 
     private var outline: some View {

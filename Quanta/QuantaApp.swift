@@ -13,6 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApp.appearance = AppearanceMode.stored.appearance
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         signal(SIGPIPE, SIG_IGN)
         NSApp.setActivationPolicy(.regular)
@@ -40,6 +44,7 @@ struct QuantaApp: App {
         Window("Quanta", id: "main") {
             MainWindowView()
                 .environmentObject(appState)
+                .themeScope()
                 .frame(minWidth: DS.Layout.windowMinWidth, minHeight: DS.Layout.windowMinHeight)
                 .background(WindowFrameSaver())
                 .preferredColorScheme(previewColorScheme)
@@ -54,6 +59,7 @@ struct QuantaApp: App {
         Settings {
             SettingsView()
                 .environmentObject(appState)
+                .themeScope()
         }
     }
 
@@ -380,6 +386,9 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
+            AppearanceSettingsView()
+                .tabItem { Label("Appearance", systemImage: "paintpalette") }
+
             Form {
                 Section {
                     Toggle("Reopen last session at launch", isOn: $reopenSession)
@@ -453,5 +462,118 @@ struct SettingsView: View {
             .frame(width: 480)
             .tabItem { Label("Editor", systemImage: "textformat.size") }
         }
+    }
+}
+
+private struct AppearanceSettingsView: View {
+    @EnvironmentObject var app: AppState
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Appearance", selection: $app.appearanceMode) {
+                    ForEach(AppearanceMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text("System follows your Mac’s Light or Dark appearance. Every theme has a light and a dark version.")
+            }
+            Section("Theme") {
+                HStack(alignment: .top, spacing: DS.Space.l) {
+                    ForEach(AppTheme.allCases) { theme in
+                        ThemeCard(theme: theme, selected: app.theme == theme) { app.theme = theme }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 480)
+    }
+}
+
+private struct ThemeCard: View {
+    let theme: AppTheme
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                ThemePreview()
+                    .environment(\.appTheme, theme)
+                    .frame(height: DS.Layout.themePreviewHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: DS.Radius.card)
+                            .strokeBorder(selected ? AnyShapeStyle(.tint) : AnyShapeStyle(.separator),
+                                          lineWidth: selected ? DS.Layout.selectionRing : DS.Layout.hairline)
+                    }
+                HStack(spacing: DS.Space.xs) {
+                    Text(theme.title)
+                        .font(.body.weight(.medium))
+                    if selected {
+                        Image(systemName: "checkmark")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tint)
+                            .accessibilityHidden(true)
+                    }
+                }
+                Text(theme.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(DS.Space.s)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: DS.Radius.panel))
+        }
+        .buttonStyle(.plain)
+        .hoverHighlight(radius: DS.Radius.panel)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+}
+
+private struct ThemePreview: View {
+    @Environment(\.appTheme) private var theme
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                HStack(spacing: DS.Space.xxs) {
+                    ForEach([NSColor.systemRed, .systemYellow, .systemGreen], id: \.self) { color in
+                        Circle()
+                            .fill(Color(nsColor: color))
+                            .frame(width: DS.Layout.statusDot, height: DS.Layout.statusDot)
+                    }
+                }
+                sample(DS.Chrome.secondaryText, trailing: DS.Space.s)
+                sample(DS.Chrome.secondaryText, trailing: DS.Space.l)
+            }
+            .padding(DS.Space.s)
+            .frame(width: DS.Layout.themePreviewSidebar, alignment: .leading)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .background(theme.palette == nil ? AnyShapeStyle(.bar) : AnyShapeStyle(DS.Chrome.sidebar))
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                sample(DS.Chrome.text, trailing: DS.Space.xl)
+                sample(DS.Chrome.secondaryText, trailing: DS.Space.s)
+            }
+            .padding(DS.Space.s)
+            .background(DS.Chrome.surface, in: RoundedRectangle(cornerRadius: DS.Radius.small))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.small)
+                .strokeBorder(DS.Chrome.selection, lineWidth: DS.Layout.hairline))
+            .padding(DS.Space.m)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(DS.Chrome.canvas)
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func sample(_ style: ThemeStyle, trailing: CGFloat) -> some View {
+        Capsule()
+            .fill(style)
+            .frame(height: DS.Space.xs)
+            .padding(.trailing, trailing)
     }
 }

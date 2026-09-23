@@ -153,16 +153,18 @@ final class TerminalSession: NSObject, ObservableObject {
         return view
     }
 
-    func appearance(dark: Bool, size: CGFloat) {
-        guard isReady else { return }
-        browser?.evaluateJavaScript("configureTerminal(\(dark ? "true" : "false"), \(size))")
+    func appearance(_ colors: [String: String], size: CGFloat) {
+        guard isReady, let data = try? JSONSerialization.data(withJSONObject: colors, options: [.sortedKeys]),
+              let theme = String(data: data, encoding: .utf8) else { return }
+        browser?.evaluateJavaScript("configureTerminal(\(theme), \(size))")
     }
 
     fileprivate func message(_ body: [String: Any]) {
         switch body["type"] as? String {
         case "ready":
             isReady = true
-            appearance(dark: NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
+            let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            appearance(DS.Chrome.terminalTheme(AppTheme.current, dark: dark),
                        size: AppState.shared.editorFontSize - 1)
             flush()
         case "input": if let text = body["data"] as? String { send(text) }

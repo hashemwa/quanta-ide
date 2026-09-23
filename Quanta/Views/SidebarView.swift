@@ -32,6 +32,7 @@ struct SidebarView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(DS.Chrome.sidebar)
     }
 
     private static let paneSegments: [IconSegmentedControl<SidebarPane>.Segment] =
@@ -43,6 +44,9 @@ struct SidebarView: View {
                                  selection: Binding(get: { app.sidebarPane },
                                                     set: { app.showSidebarPane($0) }))
                 .accessibilityLabel("Navigator")
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(DS.Chrome.rule).frame(height: DS.Layout.hairline)
         }
     }
 
@@ -189,6 +193,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .sidebarListBackground()
         .overlay {
             if searching { ProgressView() }
             else if let error = searchReport.error {

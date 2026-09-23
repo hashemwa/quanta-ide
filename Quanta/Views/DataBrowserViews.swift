@@ -31,6 +31,7 @@ struct DataNavigatorView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .sidebarListBackground()
                 .onChange(of: selected) { _, value in
                     if let source = browser.sources.first(where: { $0.url == value }) { app.openData(source) }
                 }
@@ -155,6 +156,7 @@ struct DataColumnInspector: View {
                         }.tag(index)
                     }
                 }.listStyle(.sidebar)
+                    .sidebarListBackground()
                     .onAppear { selection = session.selectedColumn }
                     .onChange(of: selection) { _, value in if let value { session.selectedColumn = value } }
                     .onChange(of: session.selectedColumn) { _, value in selection = value }

@@ -7,9 +7,10 @@ struct NotebookScrollView: NSViewRepresentable {
     let notebook: Notebook
     let scrollRequest: UUID?
     @Environment(\.monoFontSize) private var monoFontSize
+    @Environment(\.appTheme) private var theme
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(document: document, notebook: notebook, monoFontSize: monoFontSize)
+        Coordinator(document: document, notebook: notebook, monoFontSize: monoFontSize, theme: theme)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -18,13 +19,15 @@ struct NotebookScrollView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.update(document: document, notebook: notebook,
-                                   monoFontSize: monoFontSize, scrollRequest: scrollRequest)
+                                   monoFontSize: monoFontSize, theme: theme,
+                                   scrollRequest: scrollRequest)
     }
 
     final class Coordinator {
         private var document: Document
         private var notebook: Notebook
         private var monoFontSize: CGFloat
+        private var theme: AppTheme
         private var cellIDs: [UUID]
         private var cellViews: [NotebookCellAppKitView] = []
         private var cellHeights: [UUID: CGFloat] = [:]
@@ -40,10 +43,11 @@ struct NotebookScrollView: NSViewRepresentable {
         private weak var contentView: NotebookDocumentView?
         private var addView: NSHostingView<AnyView>?
 
-        init(document: Document, notebook: Notebook, monoFontSize: CGFloat) {
+        init(document: Document, notebook: Notebook, monoFontSize: CGFloat, theme: AppTheme) {
             self.document = document
             self.notebook = notebook
             self.monoFontSize = monoFontSize
+            self.theme = theme
             cellIDs = notebook.cells.map(\.id)
             scrollCancellable = ScrollActivityMonitor.shared.$isLiveScrolling
                 .receive(on: DispatchQueue.main)
@@ -55,7 +59,7 @@ struct NotebookScrollView: NSViewRepresentable {
         func makeScrollView() -> NSScrollView {
             let scrollView = NotebookNativeScrollView()
             scrollView.drawsBackground = true
-            scrollView.backgroundColor = .windowBackgroundColor
+            scrollView.backgroundColor = DS.Chrome.nsColor(.canvas)
             scrollView.hasVerticalScroller = true
             scrollView.hasHorizontalScroller = false
             scrollView.autohidesScrollers = true
@@ -78,7 +82,12 @@ struct NotebookScrollView: NSViewRepresentable {
         }
 
         func update(document: Document, notebook: Notebook, monoFontSize: CGFloat,
-                    scrollRequest: UUID?) {
+                    theme: AppTheme, scrollRequest: UUID?) {
+            if self.theme != theme {
+                self.theme = theme
+                scrollView?.contentView.needsDisplay = true
+                cellViews.forEach { $0.applyTheme() }
+            }
             let nextIDs = notebook.cells.map(\.id)
             if self.document !== document || self.notebook !== notebook || cellIDs != nextIDs {
                 needsRebuild = true

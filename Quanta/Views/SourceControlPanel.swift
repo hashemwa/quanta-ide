@@ -343,6 +343,7 @@ struct SourceControlPanel: View {
             }
         }
         .listStyle(.sidebar)
+        .sidebarListBackground()
         .environment(\.defaultMinListRowHeight, DS.Layout.listRowMinHeight)
         .overlay {
             if filtered(snapshot.visibleChanges).isEmpty {

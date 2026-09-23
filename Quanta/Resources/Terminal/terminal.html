@@ -10,9 +10,9 @@ term.open(document.getElementById('terminal'));
 const send = value => window.webkit.messageHandlers.terminal.postMessage(value);
 term.onData(data => send({type:'input',data}));
 term.onResize(size => send({type:'resize',cols:size.cols,rows:size.rows}));
-function configureTerminal(dark,size) {
+function configureTerminal(theme,size) {
  term.options.fontSize=size;
- term.options.theme=dark?darkTheme:lightTheme;
+ term.options.theme=theme;
  fit.fit();
 }
 new ResizeObserver(() => {if(document.body.clientWidth>0&&document.body.clientHeight>0)fit.fit()}).observe(document.body);
