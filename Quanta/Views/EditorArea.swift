@@ -6,11 +6,19 @@ struct EditorAreaView: View {
     @EnvironmentObject var app: AppState
 
     var body: some View {
-        VStack(spacing: 0) {
-            if app.openDocuments.isEmpty {
-                WelcomeView()
-            } else {
+        if app.openDocuments.isEmpty {
+            WelcomeView()
+        } else {
+            VStack(spacing: 0) {
                 TabBarView()
+                documents
+            }
+        }
+    }
+
+    private var documents: some View {
+        VStack(spacing: 0) {
+            Group {
                 if app.externallyChangedDocumentID != nil {
                     HStack(spacing: DS.Space.s) {
                         Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
@@ -214,7 +222,7 @@ struct TabBarView: View {
             }
         }
         .frame(height: DS.Bar.primary)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .modifier(TabBarBackground())
         .background {
             if insertion != nil {
                 TabDragEndMonitor {
@@ -223,6 +231,14 @@ struct TabBarView: View {
                 }
             }
         }
+    }
+}
+
+private struct TabBarBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(alignment: .bottom) { Divider() }
+            .background(Color(nsColor: .textBackgroundColor), ignoresSafeAreaEdges: .all)
     }
 }
 
@@ -277,7 +293,7 @@ struct TabItemView: View {
         .frame(height: DS.Bar.primary)
         .background {
             if isActive || hovering {
-                Capsule()
+                RoundedRectangle(cornerRadius: DS.Radius.selection)
                     .fill(isActive ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.quinary))
                     .padding(.vertical, DS.Space.xs)
                     .padding(.horizontal, DS.Space.xxs)

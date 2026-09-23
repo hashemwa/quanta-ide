@@ -273,8 +273,7 @@ struct PanelResizeHandle: View {
     @State private var live: CGFloat?
 
     var body: some View {
-        Color.clear
-            .frame(height: DS.Layout.hairline)
+        Divider()
             .overlay {
                 Color.clear
                     .frame(height: 8)
