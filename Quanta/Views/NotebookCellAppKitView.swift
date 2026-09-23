@@ -28,10 +28,9 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private var editorHeightConstraint: NSLayoutConstraint?
     private var trackingArea: NSTrackingArea?
     private var cancellables: Set<AnyCancellable> = []
-    private let editorUndoManager = UndoManager()
+    private var editorUndoManager = UndoManager()
     private var cell: NotebookCell?
     var cellID: UUID? { cell?.id }
-    var cellType: CellType? { cell?.cellType }
     private weak var document: Document?
     private weak var notebook: Notebook?
     private var monoFontSize: CGFloat = 12
@@ -71,7 +70,8 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func configure(cell: NotebookCell, document: Document, notebook: Notebook,
-                   monoFontSize: CGFloat) {
+                   monoFontSize: CGFloat, undoManager: UndoManager? = nil) {
+        if let undoManager { editorUndoManager = undoManager }
         let changedCell = self.cell !== cell || self.document !== document || self.notebook !== notebook
         self.cell = cell
         self.document = document
