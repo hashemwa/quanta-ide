@@ -164,17 +164,34 @@ struct FloatingToolbar<Content: View>: View {
     }
 }
 
-struct PlotControlBar<Content: View>: View {
-    @ViewBuilder var content: Content
+struct PlotControls<Controls: View>: ViewModifier {
+    var pinned = false
+    let controls: Controls
+    @State private var hovering = false
 
-    var body: some View {
-        HStack(spacing: DS.Space.xxs) {
-            Spacer(minLength: 0)
+    func body(content: Content) -> some View {
+        if pinned {
+            content.overlay(alignment: .topTrailing) { toolbar(visible: true) }
+        } else {
             content
+                .overlay(alignment: .topTrailing) { toolbar(visible: hovering) }
+                .scrollAwareHover($hovering)
         }
-        .frame(minHeight: DS.Bar.strip)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Plot controls")
+    }
+
+    private func toolbar(visible: Bool) -> some View {
+        FloatingToolbar(visible: visible) { controls }
+            .fixedSize()
+            .padding(DS.Space.s)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Plot controls")
+    }
+}
+
+extension View {
+    func plotControls<Controls: View>(pinned: Bool = false,
+                                      @ViewBuilder _ controls: () -> Controls) -> some View {
+        modifier(PlotControls(pinned: pinned, controls: controls()))
     }
 }
 

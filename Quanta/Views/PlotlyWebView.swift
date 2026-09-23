@@ -23,8 +23,15 @@ struct PlotlyFigureView: View {
                     .frame(maxWidth: DS.Layout.outputMaxWidth)
                     .frame(height: CGFloat(height) + 16)
                     .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card))
-                controls
-                    .frame(maxWidth: DS.Layout.outputMaxWidth)
+                    .accessibilityAction(named: "Zoom In") { controller.zoom(0.75) }
+                    .accessibilityAction(named: "Zoom Out") { controller.zoom(1.35) }
+                    .accessibilityAction(named: "Reset View") { controller.resetView() }
+                    .accessibilityAction(named: "Copy Image") { controller.copyPNG() }
+                    .accessibilityAction(named: "Open Image in Window") {
+                        PlotWindow.open(html: html, jsPath: rendererPath)
+                    }
+                    .accessibilityAction(named: "Save Image as PNG…") { controller.savePNG() }
+                    .plotControls(pinned: panMode || controller.isExporting) { controls }
                 if let error = controller.exportError {
                     PlotErrorMessage(message: error)
                         .frame(maxWidth: DS.Layout.outputMaxWidth)
@@ -43,35 +50,34 @@ struct PlotlyFigureView: View {
         }
     }
 
+    @ViewBuilder
     private var controls: some View {
-        PlotControlBar {
-            IconButton("plus.magnifyingglass", help: "Zoom In") {
-                controller.zoom(0.75)
-            }
-            IconButton("minus.magnifyingglass", help: "Zoom Out") {
-                controller.zoom(1.35)
-            }
-            IconButton(panMode ? "hand.draw.fill" : "hand.draw", help: "Pan Mode", isActive: panMode) {
-                panMode.toggle()
-                controller.setDragMode(pan: panMode)
-            }
-            IconButton("house", help: "Reset View") { controller.resetView() }
-            ToolbarDivider()
-            if controller.isExporting {
-                ProgressView().controlSize(.small)
-                    .frame(width: DS.Layout.slot)
-                    .accessibilityLabel("Exporting plot")
-            }
-            IconButton("doc.on.doc", help: "Copy Image") { controller.copyPNG() }
-                .disabled(controller.isExporting)
-            IconButton("macwindow.badge.plus", help: "Open Image in Window (⌥⌘P)") {
-                PlotWindow.open(html: html, jsPath: rendererPath)
-            }
-            IconButton("square.and.arrow.down", help: "Save Image as PNG…") {
-                controller.savePNG()
-            }
-            .disabled(controller.isExporting)
+        IconButton("plus.magnifyingglass", help: "Zoom In") {
+            controller.zoom(0.75)
         }
+        IconButton("minus.magnifyingglass", help: "Zoom Out") {
+            controller.zoom(1.35)
+        }
+        IconButton(panMode ? "hand.draw.fill" : "hand.draw", help: "Pan Mode", isActive: panMode) {
+            panMode.toggle()
+            controller.setDragMode(pan: panMode)
+        }
+        IconButton("house", help: "Reset View") { controller.resetView() }
+        ToolbarDivider()
+        if controller.isExporting {
+            ProgressView().controlSize(.small)
+                .frame(width: DS.Layout.slot)
+                .accessibilityLabel("Exporting plot")
+        }
+        IconButton("doc.on.doc", help: "Copy Image") { controller.copyPNG() }
+            .disabled(controller.isExporting)
+        IconButton("macwindow.badge.plus", help: "Open Image in Window (⌥⌘P)") {
+            PlotWindow.open(html: html, jsPath: rendererPath)
+        }
+        IconButton("square.and.arrow.down", help: "Save Image as PNG…") {
+            controller.savePNG()
+        }
+        .disabled(controller.isExporting)
     }
 }
 

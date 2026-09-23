@@ -95,10 +95,14 @@ struct ImageOutputView: View {
         VStack(alignment: .leading, spacing: DS.Space.xxs) {
             plot
                 .accessibilityLabel(accessibilityDescription)
-            controls
+                .accessibilityAction(named: actualSize ? "Fit to Width" : "Actual Size") { actualSize.toggle() }
+                .accessibilityAction(named: "Copy Image") { copyImage() }
+                .accessibilityAction(named: "Open Image in Window") { PlotWindow.open(image: image) }
+                .accessibilityAction(named: "Save Image as PNG…") { savePNG() }
             if let saveError { PlotErrorMessage(message: saveError) }
         }
         .frame(maxWidth: actualSize ? DS.Layout.outputMaxWidth : max(displayWidth, DS.Layout.plotControlsMinWidth), alignment: .leading)
+        .plotControls(pinned: actualSize) { controls }
         .padding(.vertical, DS.Space.xxs)
     }
 
@@ -140,22 +144,23 @@ struct ImageOutputView: View {
         return DS.Layout.outputMaxHeight * natural.width / natural.height
     }
 
+    @ViewBuilder
     private var controls: some View {
-        PlotControlBar {
-            IconButton(actualSize ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                       help: actualSize ? "Fit to Width" : "Actual Size",
-                       isActive: actualSize) {
-                actualSize.toggle()
-            }
-            IconButton("doc.on.doc", help: "Copy Image") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.writeObjects([image])
-            }
-            IconButton("macwindow.badge.plus", help: "Open Image in Window (⌥⌘P)") {
-                PlotWindow.open(image: image)
-            }
-            IconButton("square.and.arrow.down", help: "Save Image as PNG…") { savePNG() }
+        IconButton(actualSize ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                   help: actualSize ? "Fit to Width" : "Actual Size",
+                   isActive: actualSize) {
+            actualSize.toggle()
         }
+        IconButton("doc.on.doc", help: "Copy Image") { copyImage() }
+        IconButton("macwindow.badge.plus", help: "Open Image in Window (⌥⌘P)") {
+            PlotWindow.open(image: image)
+        }
+        IconButton("square.and.arrow.down", help: "Save Image as PNG…") { savePNG() }
+    }
+
+    private func copyImage() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([image])
     }
 
     private func savePNG() {

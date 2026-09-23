@@ -205,8 +205,9 @@ struct TracebackView: View {
                 .font(.system(size: monoSize, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.red)
             if frames.isEmpty {
-                if !traceback.isEmpty {
-                    Text(traceback.trimmingTrailingNewlines)
+                let detail = Self.detail(of: traceback, ename: ename, evalue: evalue)
+                if !detail.isEmpty {
+                    Text(detail)
                         .font(.system(size: monoSize - 1, design: .monospaced))
                         .foregroundStyle(.primary)
                 }
@@ -233,6 +234,14 @@ struct TracebackView: View {
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .outputCard(.error)
+    }
+
+    static func detail(of traceback: String, ename: String, evalue: String) -> String {
+        let text = traceback.trimmingTrailingNewlines
+        let header = "\(ename): \(evalue)"
+        if text == header { return "" }
+        guard text.hasSuffix("\n" + header) else { return text }
+        return String(text.dropLast(header.count)).trimmingTrailingNewlines
     }
 
     private func frameView(_ frame: TraceFrame) -> some View {

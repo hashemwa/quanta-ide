@@ -134,4 +134,15 @@ final class RichOutputTests: XCTestCase {
         XCTAssertTrue(RichOutput.text(bundle["text/html"]).contains("42"))
         XCTAssertNotNil(bundle["text/plain"])
     }
+
+    func testTracebackDetailDropsRepeatedHeaderLine() {
+        let jupyter = "Cell In[3], line 1\n----> 1 undefined_name\n\nNameError: name 'undefined_name' is not defined\n"
+        XCTAssertEqual(TracebackView.detail(of: jupyter, ename: "NameError", evalue: "name 'undefined_name' is not defined"),
+                       "Cell In[3], line 1\n----> 1 undefined_name")
+        XCTAssertEqual(TracebackView.detail(of: "KeyError: 'a'\n", ename: "KeyError", evalue: "'a'"), "")
+        XCTAssertEqual(TracebackView.detail(of: "  File x\nOtherError: boom", ename: "KeyError", evalue: "'a'"),
+                       "  File x\nOtherError: boom")
+        XCTAssertEqual(TracebackView.detail(of: "SuffixKeyError: 'a'", ename: "KeyError", evalue: "'a'"),
+                       "SuffixKeyError: 'a'")
+    }
 }
