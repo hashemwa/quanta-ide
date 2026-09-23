@@ -1130,7 +1130,7 @@ final class AppState: ObservableObject {
     func runSelectedCell(advance: Bool = false) {
         guard let document = activeDocument else { return }
         if document.kind == .script {
-            runScript(document)
+            runSelectionOrLine(in: document, advance: advance)
             return
         }
         guard let notebook = document.notebook,
@@ -1565,7 +1565,19 @@ final class AppState: ObservableObject {
             return false
         }
         guard let document = activeDocument, document.kind == .notebook,
-              let notebook = document.notebook, !notebook.cells.isEmpty else { return false }
+              let notebook = document.notebook else { return false }
+        if notebook.cells.isEmpty {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "a", "b":
+                appendCell(type: .code, to: notebook, in: document)
+                return true
+            case "m":
+                appendCell(type: .markdown, to: notebook, in: document)
+                return true
+            default:
+                return false
+            }
+        }
         let index: Int
         if let found = notebook.cells.firstIndex(where: { $0.id == selectedCellID }) {
             index = found
@@ -1698,6 +1710,31 @@ final class AppState: ObservableObject {
     func commandConvert(to type: CellType) {
         guard let ctx = selectionContext, ctx.cell.cellType != type else { return }
         convertCell(ctx.cell, to: type, in: ctx.document)
+    }
+
+    func commandMove(_ direction: Int) {
+        guard let ctx = selectionContext else { return }
+        moveCell(ctx.cell, direction: direction, in: ctx.notebook, document: ctx.document)
+    }
+
+    func commandToggleSource() {
+        guard let ctx = selectionContext else { return }
+        setSourceCollapsed(!ctx.cell.isSourceCollapsed, for: ctx.cell, in: ctx.document)
+    }
+
+    func commandToggleOutput() {
+        guard let ctx = selectionContext, ctx.cell.cellType == .code else { return }
+        setOutputCollapsed(!ctx.cell.isOutputCollapsed, for: ctx.cell, in: ctx.document)
+    }
+
+    func commandClearOutput() {
+        guard let ctx = selectionContext else { return }
+        clearOutput(for: ctx.cell, in: ctx.document)
+    }
+
+    func commandRunCells(above: Bool) {
+        guard let ctx = selectionContext else { return }
+        if above { runCells(above: ctx.cell, in: ctx.document) } else { runCells(below: ctx.cell, in: ctx.document) }
     }
 
     @MainActor
@@ -2590,7 +2627,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    func runSelectionOrLine(in document: Document? = nil) {
+    func runSelectionOrLine(in document: Document? = nil, advance: Bool = true) {
         guard let document = document ?? activeDocument, document.kind == .script,
               let tv = EditorRegistry.shared.view(for: document.id) else { return }
         let ns = tv.string as NSString
@@ -2598,7 +2635,7 @@ final class AppState: ObservableObject {
         let range = ns.lineRange(for: NSRange(location: min(selection.location, ns.length),
                                               length: min(selection.length, ns.length - min(selection.location, ns.length))))
         let code = Self.dedent(ns.substring(with: range))
-        if selection.length == 0 {
+        if advance, selection.length == 0 {
             let next = min(NSMaxRange(range), ns.length)
             tv.setSelectedRange(NSRange(location: next, length: 0))
             tv.scrollRangeToVisible(NSRange(location: next, length: 0))

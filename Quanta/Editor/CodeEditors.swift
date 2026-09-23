@@ -115,10 +115,10 @@ final class ScriptCanvas: NSObject, DocumentCanvas, NSTextViewDelegate {
         guard let document else { return false }
         switch command {
         case .runCellAndAdvance:
-            AppState.shared.runSelectionOrLine(in: document)
+            AppState.shared.runSelectionOrLine(in: document, advance: true)
             return true
         case .runCell:
-            AppState.shared.runScript(document)
+            AppState.shared.runSelectionOrLine(in: document, advance: false)
             return true
         }
     }

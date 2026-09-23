@@ -33,7 +33,7 @@ enum SidebarPane: String, CaseIterable {
         switch self {
         case .data: return "Show Data (⌘3)"
         case .files: return "Show Files (⌘1)"
-        case .search: return "Search in Workspace (⇧⌘F)"
+        case .search: return "Search in Workspace (⌘4)"
         case .sourceControl: return "Show Source Control (⌘2)"
         case .outline: return "Show Notebook Outline (⌘5)"
         }

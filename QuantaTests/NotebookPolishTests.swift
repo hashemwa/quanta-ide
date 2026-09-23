@@ -81,6 +81,24 @@ final class NotebookPolishTests: XCTestCase {
         }
     }
 
+    func testCommandModeKeysCreateTheFirstCellOfAnEmptyNotebook() throws {
+        for (key, type) in [("a", CellType.code), ("b", .code), ("m", .markdown)] {
+            let app = AppState()
+            let notebook = Notebook(cells: [], metadata: [:])
+            let document = Document(notebook: notebook, url: nil)
+            app.openDocuments = [document]
+            app.activeDocumentID = document.id
+            app.isCommandMode = true
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                                       timestamp: 0, windowNumber: 0, context: nil,
+                                                       characters: key, charactersIgnoringModifiers: key,
+                                                       isARepeat: false, keyCode: 0))
+            XCTAssertTrue(app.handleCommandModeKey(event))
+            XCTAssertEqual(notebook.cells.map(\.cellType), [type])
+            XCTAssertEqual(app.selectedCellID, notebook.cells.first?.id)
+        }
+    }
+
     func testPointerInsertionActivatesCorrectNotebookAndEntersEditing() {
         let app = AppState()
         let cell = NotebookCell(type: .code)

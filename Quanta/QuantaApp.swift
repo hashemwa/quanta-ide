@@ -248,6 +248,24 @@ struct QuantaCommands: Commands {
             Button("Convert to Code") { app.commandConvert(to: .code) }
                 .disabled(!app.hasSelectedCell)
             Divider()
+            Button("Move Cell Up") { app.commandMove(-1) }
+                .keyboardShortcut("[", modifiers: [.command, .option])
+                .disabled(!app.hasSelectedCell)
+            Button("Move Cell Down") { app.commandMove(1) }
+                .keyboardShortcut("]", modifiers: [.command, .option])
+                .disabled(!app.hasSelectedCell)
+            Divider()
+            Button("Collapse or Expand Source") { app.commandToggleSource() }
+                .disabled(!app.hasSelectedCell)
+            Button("Hide or Show Output") { app.commandToggleOutput() }
+                .disabled(!app.hasSelectedCell)
+            Button("Clear Output") { app.commandClearOutput() }
+                .disabled(!app.hasSelectedCell)
+            Button("Undo Clear Output") {
+                if let document = app.activeDocument { app.undoClearedOutput(in: document) }
+            }
+            .disabled(app.activeDocument?.clearedOutputs.isEmpty != false)
+            Divider()
             Button("Split Cell at Cursor") { app.splitSelectedCell() }
                 .keyboardShortcut("-", modifiers: [.control, .shift])
                 .disabled(!app.hasSelectedCell)
@@ -261,14 +279,18 @@ struct QuantaCommands: Commands {
             Button("Trust Workspace…") { app.requestWorkspaceTrust() }
                 .disabled(app.workspace == nil || app.isWorkspaceTrusted)
             Divider()
-            Button("Run Cell") { app.runSelectedCell() }
+            Button(isScript ? "Run Selection or Line" : "Run Cell") { app.runSelectedCell() }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!app.activeDocumentIsRunnable)
-            Button("Run Cell and Advance") { app.runSelectedCell(advance: true) }
-                .keyboardShortcut(.return, modifiers: [.command, .shift])
-                .disabled(!app.activeDocumentIsRunnable)
-            Button("Run Selection or Line") { app.runSelectionOrLine() }
-                .disabled(app.activeDocument?.kind != .script)
+            Button(isScript ? "Run Selection or Line and Advance" : "Run Cell and Advance") {
+                app.runSelectedCell(advance: true)
+            }
+            .keyboardShortcut(.return, modifiers: [.command, .shift])
+            .disabled(!app.activeDocumentIsRunnable)
+            Button("Run Cells Above") { app.commandRunCells(above: true) }
+                .disabled(!app.hasSelectedCell)
+            Button("Run Cells Below") { app.commandRunCells(above: false) }
+                .disabled(!app.hasSelectedCell)
             Button(app.runCommandTitle) { app.runActiveDocument() }
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(app.activeDocument == nil)
@@ -322,7 +344,7 @@ struct QuantaCommands: Commands {
             Button("Show \(SidebarPane.files.title)") { app.showSidebarPane(.files) }
                 .keyboardShortcut("1", modifiers: .command)
             Button("Show \(SidebarPane.search.title)") { app.showSidebarPane(.search) }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .keyboardShortcut("4", modifiers: .command)
             Button("Show \(SidebarPane.outline.title)") { app.showSidebarPane(.outline) }
                 .keyboardShortcut("5", modifiers: .command)
             Button("Show \(SidebarPane.sourceControl.title)") { app.showSidebarPane(.sourceControl) }
@@ -363,6 +385,10 @@ struct QuantaCommands: Commands {
 
     private func abbreviate(_ path: String) -> String {
         (path as NSString).abbreviatingWithTildeInPath
+    }
+
+    private var isScript: Bool {
+        app.activeDocument?.kind == .script
     }
 
     private var showChangesTitle: String {
