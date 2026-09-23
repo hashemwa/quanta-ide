@@ -323,6 +323,8 @@ struct QuantaCommands: Commands {
                 .keyboardShortcut("1", modifiers: .command)
             Button("Show \(SidebarPane.search.title)") { app.showSidebarPane(.search) }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+            Button("Show \(SidebarPane.outline.title)") { app.showSidebarPane(.outline) }
+                .keyboardShortcut("5", modifiers: .command)
             Button("Show \(SidebarPane.sourceControl.title)") { app.showSidebarPane(.sourceControl) }
                 .keyboardShortcut("2", modifiers: .command)
             Button("Refresh File Tree") { app.refreshWorkspace() }

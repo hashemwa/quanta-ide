@@ -40,7 +40,6 @@ enum DS {
         static let windowMinWidth: CGFloat = 1200
         static let windowMinHeight: CGFloat = 760
         static let editorPaneMin: CGFloat = 280
-        static let executionProgressWidth: CGFloat = 64
         static let paletteWidth: CGFloat = 580
         static let paletteHeight: CGFloat = 390
         static let inspectionWidth: CGFloat = 440
@@ -68,10 +67,8 @@ enum DS {
         static let statusSlot: CGFloat = 14
         static let kernelLabelWidth: CGFloat = 244
         static let kernelLabelMinWidth: CGFloat = 140
-        static let branchLabelMaxWidth: CGFloat = 96
         static let symbolGlyph: CGFloat = 10
         static let kernelGlyph: CGFloat = 12
-        static let tabDividerHeight: CGFloat = 16
         static let cellGutterWidth: CGFloat = 48
         static let cellTextInset: CGFloat = Space.s + Space.xs + 5
         static let notebookReadingWidth: CGFloat = 1030
@@ -81,7 +78,6 @@ enum DS {
         static let notebookProseSpacing: CGFloat = Space.xs
         static let hairline: CGFloat = 1
         static let selectionBar: CGFloat = 3
-        static let rowActionSlot: CGFloat = slot * 2
         static let commitLines = 1...5
         static let diffMarkerWidth: CGFloat = 16
         static let diffLineInset: CGFloat = 1

@@ -4,23 +4,20 @@ import SwiftUI
 struct NotebookChrome: View {
     @ObservedObject var document: Document
     @ObservedObject var find: FindState
-    let notebook: Notebook
 
-    init(document: Document, notebook: Notebook) {
+    init(document: Document) {
         self.document = document
-        self.notebook = notebook
         self.find = document.find
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            NotebookNavigator(document: document, notebook: notebook)
             if find.isVisible {
                 FindBarView(document: document, find: find)
                 Divider()
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .frame(maxWidth: .infinity)
         .background(CommandModeHost())
     }
 }

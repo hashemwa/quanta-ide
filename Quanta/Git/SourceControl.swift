@@ -7,6 +7,7 @@ enum SidebarPane: String, CaseIterable {
     case sourceControl
     case data
     case search
+    case outline
 
     var title: String {
         switch self {
@@ -14,6 +15,7 @@ enum SidebarPane: String, CaseIterable {
         case .files: return "Files"
         case .search: return "Search"
         case .sourceControl: return "Source Control"
+        case .outline: return "Outline"
         }
     }
 
@@ -23,6 +25,7 @@ enum SidebarPane: String, CaseIterable {
         case .files: return "folder"
         case .search: return "magnifyingglass"
         case .sourceControl: return "arrow.triangle.branch"
+        case .outline: return "list.bullet.indent"
         }
     }
 
@@ -32,6 +35,7 @@ enum SidebarPane: String, CaseIterable {
         case .files: return "Show Files (⌘1)"
         case .search: return "Search in Workspace (⇧⌘F)"
         case .sourceControl: return "Show Source Control (⌘2)"
+        case .outline: return "Show Notebook Outline (⌘5)"
         }
     }
 }

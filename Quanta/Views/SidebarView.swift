@@ -29,6 +29,8 @@ struct SidebarView: View {
                 DataNavigatorView(browser: app.dataBrowser)
             case .sourceControl:
                 SourceControlPanel()
+            case .outline:
+                NotebookOutlinePane(document: app.activeDocument)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

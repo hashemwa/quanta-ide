@@ -25,6 +25,9 @@ final class NotebookCanvas: DocumentCanvas {
     private var scrollView: NotebookNativeScrollView?
     private weak var contentView: NotebookDocumentView?
     private var addView: NSHostingView<AnyView>?
+    private var toolbar: CellToolbarHostingView?
+    private var selectionCancellable: AnyCancellable?
+    private var boundsObserver: NSObjectProtocol?
 
     init(document: Document, notebook: Notebook, monoFontSize: CGFloat) {
         self.document = document
@@ -68,6 +71,7 @@ final class NotebookCanvas: DocumentCanvas {
         }
         self.scrollView = scrollView
         self.contentView = contentView
+        installToolbar(in: contentView, scrollView: scrollView)
         NotebookScrolling.register(scrollView: scrollView)
         DispatchQueue.main.async { [weak self] in
             guard let self, let scrollView = self.scrollView else { return }
@@ -76,9 +80,50 @@ final class NotebookCanvas: DocumentCanvas {
         return scrollView
     }
 
+    deinit {
+        if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
+    }
+
     func focus(in window: NSWindow) {
         guard let catcher = CommandCatcherView.activeCatcher(in: window) else { return }
         window.makeFirstResponder(catcher)
+    }
+
+    private func installToolbar(in contentView: NSView, scrollView: NSScrollView) {
+        let toolbar = CellToolbarHostingView(rootView: CellToolbar(document: document, notebook: notebook))
+        toolbar.sizingOptions = [.intrinsicContentSize]
+        toolbar.onSizeChange = { [weak self] in self?.positionToolbar() }
+        contentView.addSubview(toolbar)
+        self.toolbar = toolbar
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        boundsObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.positionToolbar() }
+        }
+        selectionCancellable = AppState.shared.selection.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.positionToolbar() }
+            }
+    }
+
+    private func positionToolbar() {
+        guard let toolbar, let scrollView else { return }
+        let selection = AppState.shared.selection
+        guard selection.selectedCellIDs.count <= 1, let id = selection.selectedCellID,
+              let index = cellIDs.firstIndex(of: id), index < cellViews.count, measuredWidth > 0 else {
+            toolbar.passesClicksThrough = true
+            return
+        }
+        toolbar.passesClicksThrough = false
+        let cell = cellViews[index].frame
+        let size = toolbar.intrinsicContentSize
+        let natural = cell.minY + DS.Space.xs - size.height
+        let visibleTop = scrollView.contentView.bounds.minY + DS.Space.xs
+        let y = natural < visibleTop ? max(natural, min(visibleTop, cell.maxY - size.height)) : natural
+        let frame = NSRect(x: cell.maxX - size.width - DS.Space.s, y: y, width: size.width, height: size.height)
+        if toolbar.frame != frame { toolbar.frame = frame }
     }
 
     func update(document: Document, notebook: Notebook, monoFontSize: CGFloat,
@@ -166,6 +211,10 @@ final class NotebookCanvas: DocumentCanvas {
         addView.frame = NSRect(x: 0, y: 0, width: width, height: 40)
         contentView.addSubview(addView)
         self.addView = addView
+        if let toolbar {
+            toolbar.rootView = CellToolbar(document: document, notebook: notebook)
+            contentView.addSubview(toolbar, positioned: .above, relativeTo: nil)
+        }
         needsRebuild = false
         measuredWidth = 0
         measuredViewportWidth = 0
@@ -233,6 +282,7 @@ final class NotebookCanvas: DocumentCanvas {
             }
         }
         if changed { cellViews.forEach { $0.refreshHover() } }
+        positionToolbar()
     }
 
     private func measuredHeight(of view: NSView, width: CGFloat) -> CGFloat {
