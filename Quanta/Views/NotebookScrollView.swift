@@ -229,6 +229,7 @@ struct NotebookScrollView: NSViewRepresentable {
                     scrollView.reflectScrolledClipView(clipView)
                 }
             }
+            if changed { cellViews.forEach { $0.refreshHover() } }
         }
 
         private func measuredHeight(of view: NSView, width: CGFloat) -> CGFloat {

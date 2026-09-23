@@ -344,7 +344,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         }
         if cell.cellType == .markdown && !cell.isEditingMarkdown {
             sourceCard.style = .markdown
-            let markdown = NotebookMarkdownHostingView(rootView: markdownRoot(for: cell))
+            let markdown = NotebookMarkdownHostingView(content: markdownRoot(for: cell))
             markdown.sizingOptions = [.intrinsicContentSize]
             markdown.onSingleClick = { [weak self] in self?.selectMarkdown() }
             markdown.onDoubleClick = { [weak self] in self?.beginMarkdownEditing() }
@@ -425,7 +425,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             replaceOutput(with: button)
             return
         }
-        let output = NotebookCellHostingView(rootView: AnyView(
+        let output = NotebookCellHostingView(content: AnyView(
             OutputListView(cell: cell)
                 .environment(\.monoFontSize, monoFontSize)
         ))
@@ -522,8 +522,14 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         addButton.setInteractionVisible(visible, enabled: true)
     }
 
+    func refreshHover() {
+        let wasHovering = hovering
+        updateHoverFromPointer()
+        if hovering != wasHovering { updateControlVisibility() }
+    }
+
     private func updateHoverFromPointer() {
-        guard let window, !isHiddenOrHasHiddenAncestor else {
+        guard let window, NSApp.isActive, !isHiddenOrHasHiddenAncestor else {
             hovering = false
             return
         }
@@ -886,8 +892,27 @@ private final class NotebookCellCardView: NSView {
     }
 }
 
-private class NotebookCellHostingView: NSHostingView<AnyView> {
+private struct NotebookHostedContent: View {
+    let content: AnyView
+    var width: CGFloat?
+
+    var body: some View {
+        content.frame(width: width, alignment: .leading)
+    }
+}
+
+private class NotebookCellHostingView: NSHostingView<NotebookHostedContent> {
     var onSizeChange: (() -> Void)?
+
+    convenience init(content: AnyView) {
+        self.init(rootView: NotebookHostedContent(content: content))
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        guard newSize.width > 0, abs(newSize.width - (rootView.width ?? 0)) > 0.5 else { return }
+        rootView.width = newSize.width
+    }
 
     override func invalidateIntrinsicContentSize() {
         super.invalidateIntrinsicContentSize()

@@ -80,6 +80,24 @@ final class NotebookCellStyleTests: XCTestCase {
         XCTAssertEqual(captionView.bounds.height, card.frame.height, accuracy: 2)
     }
 
+    func testLongProseIsMeasuredAtTheWidthItWrapsTo() throws {
+        let paragraph = String(repeating: "Finite differences approximate a derivative from nearby samples. ", count: 12)
+        var heights: [CGFloat] = []
+        for width in [700.0, 1000.0] {
+            let prose = NotebookCell(type: .markdown, source: paragraph)
+            let line = NotebookCell(type: .markdown, source: "Done")
+            let (window, hosting) = host([prose, line], width: width)
+            let proseView = try XCTUnwrap(cellView(prose, in: hosting))
+            let lineView = try XCTUnwrap(cellView(line, in: hosting))
+            let content = try XCTUnwrap(hostedContent(in: proseView))
+            XCTAssertGreaterThan(content.frame.height, try XCTUnwrap(hostedContent(in: lineView)).frame.height * 3)
+            XCTAssertGreaterThanOrEqual(proseView.frame.height, content.frame.height)
+            heights.append(content.frame.height)
+            window.close()
+        }
+        XCTAssertGreaterThan(heights[0], heights[1])
+    }
+
     private func host(_ cells: [NotebookCell], width: CGFloat) -> (NSWindow, NSView) {
         let notebook = Notebook(cells: cells, metadata: [:])
         let document = Document(notebook: notebook, url: nil)
@@ -107,6 +125,10 @@ final class NotebookCellStyleTests: XCTestCase {
 
     private func cellView(_ cell: NotebookCell, in root: NSView? = nil) -> NotebookCellAppKitView? {
         all(NotebookCellAppKitView.self, in: root ?? hosting).first { $0.cellID == cell.id }
+    }
+
+    private func hostedContent(in view: NSView) -> NSView? {
+        descendants(of: view).first { String(describing: type(of: $0)).contains("HostingView") }
     }
 
     private func cardView(in view: NSView) -> NSView? {
