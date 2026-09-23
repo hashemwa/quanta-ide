@@ -113,33 +113,30 @@ struct SidebarView: View {
     }
 
     private func filesFooter(_ workspace: Workspace) -> some View {
-        PanelBar(height: DS.Bar.footer) {
-            IconMenu("plus", help: "New Notebook, File or Folder (⌘N)") {
-                Button("New Notebook") { app.newNotebook() }
-                Button("New Python File") { app.newScript() }
-                Divider()
-                Button("New File…") { app.createFile(in: workspace.rootURL) }
-                Button("New Folder…") { app.createFolder(in: workspace.rootURL) }
-            }
-            FilterField(text: $fileFilter)
-            IconMenu("ellipsis", help: "More Actions") {
-                Toggle("Show Hidden Files", isOn: $app.showsHiddenFiles)
-                Button("Refresh File Tree") { app.refreshWorkspace() }
-                Divider()
-                Button("Move To…") { app.chooseDestinationAndMoveNodes(at: Array(selectedFiles)) }
-                    .disabled(selectedFiles.isEmpty)
-                Button("Duplicate") { app.duplicateNodes(at: Array(selectedFiles)) }
-                    .disabled(selectedFiles.isEmpty)
-                Button("Copy") { app.copyNodes(at: Array(selectedFiles)) }
-                    .disabled(selectedFiles.isEmpty)
-                Button("Paste") { app.pasteNodes(into: workspace.rootURL) }
-                Divider()
-                Button("Open Folder…") { app.openFolderPanel() }
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([workspace.rootURL])
-                }
-            }
+        FilterBar(text: $fileFilter, menu: fileFilterMenu) {
+            FilterBarMenu("plus", help: "New Notebook, File or Folder (⌘N)", menu: newItemMenu(in: workspace))
         }
+    }
+
+    private func newItemMenu(in workspace: Workspace) -> BarMenu {
+        BarMenu(sections: [
+            .init(items: [
+                .init(title: "New Notebook") { app.newNotebook() },
+                .init(title: "New Python File") { app.newScript() },
+            ]),
+            .init(items: [
+                .init(title: "New File…") { app.createFile(in: workspace.rootURL) },
+                .init(title: "New Folder…") { app.createFolder(in: workspace.rootURL) },
+            ]),
+        ])
+    }
+
+    private var fileFilterMenu: BarMenu {
+        BarMenu(sections: [
+            .init(items: [
+                .init(title: "Show Hidden Files", isOn: app.showsHiddenFiles) { app.showsHiddenFiles.toggle() },
+            ]),
+        ], isActive: app.showsHiddenFiles)
     }
 
     private var emptyState: some View {

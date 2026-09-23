@@ -124,9 +124,7 @@ private struct NotebookOutlineList: View {
                     }
                 }
             }
-            PanelBar(height: DS.Bar.footer) {
-                FilterField(text: $filter)
-            }
+            FilterBar(text: $filter)
         }
         .onAppear { mirrorSelection(in: entries) }
         .onChange(of: selection.selectedCellID) { _, _ in mirrorSelection(in: entries) }

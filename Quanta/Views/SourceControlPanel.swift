@@ -88,30 +88,20 @@ struct SourceControlPanel: View {
     }
 
     private var filterBar: some View {
-        PanelBar(height: DS.Bar.footer) {
-            IconButton("arrow.clockwise", help: "Refresh Git Status") {
+        FilterBar(text: $filenameFilter, menu: scopeMenu) {
+            FilterBarButton("arrow.clockwise", help: "Refresh Git Status",
+                            busy: git.isBusy || git.isRefreshing) {
                 app.refreshSourceControl()
             }
-            .disabled(git.isBusy || git.isRefreshing)
-            FilterField(text: $filenameFilter)
-            if git.isBusy || git.isRefreshing {
-                ActivitySlot(active: true)
-            }
-            IconMenu("ellipsis", help: "More Actions") {
-                Picker("Show", selection: $scope) {
-                    ForEach(GitChangeScope.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.inline)
-                Divider()
-                Button("Refresh Status") { app.refreshSourceControl() }
-                Divider()
-                Button("Stage All and Commit…") { app.stageAllAndCommit() }
-                    .disabled(!hasCommitMessage || git.isBusy || !((git.snapshot?.conflicted.isEmpty) ?? false)
-                              || ((git.snapshot?.unstaged.isEmpty) ?? true))
-                Divider()
-                SourceControlMenuItems()
-            }
         }
+    }
+
+    private var scopeMenu: BarMenu {
+        BarMenu(sections: [
+            .init(title: "Show", items: GitChangeScope.allCases.map { option in
+                .init(title: option.rawValue, isOn: scope == option) { scope = option }
+            }),
+        ], isActive: scope != .all)
     }
 
     private func errorBanner(_ error: String) -> some View {
@@ -405,48 +395,6 @@ struct SourceControlPanel: View {
             parts.append("Only the first \(GitSnapshot.maximumEntries) untracked files are listed.")
         }
         return parts.joined(separator: " ")
-    }
-}
-
-struct SourceControlMenuItems: View {
-    private var app: AppState { AppState.shared }
-    @ObservedObject private var git = AppState.shared.git
-
-    var body: some View {
-        if let snapshot = git.snapshot {
-            ForEach(snapshot.branches, id: \.self) { branch in
-                Button {
-                    app.checkout(branch: branch)
-                } label: {
-                    if branch == snapshot.branch {
-                        Label(branch, systemImage: "checkmark")
-                    } else {
-                        Text(branch)
-                    }
-                }
-                .disabled(git.isBusy)
-            }
-        }
-        Button("New Branch…") { app.createBranch() }
-            .disabled(git.isBusy)
-        Divider()
-        Button("Fetch") { app.fetch() }
-            .disabled(!git.canFetch)
-        Button("Pull") { app.pull() }
-            .disabled(!git.canPull)
-        Button("Push") { app.push() }
-            .disabled(!git.canPush)
-        Divider()
-        Button("Stage All Changes") { app.stageAllChanges() }
-            .disabled(git.isBusy || (git.snapshot?.unstaged.isEmpty ?? true))
-        Button("Unstage All Changes") { app.unstageAllChanges() }
-            .disabled(git.isBusy || (git.snapshot?.staged.isEmpty ?? true))
-        Button("Mark All Resolved") { app.markAllResolved() }
-            .disabled(git.isBusy || (git.snapshot?.conflicted.isEmpty ?? true))
-        Button("Discard All Changes…", role: .destructive) { app.discardAllChanges() }
-            .disabled(git.isBusy || (git.snapshot?.unstaged.isEmpty ?? true))
-        Button("Discard Output-Only Changes…", role: .destructive) { app.discardOutputOnlyChanges() }
-            .disabled(git.isBusy || (git.snapshot?.hiddenNotebooks.isEmpty ?? true))
     }
 }
 

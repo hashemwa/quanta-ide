@@ -5,7 +5,6 @@ struct DataNavigatorView: View {
     @ObservedObject var browser: DataBrowser
     @State private var filter = ""
     @State private var selected: URL?
-    @State private var handledFilterFocus = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,10 +41,8 @@ struct DataNavigatorView: View {
                     if let source = browser.sources.first(where: { $0.url == value }) { app.openData(source) }
                 }
             }
-            PanelBar {
-                IconButton("plus", help: "Open Data Source…") { app.openDataPanel() }
-                SearchField(text: $filter, prompt: "Filter Data Sources", style: .filter,
-                            focusRequest: 0, handledFocusRequest: $handledFilterFocus, onSubmit: {})
+            FilterBar(text: $filter, prompt: "Filter Data Sources") {
+                FilterBarButton("plus", help: "Open Data Source…") { app.openDataPanel() }
             }
         }
     }

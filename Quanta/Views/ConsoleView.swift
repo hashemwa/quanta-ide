@@ -112,7 +112,7 @@ private struct ConsoleBody: View {
                     }
             }
             .padding(.horizontal, DS.Space.bar)
-            .padding(.vertical, DS.Space.s)
+            .frame(minHeight: DS.Bar.footer)
         }
     }
 }

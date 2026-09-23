@@ -18,6 +18,19 @@ struct VariablesPanel: View {
         }
     }
 
+    private var filterMenu: BarMenu {
+        let types = ["All Types"] + Set(app.variables.map(\.typeName)).sorted()
+        return BarMenu(sections: [
+            .init(title: "Type", items: types.map { type in
+                .init(title: type, isOn: typeFilter == type) { typeFilter = type }
+            }),
+            .init(title: "Sort By", items: [
+                .init(title: "Name", isOn: !sortByType) { sortByType = false },
+                .init(title: "Type", isOn: sortByType) { sortByType = true },
+            ]),
+        ], isActive: typeFilter != "All Types")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if typeFilter != "All Types" {
@@ -45,21 +58,8 @@ struct VariablesPanel: View {
                     }
                 }
             }
-            PanelBar(height: DS.Bar.footer) {
-                IconButton("arrow.clockwise", help: "Refresh Variables") { app.refreshVariables() }
-                FilterField(text: $query, prompt: "Filter Variables")
-                IconMenu(typeFilter == "All Types" ? "ellipsis" : "line.3.horizontal.decrease.circle.fill",
-                         help: "Filter and Sort Variables") {
-                    Picker("Type", selection: $typeFilter) {
-                        Text("All Types").tag("All Types")
-                        ForEach(Array(Set(app.variables.map(\.typeName))).sorted(), id: \.self) { Text($0).tag($0) }
-                    }.pickerStyle(.inline)
-                    Divider()
-                    Picker("Sort", selection: $sortByType) {
-                        Text("Name").tag(false)
-                        Text("Type").tag(true)
-                    }.pickerStyle(.inline)
-                }
+            FilterBar(text: $query, prompt: "Filter Variables", menu: filterMenu) {
+                FilterBarButton("arrow.clockwise", help: "Refresh Variables") { app.refreshVariables() }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

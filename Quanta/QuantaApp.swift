@@ -349,6 +349,8 @@ struct QuantaCommands: Commands {
                 .keyboardShortcut("5", modifiers: .command)
             Button("Show \(SidebarPane.sourceControl.title)") { app.showSidebarPane(.sourceControl) }
                 .keyboardShortcut("2", modifiers: .command)
+            Toggle("Show Hidden Files", isOn: $app.showsHiddenFiles)
+                .keyboardShortcut(".", modifiers: [.command, .shift])
             Button("Refresh File Tree") { app.refreshWorkspace() }
                 .disabled(app.workspace == nil)
             Divider()

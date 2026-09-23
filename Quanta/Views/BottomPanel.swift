@@ -41,7 +41,7 @@ struct BottomPanel: View {
                     if consoleScope != "All" {
                         Text(consoleScope).font(.caption).foregroundStyle(.secondary)
                     }
-                    IconMenu(consoleScope == "All" ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill",
+                    IconMenu(consoleScope == "All" ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill",
                              help: "Filter Console Messages") {
                         Picker("Messages", selection: $consoleScope) {
                             ForEach(["All", "Errors", "Output", "Commands"], id: \.self) { Text($0) }
@@ -72,6 +72,7 @@ struct BottomPanel: View {
                     .allowsHitTesting(app.bottomPane == .terminal)
                     .accessibilityHidden(app.bottomPane != .terminal)
             }
+            .background(Color(nsColor: .textBackgroundColor))
         }
         .background(Color(nsColor: .textBackgroundColor))
         .clipped()

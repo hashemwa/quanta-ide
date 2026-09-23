@@ -22,7 +22,7 @@ enum DS {
     enum Bar {
         static let primary: CGFloat = 32
         static let secondary: CGFloat = 28
-        static let footer: CGFloat = 32
+        static let footer: CGFloat = 40
         static let strip: CGFloat = 28
     }
 
@@ -63,6 +63,7 @@ enum DS {
         static let statusDot: CGFloat = 6
         static let listRowMinHeight: CGFloat = 24
         static let slot: CGFloat = 22
+        static let barControlGlyph: CGFloat = 16
         static let iconSlot: CGFloat = 16
         static let statusSlot: CGFloat = 14
         static let kernelTitleLimit = 44
@@ -682,13 +683,163 @@ struct InputCard: ViewModifier {
     }
 }
 
+struct BarMenu {
+    struct Item {
+        let title: String
+        var isOn = false
+        let action: () -> Void
+    }
+
+    struct Section {
+        var title: String? = nil
+        let items: [Item]
+    }
+
+    let sections: [Section]
+    var isActive = false
+
+    func makeMenu() -> NSMenu {
+        let menu = NSMenu()
+        for (index, section) in sections.enumerated() {
+            if index > 0 { menu.addItem(.separator()) }
+            if let title = section.title { menu.addItem(.sectionHeader(title: title)) }
+            for option in section.items {
+                let item = ActionMenuItem(option.title, handler: option.action)
+                item.state = option.isOn ? .on : .off
+                menu.addItem(item)
+            }
+        }
+        return menu
+    }
+}
+
+struct FilterBar<Accessory: View>: View {
+    @Binding var text: String
+    var prompt = "Filter"
+    var menu: BarMenu? = nil
+    @ViewBuilder var accessory: Accessory
+
+    init(text: Binding<String>, prompt: String = "Filter", menu: BarMenu? = nil,
+         @ViewBuilder accessory: () -> Accessory) {
+        self._text = text
+        self.prompt = prompt
+        self.menu = menu
+        self.accessory = accessory()
+    }
+
+    var body: some View {
+        PanelBar(height: DS.Bar.footer) {
+            accessory
+            FilterField(text: $text, prompt: prompt, menu: menu, controlSize: .large)
+        }
+    }
+}
+
+extension FilterBar where Accessory == EmptyView {
+    init(text: Binding<String>, prompt: String = "Filter", menu: BarMenu? = nil) {
+        self.init(text: text, prompt: prompt, menu: menu) { EmptyView() }
+    }
+}
+
+struct FilterBarButton: View {
+    let icon: String
+    let help: String
+    var busy = false
+    let action: () -> Void
+
+    init(_ icon: String, help: String, busy: Bool = false, action: @escaping () -> Void) {
+        self.icon = icon
+        self.help = help
+        self.busy = busy
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                if busy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: icon)
+                }
+            }
+            .frame(width: DS.Layout.barControlGlyph, height: DS.Layout.barControlGlyph)
+        }
+        .modifier(FilterBarControlStyle())
+        .disabled(busy)
+        .help(help)
+        .accessibilityLabel(IconButton.accessibilityName(help))
+    }
+}
+
+struct FilterBarMenu: View {
+    let icon: String
+    let help: String
+    let menu: BarMenu
+    @State private var anchor = MenuAnchor()
+
+    init(_ icon: String, help: String, menu: BarMenu) {
+        self.icon = icon
+        self.help = help
+        self.menu = menu
+    }
+
+    var body: some View {
+        FilterBarButton(icon, help: help) { anchor.show(menu.makeMenu()) }
+            .background(MenuAnchorView(anchor: anchor))
+    }
+}
+
+final class MenuAnchor {
+    weak var view: NSView?
+
+    func show(_ menu: NSMenu) {
+        guard let view else { return }
+        let below = NSPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + DS.Space.xs : -DS.Space.xs)
+        menu.popUp(positioning: nil, at: below, in: view)
+    }
+}
+
+private struct MenuAnchorView: NSViewRepresentable {
+    let anchor: MenuAnchor
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        anchor.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        anchor.view = view
+    }
+}
+
+private struct FilterBarControlStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+        } else {
+            content
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+        }
+    }
+}
+
 struct FilterField: View {
     @Binding var text: String
     var prompt = "Filter"
+    var menu: BarMenu? = nil
+    var controlSize: NSControl.ControlSize = .regular
 
     var body: some View {
         SearchField(text: $text, prompt: prompt, style: .filter,
-                    focusRequest: 0, handledFocusRequest: .constant(0), onSubmit: {})
+                    focusRequest: 0, handledFocusRequest: .constant(0), onSubmit: {},
+                    controlSize: controlSize, filterMenu: menu)
             .frame(maxWidth: .infinity)
             .accessibilityLabel(prompt)
     }
@@ -705,9 +856,12 @@ struct SearchField: NSViewRepresentable {
     let onSubmit: () -> Void
     var submitsImmediately: Bool? = nil
     var allowsEmptySubmission = false
+    var controlSize: NSControl.ControlSize = .regular
+    var filterMenu: BarMenu? = nil
 
     func makeNSView(context: Context) -> NSSearchField {
         let field = FocusableSearchField()
+        context.coordinator.field = field
         field.onWindowAvailable = { [weak coordinator = context.coordinator, weak field] in
             guard let field else { return }
             coordinator?.scheduleFocus(field)
@@ -720,26 +874,35 @@ struct SearchField: NSViewRepresentable {
         field.sendsSearchStringImmediately = submitsImmediately ?? (style == .filter)
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        applyStyle(to: field)
+        applyStyle(to: field, coordinator: context.coordinator)
         return field
     }
 
-    private func applyStyle(to field: NSSearchField) {
-        field.controlSize = .regular
-        guard style == .filter else { return }
-        let cell = field.cell as? NSSearchFieldCell
-        if cell?.searchButtonCell?.image !== Self.filterIcon {
-            cell?.searchButtonCell?.image = Self.filterIcon
-            cell?.searchButtonCell?.alternateImage = Self.filterIcon
+    private func applyStyle(to field: NSSearchField, coordinator: Coordinator) {
+        if field.controlSize != controlSize { field.controlSize = controlSize }
+        guard style == .filter, let button = (field.cell as? NSSearchFieldCell)?.searchButtonCell else { return }
+        let icon = filterMenu?.isActive == true ? Self.activeFilterIcon : Self.filterIcon
+        if button.image !== icon {
+            button.image = icon
+            button.alternateImage = icon
         }
+        guard filterMenu != nil else { return }
+        if button.target !== coordinator {
+            button.target = coordinator
+            button.action = #selector(Coordinator.showFilterMenu(_:))
+            button.setAccessibilityLabel("Filter Options")
+        }
+        (field as? FocusableSearchField)?.filterButtonToolTip = "Filter Options"
     }
 
     private static let filterIcon = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle",
                                             accessibilityDescription: "Filter") ?? NSImage()
+    private static let activeFilterIcon = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle.fill",
+                                                  accessibilityDescription: "Filter") ?? NSImage()
 
     func updateNSView(_ field: NSSearchField, context: Context) {
         context.coordinator.parent = self
-        applyStyle(to: field)
+        applyStyle(to: field, coordinator: context.coordinator)
         if field.placeholderString != prompt { field.placeholderString = prompt }
         if field.stringValue != text, (field.currentEditor() as? NSTextView)?.hasMarkedText() != true {
             field.stringValue = text
@@ -756,6 +919,7 @@ struct SearchField: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         var parent: SearchField
+        weak var field: NSSearchField?
         var isDismantled = false
         private var scheduledFocusRequest: Int?
 
@@ -784,6 +948,14 @@ struct SearchField: NSViewRepresentable {
             parent.text = field.stringValue
         }
 
+        @objc func showFilterMenu(_ sender: Any?) {
+            guard let field, let menu = parent.filterMenu?.makeMenu(),
+                  let cell = field.cell as? NSSearchFieldCell else { return }
+            let button = cell.searchButtonRect(forBounds: field.bounds)
+            let origin = NSPoint(x: button.minX, y: field.isFlipped ? button.maxY : button.minY)
+            menu.popUp(positioning: nil, at: origin, in: field)
+        }
+
         @objc func submit(_ sender: NSSearchField) {
             parent.text = sender.stringValue
             guard parent.allowsEmptySubmission || !sender.stringValue.isEmpty else { return }
@@ -794,10 +966,23 @@ struct SearchField: NSViewRepresentable {
 
 final class FocusableSearchField: NSSearchField {
     var onWindowAvailable: (() -> Void)?
+    var filterButtonToolTip: String? {
+        didSet { if filterButtonToolTip != oldValue { needsLayout = true } }
+    }
+    private var toolTipOwner: NSString?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil { onWindowAvailable?() }
+    }
+
+    override func layout() {
+        super.layout()
+        guard let filterButtonToolTip, let cell = cell as? NSSearchFieldCell else { return }
+        let owner = filterButtonToolTip as NSString
+        toolTipOwner = owner
+        removeAllToolTips()
+        addToolTip(cell.searchButtonRect(forBounds: bounds), owner: owner, userData: nil)
     }
 }
 
