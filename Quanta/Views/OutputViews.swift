@@ -144,14 +144,14 @@ struct ImageOutputView: View {
                        isActive: actualSize) {
                 actualSize.toggle()
             }
-            IconButton("doc.on.doc", help: "Copy image") {
+            IconButton("doc.on.doc", help: "Copy Image") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.writeObjects([image])
             }
-            IconButton("macwindow.badge.plus", help: "Open in separate window (⌥⌘P)") {
+            IconButton("macwindow.badge.plus", help: "Open Image in Window (⌥⌘P)") {
                 PlotWindow.open(image: image)
             }
-            IconButton("square.and.arrow.down", help: "Save as PNG…") { savePNG() }
+            IconButton("square.and.arrow.down", help: "Save Image as PNG…") { savePNG() }
         }
     }
 
@@ -286,6 +286,17 @@ struct MarkdownView: View {
         inlineOrder.append(source)
         if inlineOrder.count > 800 { inlineCache[inlineOrder.removeFirst()] = nil }
         return parsed
+    }
+
+    static func accessibilityHeading(_ level: Int) -> AccessibilityHeadingLevel {
+        switch level {
+        case 1: .h1
+        case 2: .h2
+        case 3: .h3
+        case 4: .h4
+        case 5: .h5
+        default: .h6
+        }
     }
 
     var body: some View {
@@ -683,6 +694,8 @@ struct MarkdownView: View {
             Text(MarkdownView.inlineAttributed(text))
                 .font(headingFont(level))
                 .padding(.top, level <= 2 ? 4 : 2)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityHeading(Self.accessibilityHeading(level))
         case .code(let code):
             Text(code)
                 .font(.system(size: monoSize, design: .monospaced))
@@ -778,11 +791,22 @@ struct InlineMathText: View {
     var body: some View {
         composed
             .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(Text(spoken))
             .onAppear { fetch() }
             .onChange(of: colorScheme) { _, _ in
                 rendered = [:]
                 fetch()
             }
+    }
+
+    private var spoken: String {
+        segments.map { segment in
+            switch segment {
+            case .text(let text): String(MarkdownView.inlineAttributed(text).characters)
+            case .math(let tex): tex
+            case .image(let alt, _): alt
+            }
+        }.joined()
     }
 
     private var composed: Text {
@@ -848,6 +872,8 @@ struct DisplayMathView: View {
             }
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(tex))
         .onAppear { fetch() }
         .onChange(of: colorScheme) { _, _ in
             rendered = nil

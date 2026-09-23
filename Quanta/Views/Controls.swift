@@ -89,13 +89,15 @@ enum DS {
     }
 
     enum StatusColors {
-        static let warning = color(light: 0x805B00, dark: 0xF5D04C)
-        static let success = color(light: 0x176B36, dark: 0x73D99A)
+        static let warningColor = color(light: 0x805B00, dark: 0xF5D04C)
+        static let successColor = color(light: 0x176B36, dark: 0x73D99A)
+        static let warning = Color(nsColor: warningColor)
+        static let success = Color(nsColor: successColor)
 
-        private static func color(light: Int, dark: Int) -> Color {
-            Color(nsColor: NSColor(name: nil) { appearance in
+        private static func color(light: Int, dark: Int) -> NSColor {
+            NSColor(name: nil) { appearance in
                 NSColor(hex: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light)
-            })
+            }
         }
     }
 
@@ -104,8 +106,8 @@ enum DS {
     }
 
     enum Git {
-        static let added = Color.green
-        static let modified = Color.orange
+        static let added = StatusColors.success
+        static let modified = StatusColors.warning
         static let removed = Color.red
         static let addedFill = Color.green.opacity(0.12)
         static let removedFill = Color.red.opacity(0.12)
@@ -120,8 +122,8 @@ enum DS {
 
         static func nsColor(for status: GitChange.Status) -> NSColor {
             switch status {
-            case .modified, .typeChanged: return .systemOrange
-            case .added, .untracked, .renamed, .copied: return .systemGreen
+            case .modified, .typeChanged: return StatusColors.warningColor
+            case .added, .untracked, .renamed, .copied: return StatusColors.successColor
             case .deleted, .conflicted: return .systemRed
             }
         }

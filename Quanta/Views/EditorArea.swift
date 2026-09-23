@@ -246,9 +246,7 @@ struct TabItemView: View {
                 .lineLimit(1)
             Spacer(minLength: 0)
             ZStack {
-                if document.isPinned {
-                    Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary)
-                } else if hovering {
+                if hovering, !document.isPinned {
                     Button {
                         app.closeDocument(document)
                     } label: {
@@ -264,6 +262,11 @@ struct TabItemView: View {
                         .fill(Color.secondary)
                         .frame(width: DS.Layout.statusDot, height: DS.Layout.statusDot)
                         .accessibilityLabel("Unsaved changes")
+                } else if document.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Pinned")
                 }
             }
             .frame(width: 16, height: 16)

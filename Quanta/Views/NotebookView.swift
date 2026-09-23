@@ -32,7 +32,7 @@ struct FindBarView: View {
         VStack(spacing: 0) {
             HStack(spacing: DS.Space.m) {
                 IconButton(find.showReplace ? "chevron.down" : "chevron.right",
-                           help: find.showReplace ? "Hide replace" : "Show replace",
+                           help: find.showReplace ? "Hide Replace" : "Show Replace",
                            symbolWeight: .semibold) {
                     find.showReplace.toggle()
                 }
@@ -51,14 +51,14 @@ struct FindBarView: View {
                     .foregroundStyle(.secondary)
                     .frame(minWidth: 54, alignment: .leading)
 
-                IconButton("chevron.up", help: "Previous match (⇧⌘G)") {
+                IconButton("chevron.up", help: "Previous Match (⇧⌘G)") {
                     app.findAdvance(in: document, delta: -1)
                 }
-                IconButton("chevron.down", help: "Next match (⌘G)") {
+                IconButton("chevron.down", help: "Next Match (⌘G)") {
                     app.findAdvance(in: document, delta: 1)
                 }
 
-                IconButton("xmark", help: "Close find bar (Esc)", symbolWeight: .semibold) {
+                IconButton("xmark", help: "Close Find Bar (Esc)", symbolWeight: .semibold) {
                     app.closeFind(in: document)
                 }
             }

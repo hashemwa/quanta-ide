@@ -75,6 +75,7 @@ struct VariableRowView: View {
     var changed = false
     var inspect: () -> Void = {}
     private var app: AppState { AppState.shared }
+    @Environment(\.monoFontSize) private var monoFontSize
 
     private var detail: String {
         variable.summary.isEmpty
@@ -88,9 +89,10 @@ struct VariableRowView: View {
                 if changed {
                     Circle().fill(Color.accentColor).frame(width: DS.Layout.statusDot, height: DS.Layout.statusDot)
                         .help("New or changed since the previous variable refresh")
+                        .accessibilityLabel("Changed")
                 }
                 Text(variable.name)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: monoFontSize, design: .monospaced))
                     .lineLimit(1)
                 if let shape = variable.shape {
                     Pill(shape)

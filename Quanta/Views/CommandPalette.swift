@@ -92,7 +92,7 @@ struct CommandPalette: View {
                         Spacer()
                         if mode == .commands { Text(entry.detail).font(.caption).foregroundStyle(.secondary) }
                     }
-                    .opacity(entry.enabled ? 1 : 0.45)
+                    .disabled(!entry.enabled)
                     .tag(entry.id)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) { selected = entry.id; activate() }

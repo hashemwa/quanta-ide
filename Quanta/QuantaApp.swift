@@ -464,7 +464,7 @@ struct SettingsView: View {
                         HStack(spacing: 8) {
                             Stepper(value: Binding(
                                 get: { app.editorFontSize },
-                                set: { app.setFontSize($0) }), in: 9...28) {
+                                set: { app.setFontSize($0) }), in: AppState.fontSizeRange) {
                                 Text("\(Int(app.editorFontSize)) pt").monospacedDigit()
                             }
                             Button("Reset") { app.resetFontSize() }

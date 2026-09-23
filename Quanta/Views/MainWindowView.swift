@@ -31,6 +31,7 @@ struct MainWindowView: View {
                                       ideal: DS.Layout.inspectorIdeal,
                                       max: DS.Layout.inspectorMax)
         }
+        .environment(\.monoFontSize, app.editorFontSize - 1)
         .navigationTitle(windowTitle)
         .navigationSubtitle(windowSubtitle)
         .sheet(item: $app.paletteMode) { mode in
@@ -119,7 +120,7 @@ struct RunControls: View {
         .help(app.runCommandHelp)
         .disabled(app.activeDocument == nil)
         ExecutionStopButton(app: app, title: "Stop")
-            .help("Interrupt execution (⌘.)")
+            .help("Interrupt Execution (⌘.)")
     }
 }
 
@@ -158,12 +159,12 @@ struct HistoryControls: View {
         Button { app.navigateHistory(-1) } label: {
             Label("Back", systemImage: "chevron.left")
         }
-        .help("Go Back")
+        .help("Go Back (⌘[)")
         .disabled(!app.canNavigateBack)
         Button { app.navigateHistory(1) } label: {
             Label("Forward", systemImage: "chevron.right")
         }
-        .help("Go Forward")
+        .help("Go Forward (⌘])")
         .disabled(!app.canNavigateForward)
     }
 }
@@ -231,7 +232,7 @@ struct DetailSplitView: View {
         } label: {
             Label("Split Editor", systemImage: "rectangle.split.2x1")
         }
-        .help(app.splitDocumentID == nil ? "Split Editor" : "Close Split Editor")
+        .help(app.splitDocumentID == nil ? "Split Editor (⌘\\)" : "Close Split Editor (⌘\\)")
         .disabled(app.activeDocument == nil)
     }
 
@@ -330,6 +331,7 @@ struct PanelDragHeight: PreferenceKey {
 
 struct KernelStatusMenu: View {
     @EnvironmentObject var app: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let sections: [(PythonEnvironment.Kind, String)] = [
         (.workspace, "This Workspace"),
@@ -417,11 +419,11 @@ struct KernelStatusMenu: View {
         case .busy:
             Image(systemName: "memorychip")
                 .foregroundStyle(.yellow)
-                .symbolEffect(.pulse, options: .repeating)
+                .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
         case .starting:
             Image(systemName: "memorychip")
                 .foregroundStyle(.orange)
-                .symbolEffect(.pulse, options: .repeating)
+                .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
         case .dead:
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)

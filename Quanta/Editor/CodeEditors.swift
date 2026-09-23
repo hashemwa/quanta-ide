@@ -63,6 +63,7 @@ final class ScriptCanvas: NSObject, DocumentCanvas, NSTextViewDelegate {
         textView.isIncrementalSearchingEnabled = true
         textView.delegate = self
         textView.string = document.text
+        textView.setAccessibilityLabel(document.displayName)
         if let storage = textView.textStorage { PythonHighlighter.highlight(storage) }
         EditorRegistry.shared.register(textView, for: document.id)
         textView.onCommand = { [weak self] command in self?.perform(command) ?? false }
@@ -84,6 +85,9 @@ final class ScriptCanvas: NSObject, DocumentCanvas, NSTextViewDelegate {
     }
 
     func update(document: Document, showsLineNumbers: Bool, wrapsLines: Bool) {
+        if textView.accessibilityLabel() != document.displayName {
+            textView.setAccessibilityLabel(document.displayName)
+        }
         if scrollView.rulersVisible != showsLineNumbers {
             scrollView.hasVerticalRuler = showsLineNumbers
             scrollView.rulersVisible = showsLineNumbers

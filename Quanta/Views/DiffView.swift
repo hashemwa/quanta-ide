@@ -18,7 +18,7 @@ struct DiffView: View {
                 if let diff = document.diff, diff.isNotebook {
                     Text("Cell sources only")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .help("Outputs, execution counts and metadata are not compared.")
                 }
@@ -34,7 +34,7 @@ struct DiffView: View {
                 if let source, !source.isAdHoc {
                     stageButton(source)
                 }
-                IconButton("arrow.clockwise", help: "Reload changes (⌘R)") { app.reloadDiff(document) }
+                IconButton("arrow.clockwise", help: "Reload Changes (⌘R)") { app.reloadDiff(document) }
             }
             content
         }
@@ -182,7 +182,7 @@ private struct DiffGapRow: View {
                 Spacer(minLength: 0)
             }
             .font(.caption)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
             .padding(.leading, gutter * 2 + DS.Space.m)
             .padding(.vertical, DS.Space.xs)
             .frame(maxWidth: .infinity, alignment: .leading)

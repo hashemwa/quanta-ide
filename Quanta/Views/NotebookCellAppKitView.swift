@@ -39,6 +39,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private var lastSource = ""
     private var hovering = false
     private var editorFocused = false
+    private var isSelected = false
     private var measurementPending = false
 
     private static let wellInsets = NSEdgeInsets(top: DS.Space.xs, left: DS.Space.s,
@@ -89,6 +90,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         cancellables.removeAll()
         hovering = false
         editorFocused = false
+        isSelected = false
         cell = nil
         document = nil
         notebook = nil
@@ -200,6 +202,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         progress.translatesAutoresizingMaskIntoConstraints = false
         progress.style = .spinning
         progress.controlSize = .mini
+        progress.setAccessibilityLabel("Running")
 
         statusContainer.addSubview(statusLabel)
         statusContainer.addSubview(statusImage)
@@ -223,9 +226,9 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         durationLabel.textColor = .tertiaryLabelColor
         durationLabel.alignment = .center
 
-        configureButton(runButton, symbol: "play.fill", help: "Run cell (⌘↩)",
+        configureButton(runButton, symbol: "play.fill", help: "Run Cell (⌘↩)",
                         action: #selector(runCell))
-        configureButton(markdownButton, symbol: "pencil", help: "Edit markdown",
+        configureButton(markdownButton, symbol: "pencil", help: "Edit Markdown (↩)",
                         action: #selector(toggleMarkdown))
         configureButton(addButton, symbol: "plus", help: "Insert Code or Markdown Above or Below",
                         action: #selector(showInsertionMenu))
@@ -254,6 +257,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         button.target = self
         button.action = action
         button.toolTip = help
+        button.setAccessibilityLabel(IconButton.accessibilityName(help))
         button.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             button.widthAnchor.constraint(equalToConstant: DS.Layout.slot),
@@ -335,6 +339,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             button.font = .monospacedSystemFont(ofSize: max(10, monoFontSize - 1),
                                                 weight: .regular)
             button.contentTintColor = .secondaryLabelColor
+            button.setAccessibilityLabel("Expand source: \(collapsedPreview(cell))")
             sourceCard.setContent(button, insets: NSEdgeInsets(top: DS.Space.s,
                                                                left: DS.Space.m,
                                                                bottom: DS.Space.s,
@@ -421,7 +426,8 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             button.isBordered = false
             button.alignment = .left
             button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-            button.contentTintColor = .tertiaryLabelColor
+            button.contentTintColor = .secondaryLabelColor
+            button.setAccessibilityLabel("Show output")
             replaceOutput(with: button)
             return
         }
@@ -485,6 +491,8 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             statusImage.toolTip = "Queued — waiting for earlier cells"
         }
         statusLabel.stringValue = cell.executionCount.map { "[\($0)]" } ?? "[ ]"
+        statusLabel.setAccessibilityLabel(cell.executionCount.map { "Execution count \($0)" } ?? "Not run yet")
+        editor?.setAccessibilityLabel("\(cellDescription) source")
         staleImage.isHidden = !cell.hasStaleOutput || cell.isRunning || !isCode
         durationLabel.isHidden = cell.lastDuration == nil || cell.isRunning || !isCode
         if let duration = cell.lastDuration {
@@ -496,10 +504,11 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             durationLabel.toolTip = nil
         }
         runButton.isEnabled = !cell.isRunning
+        let markdownHelp = cell.isEditingMarkdown ? "Preview Markdown (⌘↩)" : "Edit Markdown (↩)"
         markdownButton.image = NSImage(systemSymbolName: cell.isEditingMarkdown ? "eye" : "pencil",
-                                       accessibilityDescription: cell.isEditingMarkdown
-                                       ? "Preview markdown" : "Edit markdown")
-        markdownButton.toolTip = cell.isEditingMarkdown ? "Preview markdown" : "Edit markdown"
+                                       accessibilityDescription: IconButton.accessibilityName(markdownHelp))
+        markdownButton.toolTip = markdownHelp
+        markdownButton.setAccessibilityLabel(IconButton.accessibilityName(markdownHelp))
         if cell.isRunning { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
     }
 
@@ -507,10 +516,49 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         guard let cell else { return }
         let selection = AppState.shared.selection
         let selected = selection.selectedCellID == cell.id || selection.selectedCellIDs.contains(cell.id)
+        if selected, !isSelected, selection.selectedCellID == cell.id, AppState.shared.isCommandMode {
+            announceSelection()
+        }
+        isSelected = selected
         selectionBar.isHidden = !selected
         sourceCard.isFocused = editorFocused
         updateControlVisibility()
     }
+
+    private var cellDescription: String {
+        guard let cell else { return "Cell" }
+        let index = (notebook?.cells.firstIndex { $0 === cell } ?? 0) + 1
+        return "\(cell.cellType == .code ? "Code" : "Markdown") cell \(index)"
+    }
+
+    private var spokenDescription: String {
+        guard let cell else { return "Cell" }
+        var parts = [cellDescription]
+        if cell.isRunning {
+            parts.append("running")
+        } else if cell.isQueued {
+            parts.append("queued")
+        } else if let count = cell.executionCount {
+            parts.append("execution count \(count)")
+        }
+        if cell.hasStaleOutput { parts.append("output is stale") }
+        if cell.isSourceCollapsed { parts.append("source collapsed") }
+        if cell.isOutputCollapsed { parts.append("output hidden") }
+        return parts.joined(separator: ", ")
+    }
+
+    private func announceSelection() {
+        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        NSAccessibility.post(element: self, notification: .announcementRequested, userInfo: [
+            .announcement: spokenDescription,
+            .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ])
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityLabel() -> String? { spokenDescription }
+    override func isAccessibilitySelected() -> Bool { isSelected }
 
     private func updateControlVisibility() {
         guard let cell else { return }
@@ -808,9 +856,13 @@ private final class NotebookIconButton: NSButton {
         updateAppearance()
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        alphaValue > 0 ? super.hitTest(point) : nil
+    }
+
     func setInteractionVisible(_ visible: Bool, enabled: Bool) {
         alphaValue = visible ? 1 : 0
-        isEnabled = visible && enabled
+        isEnabled = enabled
         if !visible || !enabled {
             hovering = false
             updateAppearance()

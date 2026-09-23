@@ -375,6 +375,7 @@ final class NavigatorCellView: NSTableCellView {
         if let change {
             status.stringValue = change.letter
             status.toolTip = change.label
+            status.setAccessibilityLabel(change.label)
             statusColor = DS.Git.nsColor(for: change)
             status.isHidden = false
             changeDot.isHidden = true

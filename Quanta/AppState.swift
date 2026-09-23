@@ -88,7 +88,7 @@ final class AppState: ObservableObject {
     @Published var environments: [PythonEnvironment] = []
     @Published var environmentVersions: [String: String] = [:]
     let editorPresentation = EditorPresentationState(
-        fontSize: QuantaDefaults.store.object(forKey: "QuantaFontSize") as? CGFloat ?? 13)
+        fontSize: AppState.storedFontSize)
     let git = SourceControlState()
     @Published var sidebarPane: SidebarPane =
         SidebarPane(rawValue: QuantaDefaults.store.string(forKey: "QuantaSidebarPane") ?? "") ?? .files {
@@ -833,11 +833,11 @@ final class AppState: ObservableObject {
 
     var runCommandHelp: String {
         switch activeDocument?.kind {
-        case .notebook: return "Run all cells (⌘R)"
-        case .dataSource: return "Run query (⌘R)"
-        case .dataFrame: return "Reload table (⌘R)"
-        case .diff: return "Reload changes (⌘R)"
-        default: return "Run file (⌘R)"
+        case .notebook: return "Run All Cells (⌘R)"
+        case .dataSource: return "Run Query (⌘R)"
+        case .dataFrame: return "Reload Table (⌘R)"
+        case .diff: return "Reload Changes (⌘R)"
+        default: return "Run File (⌘R)"
         }
     }
 
@@ -2291,8 +2291,13 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var editorFontSize: CGFloat =
-        QuantaDefaults.store.object(forKey: "QuantaFontSize") as? CGFloat ?? 13
+    static let fontSizeRange: ClosedRange<CGFloat> = 11...28
+    static var storedFontSize: CGFloat {
+        let stored = QuantaDefaults.store.object(forKey: "QuantaFontSize") as? CGFloat ?? 13
+        return min(max(stored, fontSizeRange.lowerBound), fontSizeRange.upperBound)
+    }
+
+    @Published var editorFontSize: CGFloat = AppState.storedFontSize
 
     func adjustFontSize(_ delta: CGFloat) {
         setFontSize(editorFontSize + delta)
@@ -2303,7 +2308,7 @@ final class AppState: ObservableObject {
     }
 
     func setFontSize(_ size: CGFloat) {
-        let clamped = max(9, min(28, size))
+        let clamped = min(max(size, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
         editorFontSize = clamped
         editorPresentation.fontSize = clamped
         QuantaDefaults.store.set(clamped, forKey: "QuantaFontSize")

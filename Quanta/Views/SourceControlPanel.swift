@@ -33,7 +33,7 @@ struct SourceControlPanel: View {
             NavigatorEmptyState("No Folder Open", systemImage: "folder",
                                 detail: "Open a folder to see its git changes.") {
                 Button("Open Folder…") { app.openFolderPanel() }
-                    .help("Open a folder as the workspace (⇧⌘O)")
+                    .help("Open Folder as Workspace (⇧⌘O)")
             }
         case .gitMissing:
             NavigatorEmptyState("Git Not Found", systemImage: "arrow.triangle.branch",
@@ -97,7 +97,7 @@ struct SourceControlPanel: View {
             if git.isBusy || git.isRefreshing {
                 ActivitySlot(active: true)
             }
-            IconMenu("ellipsis", help: "Show more actions") {
+            IconMenu("ellipsis", help: "More Actions") {
                 Picker("Show", selection: $scope) {
                     ForEach(GitChangeScope.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
@@ -370,7 +370,7 @@ struct SourceControlPanel: View {
             Spacer(minLength: 0)
         }
         .font(.caption)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(.secondary)
         .contentShape(Rectangle())
         .help(footerHelp(snapshot))
         .contextMenu {

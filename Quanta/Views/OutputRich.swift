@@ -518,7 +518,7 @@ struct ObjectCardView: View {
                     .font(.system(size: monoSize + 1, weight: .semibold, design: .monospaced))
                 Text(payload.subtitle)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
             if !payload.badges.isEmpty {
                 HStack(spacing: 4) {

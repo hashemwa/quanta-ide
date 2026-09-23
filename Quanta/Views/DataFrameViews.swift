@@ -593,7 +593,7 @@ struct DataFrameTabView: View {
                         Text("Descending").tag(false)
                     }.pickerStyle(.inline).disabled(document.dataFrameSortColumn == nil)
                 }.disabled(document.isLoadingDataFrame)
-                IconButton("arrow.clockwise", help: "Reload table (⌘R)") {
+                IconButton("arrow.clockwise", help: "Reload Table (⌘R)") {
                     app.reloadDataFrame(document)
                 }
             }

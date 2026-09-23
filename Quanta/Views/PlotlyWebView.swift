@@ -45,20 +45,17 @@ struct PlotlyFigureView: View {
 
     private var controls: some View {
         PlotControlBar {
-            IconButton("plus.magnifyingglass", help: "Zoom in") {
+            IconButton("plus.magnifyingglass", help: "Zoom In") {
                 controller.zoom(0.75)
             }
-            IconButton("minus.magnifyingglass", help: "Zoom out") {
+            IconButton("minus.magnifyingglass", help: "Zoom Out") {
                 controller.zoom(1.35)
             }
-            IconButton(panMode ? "hand.draw.fill" : "hand.draw",
-                              help: panMode ? "Drag pans (click for box-zoom)"
-                                            : "Drag box-zooms (click to pan)",
-                              isActive: panMode) {
+            IconButton(panMode ? "hand.draw.fill" : "hand.draw", help: "Pan Mode", isActive: panMode) {
                 panMode.toggle()
                 controller.setDragMode(pan: panMode)
             }
-            IconButton("house", help: "Reset view") { controller.resetView() }
+            IconButton("house", help: "Reset View") { controller.resetView() }
             ToolbarDivider()
             if controller.isExporting {
                 ProgressView().controlSize(.small)
@@ -67,10 +64,10 @@ struct PlotlyFigureView: View {
             }
             IconButton("doc.on.doc", help: "Copy Image") { controller.copyPNG() }
                 .disabled(controller.isExporting)
-            IconButton("macwindow.badge.plus", help: "Open in separate window (⌥⌘P)") {
+            IconButton("macwindow.badge.plus", help: "Open Image in Window (⌥⌘P)") {
                 PlotWindow.open(html: html, jsPath: rendererPath)
             }
-            IconButton("square.and.arrow.down", help: "Save as PNG…") {
+            IconButton("square.and.arrow.down", help: "Save Image as PNG…") {
                 controller.savePNG()
             }
             .disabled(controller.isExporting)

@@ -31,7 +31,7 @@ struct BottomPanel: View {
                     } else if !terminal.running {
                         Text("Not started")
                             .font(.caption).foregroundStyle(.secondary)
-                            .help("Start a terminal session")
+                            .help("Start Terminal Session")
                     }
                     IconButton("arrow.clockwise", help: "Restart Terminal Session…") { app.newTerminalSession() }
                     IconButton("trash", help: "Clear Terminal Scrollback") { terminal.clear() }
@@ -53,7 +53,7 @@ struct BottomPanel: View {
                     }
                     IconButton("trash", help: "Clear Console (⌘K)") { app.console.clear() }
                 }
-                IconButton("xmark", help: "Hide Panel") { app.setConsoleVisible(false) }
+                IconButton("xmark", help: "Hide Panel (⇧⌘Y)") { app.setConsoleVisible(false) }
             }
             if showingSearch, app.bottomPane == .console {
                 PanelSearchBar(prompt: "Find in console", text: $consoleQuery) {

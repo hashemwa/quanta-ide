@@ -114,7 +114,7 @@ struct SidebarView: View {
 
     private func filesFooter(_ workspace: Workspace) -> some View {
         PanelBar(height: DS.Bar.footer) {
-            IconMenu("plus", help: "New notebook, file or folder (⌘N)") {
+            IconMenu("plus", help: "New Notebook, File or Folder (⌘N)") {
                 Button("New Notebook") { app.newNotebook() }
                 Button("New Python File") { app.newScript() }
                 Divider()
@@ -122,7 +122,7 @@ struct SidebarView: View {
                 Button("New Folder…") { app.createFolder(in: workspace.rootURL) }
             }
             FilterField(text: $fileFilter)
-            IconMenu("ellipsis", help: "Show more actions") {
+            IconMenu("ellipsis", help: "More Actions") {
                 Toggle("Show Hidden Files", isOn: $app.showsHiddenFiles)
                 Button("Refresh File Tree") { app.refreshWorkspace() }
                 Divider()
@@ -146,7 +146,7 @@ struct SidebarView: View {
         NavigatorEmptyState("No Folder Open", systemImage: "folder",
                             detail: "Open a folder to browse and search its files.") {
             Button("Open Folder…") { app.openFolderPanel() }
-                .help("Open a folder as the workspace (⇧⌘O)")
+                .help("Open Folder as Workspace (⇧⌘O)")
         }
     }
 
