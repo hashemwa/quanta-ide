@@ -121,10 +121,14 @@ enum PythonHighlighter {
             }
             return true
         }
+        func lineEnd(_ start: Int) -> Int {
+            var end = start
+            while end < count, chars[end] != 10, chars[end] != 13 { end += 1 }
+            return end
+        }
         func softKeyword(_ value: String, _ start: Int) -> Bool {
-            guard lineStart(start) else { return false }
-            let tail = text.substring(from: i).components(separatedBy: .newlines).first ?? ""
-            let trimmed = tail.trimmingCharacters(in: .whitespaces)
+            guard value == "match" || value == "case" || value == "type", lineStart(start) else { return false }
+            let trimmed = word(i, lineEnd(i)).trimmingCharacters(in: .whitespaces)
             if value == "type" {
                 return trimmed.first.map { $0.isLetter || $0 == "_" } == true && trimmed.contains("=")
             }
@@ -154,7 +158,8 @@ enum PythonHighlighter {
                     add(.decorator, start, i); continue
                 }
                 if digit(c) || (c == 46 && i + 1 < count && digit(chars[i + 1])) {
-                    if let match = number.firstMatch(in: source, options: .anchored, range: NSRange(location: i, length: count - i)) {
+                    if let match = number.firstMatch(in: source, options: .anchored,
+                                                     range: NSRange(location: i, length: lineEnd(i) - i)) {
                         add(.number, i, NSMaxRange(match.range)); i = NSMaxRange(match.range); previousDot = false; continue
                     }
                 }

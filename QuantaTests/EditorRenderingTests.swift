@@ -58,4 +58,17 @@ final class EditorRenderingTests: XCTestCase {
         XCTAssertEqual(updates, 2)
     }
 
+    func testHighlightingScalesLinearlyWithFileLength() {
+        func seconds(lines: Int) -> Double {
+            let line = "value = compute(12, 3.5, name='x')  # note\nmatch = 1\n"
+            let storage = NSTextStorage(string: String(repeating: line, count: lines))
+            let start = CFAbsoluteTimeGetCurrent()
+            PythonHighlighter.highlight(storage)
+            return CFAbsoluteTimeGetCurrent() - start
+        }
+        _ = seconds(lines: 50)
+        let small = seconds(lines: 400)
+        let large = seconds(lines: 1600)
+        XCTAssertLessThan(large / max(small, 0.0001), 8)
+    }
 }
