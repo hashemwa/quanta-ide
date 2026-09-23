@@ -11,6 +11,10 @@ enum QuantaDefaults {
         #endif
     }
 
+    static var previewHidesNavigator: Bool {
+        previewDirectory != nil && ProcessInfo.processInfo.environment["QUANTA_UI_PREVIEW_NAVIGATOR"] == "hidden"
+    }
+
     private static let testSuiteName = "quanta.tests.\(ProcessInfo.processInfo.processIdentifier)"
 
     static var isRunningTests: Bool {

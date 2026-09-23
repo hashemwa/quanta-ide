@@ -5,7 +5,8 @@ struct MainWindowView: View {
     @EnvironmentObject var app: AppState
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var columnVisibility: NavigationSplitViewVisibility =
+        QuantaDefaults.previewHidesNavigator ? .detailOnly : .all
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -78,11 +79,6 @@ struct MainWindowView: View {
     @ToolbarContentBuilder
     private var navigatorToolbar: some ToolbarContent {
         ToolbarItem(placement: .automatic) { NavigatorToggle(columnVisibility: $columnVisibility) }
-        if #available(macOS 26.0, *) {
-            ToolbarSpacer(.fixed)
-            ToolbarSpacer(.flexible)
-        }
-        ToolbarItemGroup(placement: .primaryAction) { RunControls() }
     }
 
     @ToolbarContentBuilder
@@ -209,10 +205,16 @@ struct DetailSplitView: View {
         if #available(macOS 26.0, *) {
             ToolbarItemGroup(placement: .navigation) { HistoryControls() }
             ToolbarSpacer(.fixed)
-            ToolbarItem(placement: .principal) {
-                HStack(spacing: DS.Space.s) {
-                    KernelStatusMenu()
-                }
+            if #available(macOS 26.1, *) {
+                ToolbarItemGroup(placement: .principal) { RunControls() }
+                    .visibilityPriority(.high)
+                ToolbarSpacer(.fixed, placement: .principal)
+                ToolbarItem(placement: .principal) { KernelStatusMenu() }
+                    .visibilityPriority(.high)
+            } else {
+                ToolbarItemGroup(placement: .principal) { RunControls() }
+                ToolbarSpacer(.fixed, placement: .principal)
+                ToolbarItem(placement: .principal) { KernelStatusMenu() }
             }
             ToolbarSpacer(.flexible)
             ToolbarItemGroup(placement: .primaryAction) {
@@ -222,6 +224,7 @@ struct DetailSplitView: View {
         } else {
             ToolbarItemGroup {
                 HistoryControls()
+                RunControls()
                 KernelStatusMenu()
                 splitButton
                 consoleButton
