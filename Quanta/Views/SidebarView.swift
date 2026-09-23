@@ -45,9 +45,6 @@ struct SidebarView: View {
                                                     set: { app.showSidebarPane($0) }))
                 .accessibilityLabel("Navigator")
         }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(DS.Chrome.rule).frame(height: DS.Layout.hairline)
-        }
     }
 
     @ViewBuilder

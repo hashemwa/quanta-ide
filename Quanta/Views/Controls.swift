@@ -289,15 +289,18 @@ enum DS {
             }
         }
 
-        private static let dynamicColors = Dictionary(uniqueKeysWithValues: Role.allCases.map { role in
-            (role, NSColor(name: nil) { appearance in
-                color(role, theme: AppTheme.current,
-                      dark: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
-            })
+        private static let paletteColors = Dictionary(uniqueKeysWithValues: AppTheme.allCases.map { theme in
+            (theme, Dictionary(uniqueKeysWithValues: Role.allCases.map { role in
+                (role, NSColor(name: nil) { appearance in
+                    color(role, theme: theme, dark: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+                })
+            }))
         })
 
         static func nsColor(_ role: Role) -> NSColor {
-            dynamicColors[role] ?? systemColor(role)
+            let theme = AppTheme.current
+            guard theme.palette != nil else { return systemColor(role) }
+            return paletteColors[theme]?[role] ?? systemColor(role)
         }
 
         static func cgColor(_ role: Role, for appearance: NSAppearance) -> CGColor {

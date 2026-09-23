@@ -120,6 +120,7 @@ final class AppState: ObservableObject {
         didSet {
             AppTheme.current = theme
             QuantaDefaults.store.set(theme.rawValue, forKey: AppTheme.key)
+            EditorRegistry.shared.allViews.forEach(EditorTheme.style)
         }
     }
     @Published private(set) var cellRevision = 0

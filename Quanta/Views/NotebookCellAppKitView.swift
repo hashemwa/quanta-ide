@@ -491,8 +491,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
 
     func applyTheme() {
         sourceCard.updateAppearance()
-        statusLabel.needsDisplay = true
-        if let editor { EditorTheme.style(editor) }
+        refreshSelection()
     }
 
     private func updateControlVisibility() {

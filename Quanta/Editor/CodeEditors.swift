@@ -15,7 +15,6 @@ enum CodeEditorFactory {
         tv.allowsUndo = true
         tv.font = EditorTheme.font
         tv.textColor = EditorTheme.text
-        tv.backgroundColor = EditorTheme.background
         EditorTheme.style(tv)
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
@@ -27,7 +26,6 @@ enum CodeEditorFactory {
         tv.isGrammarCheckingEnabled = false
         tv.smartInsertDeleteEnabled = false
         tv.isAutomaticTextCompletionEnabled = false
-        tv.typingAttributes = [.font: EditorTheme.font, .foregroundColor: EditorTheme.text]
         tv.textContainerInset = NSSize(width: DS.Space.xs, height: DS.Space.s)
         tv.inlinePredictionType = .no
         tv.completionProvider = { code, cursor, reply in
@@ -113,8 +111,7 @@ struct ScrollingCodeEditor: NSViewRepresentable {
         tv.onCommand = onCommand
         if context.coordinator.theme != theme {
             context.coordinator.theme = theme
-            EditorTheme.style(tv)
-            scrollView.contentView.needsDisplay = true
+            scrollView.backgroundColor = EditorTheme.background
             context.coordinator.ruler?.needsDisplay = true
         }
         if tv.string != text, !tv.hasMarkedText() {

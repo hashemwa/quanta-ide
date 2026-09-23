@@ -18,6 +18,7 @@ struct MainWindowView: View {
                                                 max: DS.Layout.sidebarMax)
         } detail: {
             DetailSplitView()
+                .background(DS.Chrome.backdrop)
                 .navigationSplitViewColumnWidth(min: DS.Layout.editorPaneMin,
                                                 ideal: DS.Layout.editorColumnIdeal)
         }

@@ -85,7 +85,7 @@ struct NotebookScrollView: NSViewRepresentable {
                     theme: AppTheme, scrollRequest: UUID?) {
             if self.theme != theme {
                 self.theme = theme
-                scrollView?.contentView.needsDisplay = true
+                scrollView?.backgroundColor = DS.Chrome.nsColor(.canvas)
                 cellViews.forEach { $0.applyTheme() }
             }
             let nextIDs = notebook.cells.map(\.id)
