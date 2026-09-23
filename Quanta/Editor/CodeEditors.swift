@@ -42,202 +42,98 @@ enum CodeEditorFactory {
     }
 }
 
-struct ScrollingCodeEditor: NSViewRepresentable {
-    @Binding var text: String
-    var showsLineNumbers = true
-    var wrapsLines = true
-    var documentID: UUID? = nil
-    var onCommand: ((EditorCommand) -> Bool)? = nil
-    var onFocus: (() -> Void)? = nil
+final class ScriptCanvas: NSObject, DocumentCanvas, NSTextViewDelegate {
+    private weak var document: Document?
+    private let scrollView = NSScrollView()
+    private let textView = CodeEditorFactory.makeTextView()
+    private let ruler: LineNumberRulerView
+    private let undoManager = UndoManager()
+    private var wrapsLines: Bool?
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    var view: NSView { scrollView }
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let tv = CodeEditorFactory.makeTextView()
-        tv.isVerticallyResizable = true
-        tv.isHorizontallyResizable = !wrapsLines
-        tv.autoresizingMask = wrapsLines ? [.width] : []
-        tv.textContainer?.widthTracksTextView = wrapsLines
-        if !wrapsLines { tv.textContainer?.containerSize.width = CGFloat.greatestFiniteMagnitude }
-        tv.minSize = NSSize(width: 0, height: 0)
-        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
-                            height: CGFloat.greatestFiniteMagnitude)
-        tv.usesFindBar = true
-        tv.isIncrementalSearchingEnabled = true
-        tv.delegate = context.coordinator
-        tv.string = text
-        if let storage = tv.textStorage { PythonHighlighter.highlight(storage) }
-        if let documentID { EditorRegistry.shared.register(tv, for: documentID) }
-
-        let scroll = NSScrollView()
-        scroll.wantsLayer = true
-        scroll.layer?.masksToBounds = true
-        scroll.documentView = tv
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = !wrapsLines
-        scroll.drawsBackground = true
-        scroll.backgroundColor = EditorTheme.background
-        scroll.borderType = .noBorder
-        scroll.focusRingType = .none
-
-        let ruler = LineNumberRulerView(textView: tv, scrollView: scroll)
-        scroll.verticalRulerView = ruler
-        scroll.hasVerticalRuler = showsLineNumbers
-        scroll.rulersVisible = showsLineNumbers
-
-        let coordinator = context.coordinator
-        coordinator.textView = tv
-        coordinator.ruler = ruler
-        tv.onFocusChange = { [weak coordinator] focused in
-            if focused { coordinator?.parent.onFocus?() }
+    init(document: Document) {
+        self.document = document
+        ruler = LineNumberRulerView(textView: textView, scrollView: scrollView)
+        super.init()
+        textView.isVerticallyResizable = true
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
+        textView.delegate = self
+        textView.string = document.text
+        if let storage = textView.textStorage { PythonHighlighter.highlight(storage) }
+        EditorRegistry.shared.register(textView, for: document.id)
+        textView.onCommand = { [weak self] command in self?.perform(command) ?? false }
+        textView.onFocusChange = { [weak self] focused in
+            guard focused, let document = self?.document else { return }
+            AppState.shared.activeDocumentID = document.id
         }
-        tv.onLayoutChange = { [weak ruler] in
-            ruler?.refreshMetrics()
-        }
-        return scroll
+        textView.onLayoutChange = { [weak ruler] in ruler?.refreshMetrics() }
+
+        scrollView.wantsLayer = true
+        scrollView.layer?.masksToBounds = true
+        scrollView.documentView = textView
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = EditorTheme.background
+        scrollView.borderType = .noBorder
+        scrollView.focusRingType = .none
+        scrollView.verticalRulerView = ruler
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.parent = self
-        guard let tv = context.coordinator.textView else { return }
-        scrollView.hasHorizontalScroller = !wrapsLines
-        scrollView.hasVerticalRuler = showsLineNumbers
-        scrollView.rulersVisible = showsLineNumbers
-        tv.isHorizontallyResizable = !wrapsLines
-        tv.autoresizingMask = wrapsLines ? [.width] : []
-        tv.textContainer?.widthTracksTextView = wrapsLines
-        tv.textContainer?.containerSize.width = wrapsLines ? scrollView.contentSize.width : CGFloat.greatestFiniteMagnitude
-        tv.onCommand = onCommand
-        if tv.string != text, !tv.hasMarkedText() {
-            let sel = tv.selectedRange()
-            tv.string = text
-            context.coordinator.undoManager.removeAllActions()
-            if let storage = tv.textStorage { PythonHighlighter.highlight(storage) }
-            let length = (tv.string as NSString).length
-            tv.setSelectedRange(NSRange(location: min(sel.location, length), length: 0))
-            context.coordinator.ruler?.needsDisplay = true
+    func update(document: Document, showsLineNumbers: Bool, wrapsLines: Bool) {
+        if scrollView.rulersVisible != showsLineNumbers {
+            scrollView.hasVerticalRuler = showsLineNumbers
+            scrollView.rulersVisible = showsLineNumbers
+        }
+        if self.wrapsLines != wrapsLines {
+            self.wrapsLines = wrapsLines
+            scrollView.hasHorizontalScroller = !wrapsLines
+            textView.isHorizontallyResizable = !wrapsLines
+            textView.autoresizingMask = wrapsLines ? [.width] : []
+            textView.textContainer?.widthTracksTextView = wrapsLines
+            textView.textContainer?.containerSize.width = wrapsLines
+                ? scrollView.contentSize.width : CGFloat.greatestFiniteMagnitude
+        }
+        guard textView.string != document.text, !textView.hasMarkedText() else { return }
+        let selection = textView.selectedRange()
+        textView.string = document.text
+        undoManager.removeAllActions()
+        if let storage = textView.textStorage { PythonHighlighter.highlight(storage) }
+        let length = (textView.string as NSString).length
+        textView.setSelectedRange(NSRange(location: min(selection.location, length), length: 0))
+        ruler.needsDisplay = true
+    }
+
+    func focus(in window: NSWindow) {
+        window.makeFirstResponder(textView)
+    }
+
+    private func perform(_ command: EditorCommand) -> Bool {
+        guard let document else { return false }
+        switch command {
+        case .runCellAndAdvance:
+            AppState.shared.runSelectionOrLine(in: document)
+            return true
+        case .runCell:
+            AppState.shared.runScript(document)
+            return true
         }
     }
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: ScrollingCodeEditor
-        weak var textView: QuantaTextView?
-        weak var ruler: LineNumberRulerView?
-        let undoManager = UndoManager()
+    func undoManager(for view: NSTextView) -> UndoManager? { undoManager }
 
-        init(_ parent: ScrollingCodeEditor) { self.parent = parent }
-
-        func undoManager(for view: NSTextView) -> UndoManager? { undoManager }
-
-        func textDidChange(_ notification: Notification) {
-            guard let tv = textView else { return }
-            if !tv.hasMarkedText() {
-                parent.text = tv.string
-                if let storage = tv.textStorage {
-                    PythonHighlighter.highlight(storage, editedRange: tv.lastEditedRange)
-                }
-            }
-            ruler?.needsDisplay = true
+    func textDidChange(_ notification: Notification) {
+        defer { ruler.needsDisplay = true }
+        guard let document, !textView.hasMarkedText() else { return }
+        if document.text != textView.string {
+            document.text = textView.string
+            if !document.isDirty { document.isDirty = true }
         }
-    }
-}
-
-struct GrowingCodeEditor: NSViewRepresentable {
-    @Binding var text: String
-    @Binding var height: CGFloat
-    var cellID: UUID? = nil
-    var onCommand: ((EditorCommand) -> Bool)? = nil
-    var onFocus: (() -> Void)? = nil
-    var onEscape: (() -> Void)? = nil
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    func makeNSView(context: Context) -> QuantaTextView {
-        let tv = CodeEditorFactory.makeTextView()
-        tv.isVerticallyResizable = true
-        tv.isHorizontallyResizable = false
-        tv.autoresizingMask = []
-        tv.drawsBackground = false
-        tv.delegate = context.coordinator
-        tv.string = text
-        if let storage = tv.textStorage { PythonHighlighter.highlight(storage) }
-        if let cellID { EditorRegistry.shared.register(tv, for: cellID) }
-
-        let coordinator = context.coordinator
-        coordinator.textView = tv
-        tv.onFocusChange = { [weak coordinator] focused in
-            if focused { coordinator?.parent.onFocus?() }
-        }
-        tv.onLayoutChange = { [weak coordinator] in
-            coordinator?.scheduleMeasure()
-        }
-        return tv
-    }
-
-    func updateNSView(_ tv: QuantaTextView, context: Context) {
-        context.coordinator.parent = self
-        tv.onCommand = onCommand
-        tv.onEscape = onEscape
-        let textChanged = tv.string != text && !tv.hasMarkedText()
-        if textChanged {
-            tv.string = text
-            context.coordinator.undoManager.removeAllActions()
-            if let storage = tv.textStorage { PythonHighlighter.highlight(storage) }
-        }
-        context.coordinator.scheduleMeasure(force: textChanged)
-    }
-
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: GrowingCodeEditor
-        weak var textView: QuantaTextView?
-        private var measureScheduled = false
-        private var forceMeasurement = false
-        private var measuredWidth: CGFloat = -1
-        let undoManager = UndoManager()
-
-        init(_ parent: GrowingCodeEditor) { self.parent = parent }
-
-        func undoManager(for view: NSTextView) -> UndoManager? { undoManager }
-
-        func textDidChange(_ notification: Notification) {
-            guard let tv = textView else { return }
-            if !tv.hasMarkedText() {
-                parent.text = tv.string
-                if let storage = tv.textStorage {
-                    PythonHighlighter.highlight(storage, editedRange: tv.lastEditedRange)
-                }
-            }
-            scheduleMeasure(force: true)
-        }
-
-        func scheduleMeasure(force: Bool = false) {
-            if !force, let width = textView?.bounds.width, width > 0,
-               abs(width - measuredWidth) <= 0.5 { return }
-            forceMeasurement = forceMeasurement || force
-            guard !measureScheduled else { return }
-            measureScheduled = true
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.measureScheduled = false
-                let force = self.forceMeasurement
-                self.forceMeasurement = false
-                self.measureNow(force: force)
-            }
-        }
-
-        private func measureNow(force: Bool) {
-            guard let tv = textView,
-                  let layoutManager = tv.layoutManager,
-                  let container = tv.textContainer else { return }
-            let width = tv.bounds.width
-            guard width > 0, force || abs(width - measuredWidth) > 0.5 else { return }
-            measuredWidth = width
-            layoutManager.ensureLayout(for: container)
-            let used = layoutManager.usedRect(for: container)
-            let newHeight = max(used.height + tv.textContainerInset.height * 2 + 2, 30)
-            if abs(newHeight - parent.height) > 0.5 {
-                parent.height = newHeight
-            }
+        if let storage = textView.textStorage {
+            PythonHighlighter.highlight(storage, editedRange: textView.lastEditedRange)
         }
     }
 }

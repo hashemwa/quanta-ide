@@ -1,11 +1,10 @@
 import AppKit
 import SwiftUI
 
-struct NotebookView: View {
+struct NotebookChrome: View {
     @ObservedObject var document: Document
-    @ObservedObject var notebook: Notebook
     @ObservedObject var find: FindState
-    @ObservedObject private var presentation = AppState.shared.editorPresentation
+    let notebook: Notebook
 
     init(document: Document, notebook: Notebook) {
         self.document = document
@@ -20,8 +19,6 @@ struct NotebookView: View {
                 FindBarView(document: document, find: find)
                 Divider()
             }
-            NotebookScrollView(document: document, notebook: notebook,
-                               scrollRequest: presentation.scrollRequest)
         }
         .background(Color(nsColor: .textBackgroundColor))
         .background(CommandModeHost())
@@ -116,7 +113,7 @@ enum NotebookScrolling {
     static func register(scrollView: NSScrollView) { scrollViews.add(scrollView) }
 
     static func scrollView(in window: NSWindow?) -> NSScrollView? {
-        scrollViews.allObjects.first { $0.window === window }
+        scrollViews.allObjects.first { $0.window === window && !$0.isHiddenOrHasHiddenAncestor }
     }
 
     static func page(up: Bool, in window: NSWindow?) {

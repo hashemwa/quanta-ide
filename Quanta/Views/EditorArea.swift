@@ -133,29 +133,41 @@ private struct EditorPaneView: View {
                     }
                 }
             }
-            DocumentContentView(document: document).id(document.id)
+            DocumentContentView(document: document, pane: secondary ? .secondary : .primary)
         }
     }
 }
 
 struct DocumentContentView: View {
     @ObservedObject var document: Document
+    let pane: EditorPane
+    @EnvironmentObject private var app: AppState
     @ObservedObject private var presentation = AppState.shared.editorPresentation
 
     var body: some View {
-        content
-            .environment(\.monoFontSize, presentation.fontSize - 1)
+        VStack(spacing: 0) {
+            chrome.id(document.id)
+            ZStack {
+                EditorStage(document: document, pane: pane, showsLineNumbers: app.showsLineNumbers,
+                            wrapsLines: app.wrapsCode, scrollRequest: presentation.scrollRequest)
+                body(for: document).id(document.id)
+            }
+        }
+        .environment(\.monoFontSize, presentation.fontSize - 1)
     }
 
     @ViewBuilder
-    private var content: some View {
+    private var chrome: some View {
+        if document.kind == .notebook, let notebook = document.notebook {
+            NotebookChrome(document: document, notebook: notebook)
+        }
+    }
+
+    @ViewBuilder
+    private func body(for document: Document) -> some View {
         switch document.kind {
-        case .script:
-            ScriptEditorView(document: document)
-        case .notebook:
-            if let notebook = document.notebook {
-                NotebookView(document: document, notebook: notebook)
-            }
+        case .script, .notebook:
+            EmptyView()
         case .dataSource:
             if let session = document.dataSession { DataBrowserTabView(session: session, documentID: document.id) }
         case .dataFrame:
@@ -163,38 +175,6 @@ struct DocumentContentView: View {
         case .diff:
             DiffView(document: document)
         }
-    }
-}
-
-struct ScriptEditorView: View {
-    @ObservedObject var document: Document
-    @EnvironmentObject var app: AppState
-
-    var body: some View {
-        ScrollingCodeEditor(
-            text: Binding(
-                get: { document.text },
-                set: { newValue in
-                    if document.text != newValue {
-                        document.text = newValue
-                        if !document.isDirty { document.isDirty = true }
-                    }
-                }),
-            showsLineNumbers: app.showsLineNumbers,
-            wrapsLines: app.wrapsCode,
-            documentID: document.id,
-            onCommand: { command in
-                if command == .runCellAndAdvance {
-                    app.runSelectionOrLine(in: document)
-                    return true
-                }
-                if command == .runCell {
-                    app.runScript(document)
-                    return true
-                }
-                return false
-            },
-            onFocus: { app.activeDocumentID = document.id })
     }
 }
 

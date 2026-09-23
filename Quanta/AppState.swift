@@ -10,13 +10,17 @@ final class AppState: ObservableObject {
     @Published var bottomPane: BottomPane = .console
     let terminal = TerminalSession()
     @Published var closedDocuments: [URL] = []
-    @Published var splitDocumentID: UUID?
+    @Published var splitDocumentID: UUID? {
+        didSet { releaseClosedDocumentViews() }
+    }
     @Published var primarySplitDocumentID: UUID?
     @Published var userNotice: String?
     @Published var externallyChangedDocumentID: UUID?
     @Published var changedVariables: Set<String> = []
     @Published var workspace: Workspace?
-    @Published var openDocuments: [Document] = []
+    @Published var openDocuments: [Document] = [] {
+        didSet { releaseClosedDocumentViews() }
+    }
     @Published var activeDocumentID: UUID? {
         didSet {
             guard activeDocumentID != oldValue else { return }
@@ -313,6 +317,11 @@ final class AppState: ObservableObject {
         let count = openDocuments.count
         let next = ((current + offset) % count + count) % count
         activeDocumentID = openDocuments[next].id
+    }
+
+    private func releaseClosedDocumentViews() {
+        DocumentViewCache.shared.retain(documents: Set(openDocuments.map(\.id)),
+                                        splitVisible: splitDocumentID != nil)
     }
 
     private func recordNavigation(_ id: UUID?) {

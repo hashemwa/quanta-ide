@@ -101,8 +101,8 @@ final class NotebookCellStyleTests: XCTestCase {
     private func host(_ cells: [NotebookCell], width: CGFloat) -> (NSWindow, NSView) {
         let notebook = Notebook(cells: cells, metadata: [:])
         let document = Document(notebook: notebook, url: nil)
-        let hosting = NSHostingView(rootView: NotebookScrollView(document: document, notebook: notebook,
-                                                                 scrollRequest: nil)
+        let hosting = NSHostingView(rootView: EditorStage(document: document, pane: .primary, showsLineNumbers: true,
+                                                          wrapsLines: true, scrollRequest: nil)
             .frame(width: width, height: 600))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)
