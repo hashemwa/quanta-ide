@@ -15,7 +15,8 @@ enum CodeEditorFactory {
         tv.allowsUndo = true
         tv.font = EditorTheme.font
         tv.textColor = EditorTheme.text
-        EditorTheme.style(tv)
+        tv.insertionPointColor = .controlAccentColor
+        tv.typingAttributes = [.font: EditorTheme.font, .foregroundColor: EditorTheme.text]
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
@@ -48,7 +49,6 @@ struct ScrollingCodeEditor: NSViewRepresentable {
     var documentID: UUID? = nil
     var onCommand: ((EditorCommand) -> Bool)? = nil
     var onFocus: (() -> Void)? = nil
-    @Environment(\.appTheme) private var theme
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -88,7 +88,6 @@ struct ScrollingCodeEditor: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.textView = tv
         coordinator.ruler = ruler
-        coordinator.theme = theme
         tv.onFocusChange = { [weak coordinator] focused in
             if focused { coordinator?.parent.onFocus?() }
         }
@@ -109,11 +108,6 @@ struct ScrollingCodeEditor: NSViewRepresentable {
         tv.textContainer?.widthTracksTextView = wrapsLines
         tv.textContainer?.containerSize.width = wrapsLines ? scrollView.contentSize.width : CGFloat.greatestFiniteMagnitude
         tv.onCommand = onCommand
-        if context.coordinator.theme != theme {
-            context.coordinator.theme = theme
-            scrollView.backgroundColor = EditorTheme.background
-            context.coordinator.ruler?.needsDisplay = true
-        }
         if tv.string != text, !tv.hasMarkedText() {
             let sel = tv.selectedRange()
             tv.string = text
@@ -129,7 +123,6 @@ struct ScrollingCodeEditor: NSViewRepresentable {
         var parent: ScrollingCodeEditor
         weak var textView: QuantaTextView?
         weak var ruler: LineNumberRulerView?
-        var theme: AppTheme?
         let undoManager = UndoManager()
 
         init(_ parent: ScrollingCodeEditor) { self.parent = parent }

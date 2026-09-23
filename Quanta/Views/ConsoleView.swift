@@ -72,14 +72,14 @@ private struct ConsoleBody: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(DS.Chrome.panel)
+            .background(Color(nsColor: .textBackgroundColor))
 
             Divider()
 
             HStack(spacing: DS.Space.s) {
                 Text("»")
                     .font(.system(size: app.editorFontSize - 1, weight: .bold, design: .monospaced))
-                    .foregroundStyle(DS.Chrome.accent)
+                    .foregroundStyle(Color.accentColor)
                 TextField("Run Python in the kernel…", text: $input)
                     .textFieldStyle(.plain)
                     .font(.system(size: app.editorFontSize - 1, design: .monospaced))
@@ -118,7 +118,7 @@ struct ConsoleLineView: View {
         HStack(alignment: .top, spacing: 6) {
             if line.kind == .input {
                 Text("»")
-                    .foregroundStyle(DS.Chrome.accent)
+                    .foregroundStyle(Color.accentColor)
             }
             VStack(alignment: .leading, spacing: DS.Space.xs) {
                 Text(ANSIRenderer.attributed(line.text.trimmingTrailingNewlines)).foregroundStyle(color)

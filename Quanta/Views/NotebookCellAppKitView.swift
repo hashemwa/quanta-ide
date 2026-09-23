@@ -357,9 +357,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
                          attachments: Notebook.attachmentData(cell.extraKeys["attachments"]),
                          baseDirectory: document?.url?.deletingLastPathComponent())
                 .environment(\.monoFontSize, monoFontSize)
-                .foregroundStyle(DS.Chrome.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .themeScope()
         )
     }
 
@@ -407,7 +405,6 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         let output = NotebookCellHostingView(rootView: AnyView(
             OutputListView(cell: cell)
                 .environment(\.monoFontSize, monoFontSize)
-                .themeScope()
         ))
         output.sizingOptions = [.intrinsicContentSize]
         output.onSizeChange = { [weak self] in self?.onSizeChange?() }
@@ -485,13 +482,8 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         let selection = AppState.shared.selection
         let selected = selection.selectedCellID == cell.id || selection.selectedCellIDs.contains(cell.id)
         sourceCard.isSelected = selected
-        statusLabel.textColor = DS.Chrome.nsColor(selected ? .accent : .secondaryText)
+        statusLabel.textColor = selected ? .controlAccentColor : .secondaryLabelColor
         updateControlVisibility()
-    }
-
-    func applyTheme() {
-        sourceCard.updateAppearance()
-        refreshSelection()
     }
 
     private func updateControlVisibility() {
@@ -844,17 +836,12 @@ private final class NotebookCellCardView: NSView {
         updateAppearance()
     }
 
-    func updateAppearance() {
-        let appearance = effectiveAppearance
-        layer?.backgroundColor = style == .editor
-            ? DS.Chrome.cgColor(.surface, for: appearance)
-            : NSColor.clear.cgColor
-        layer?.borderWidth = DS.Layout.hairline
-        if isSelected {
-            layer?.borderColor = DS.Chrome.cgColor(.selection, for: appearance)
-        } else {
-            layer?.borderColor = style == .editor
-                ? DS.Chrome.cgColor(.divider, for: appearance) : NSColor.clear.cgColor
+    private func updateAppearance() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = (style == .editor ? NSColor.textBackgroundColor : .clear).cgColor
+            layer?.borderWidth = DS.Layout.hairline
+            let border: NSColor = isSelected ? .controlAccentColor : style == .editor ? .separatorColor : .clear
+            layer?.borderColor = border.cgColor
         }
     }
 }

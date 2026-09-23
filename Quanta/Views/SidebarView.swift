@@ -32,7 +32,6 @@ struct SidebarView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(DS.Chrome.sidebar)
     }
 
     private static let paneSegments: [IconSegmentedControl<SidebarPane>.Segment] =
@@ -190,7 +189,6 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .sidebarListBackground()
         .overlay {
             if searching { ProgressView() }
             else if let error = searchReport.error {

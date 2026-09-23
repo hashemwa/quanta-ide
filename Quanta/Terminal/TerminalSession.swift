@@ -153,10 +153,26 @@ final class TerminalSession: NSObject, ObservableObject {
         return view
     }
 
-    func appearance(_ colors: [String: String], size: CGFloat) {
-        guard isReady, let data = try? JSONSerialization.data(withJSONObject: colors, options: [.sortedKeys]),
+    func appearance(dark: Bool, size: CGFloat) {
+        guard isReady, let data = try? JSONSerialization.data(withJSONObject: Self.colors(dark: dark),
+                                                               options: [.sortedKeys]),
               let theme = String(data: data, encoding: .utf8) else { return }
         browser?.evaluateJavaScript("configureTerminal(\(theme), \(size))")
+    }
+
+    static func colors(dark: Bool) -> [String: String] {
+        let appearance = NSAppearance(named: dark ? .darkAqua : .aqua) ?? NSApp.effectiveAppearance
+        var colors: [String: String] = [:]
+        appearance.performAsCurrentDrawingAppearance {
+            func hex(_ color: NSColor) -> String {
+                let rgb = color.usingColorSpace(.sRGB) ?? .black
+                return String(format: "#%02X%02X%02X", Int((rgb.redComponent * 255).rounded()),
+                              Int((rgb.greenComponent * 255).rounded()), Int((rgb.blueComponent * 255).rounded()))
+            }
+            colors = ["background": hex(.textBackgroundColor), "foreground": hex(.textColor),
+                      "cursor": hex(.textColor), "selectionBackground": hex(.selectedTextBackgroundColor)]
+        }
+        return colors
     }
 
     fileprivate func message(_ body: [String: Any]) {
@@ -164,8 +180,7 @@ final class TerminalSession: NSObject, ObservableObject {
         case "ready":
             isReady = true
             let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            appearance(DS.Chrome.terminalTheme(AppTheme.current, dark: dark),
-                       size: AppState.shared.editorFontSize - 1)
+            appearance(dark: dark, size: AppState.shared.editorFontSize - 1)
             flush()
         case "input": if let text = body["data"] as? String { send(text) }
         case "resize": resize(columns: body["cols"] as? Int ?? 80, rows: body["rows"] as? Int ?? 24)

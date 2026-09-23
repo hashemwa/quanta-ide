@@ -1,159 +1,6 @@
 import AppKit
 import SwiftUI
 
-enum AppearanceMode: String, CaseIterable, Identifiable {
-    case system, light, dark
-
-    static let key = "QuantaAppearanceMode"
-
-    static var stored: AppearanceMode {
-        AppearanceMode(rawValue: QuantaDefaults.store.string(forKey: key) ?? "") ?? .system
-    }
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .system: "System"
-        case .light: "Light"
-        case .dark: "Dark"
-        }
-    }
-
-    var appearance: NSAppearance? {
-        switch self {
-        case .system: nil
-        case .light: NSAppearance(named: .aqua)
-        case .dark: NSAppearance(named: .darkAqua)
-        }
-    }
-}
-
-enum AppTheme: String, CaseIterable, Identifiable {
-    case classic, neutral
-
-    static let key = "QuantaTheme"
-    static let standard = AppTheme.neutral
-    static var current = stored
-
-    static var stored: AppTheme {
-        AppTheme(rawValue: QuantaDefaults.store.string(forKey: key) ?? "") ?? standard
-    }
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .classic: "Classic"
-        case .neutral: "Neutral"
-        }
-    }
-
-    var summary: String {
-        switch self {
-        case .classic: "Standard macOS colors with your accent color."
-        case .neutral: "A calm black and white workspace."
-        }
-    }
-
-    var palette: ThemePalette? {
-        switch self {
-        case .classic: nil
-        case .neutral: .neutral
-        }
-    }
-}
-
-struct ThemePalette {
-    struct Swatch {
-        let light: Int
-        let dark: Int
-
-        func hex(dark isDark: Bool) -> Int { isDark ? dark : light }
-    }
-
-    let canvas: Swatch
-    let panel: Swatch
-    let surface: Swatch
-    let divider: Swatch
-    let text: Swatch
-    let secondaryText: Swatch
-    let selection: Swatch
-    let highlight: Swatch
-
-    static let neutral = ThemePalette(
-        canvas: Swatch(light: 0xFFFFFF, dark: 0x000000),
-        panel: Swatch(light: 0xF8F8F8, dark: 0x0C0C0C),
-        surface: Swatch(light: 0xF8F8F8, dark: 0x151515),
-        divider: Swatch(light: 0xE6E6E6, dark: 0x242424),
-        text: Swatch(light: 0x161616, dark: 0xCFCFCF),
-        secondaryText: Swatch(light: 0x3E3E3E, dark: 0xB2B2B2),
-        selection: Swatch(light: 0x898989, dark: 0x707070),
-        highlight: Swatch(light: 0xDADADA, dark: 0x2C2C2C))
-
-    func swatch(_ role: DS.Chrome.Role) -> Swatch {
-        switch role {
-        case .canvas, .editor, .backdrop: canvas
-        case .panel, .sidebar, .bar: panel
-        case .surface: surface
-        case .divider, .rule: divider
-        case .text, .accent, .highlightedText: text
-        case .secondaryText: secondaryText
-        case .selection: selection
-        case .highlight: highlight
-        }
-    }
-}
-
-private struct AppThemeKey: EnvironmentKey {
-    static var defaultValue: AppTheme { AppTheme.current }
-}
-
-extension EnvironmentValues {
-    var appTheme: AppTheme {
-        get { self[AppThemeKey.self] }
-        set { self[AppThemeKey.self] = newValue }
-    }
-}
-
-struct ThemeStyle: ShapeStyle {
-    let role: DS.Chrome.Role
-
-    init(_ role: DS.Chrome.Role) { self.role = role }
-
-    func resolve(in environment: EnvironmentValues) -> AnyShapeStyle {
-        guard let palette = environment.appTheme.palette else { return DS.Chrome.systemStyle(role) }
-        let hex = palette.swatch(role).hex(dark: environment.colorScheme == .dark)
-        return AnyShapeStyle(Color(nsColor: NSColor(hex: hex)))
-    }
-}
-
-private struct ThemeScope: ViewModifier {
-    @AppStorage(AppTheme.key, store: QuantaDefaults.store) private var theme = AppTheme.standard
-
-    func body(content: Content) -> some View {
-        content.environment(\.appTheme, theme)
-    }
-}
-
-private struct SidebarListBackground: ViewModifier {
-    @Environment(\.appTheme) private var theme
-
-    func body(content: Content) -> some View {
-        content.scrollContentBackground(theme.palette == nil ? .automatic : .hidden)
-    }
-}
-
-extension View {
-    func themeScope() -> some View {
-        modifier(ThemeScope())
-    }
-
-    func sidebarListBackground() -> some View {
-        modifier(SidebarListBackground())
-    }
-}
-
 enum DS {
     enum Space {
         static let xxs: CGFloat = 2
@@ -232,102 +79,11 @@ enum DS {
         static let notebookTopPadding: CGFloat = 30
         static let notebookCellSpacing: CGFloat = 18
         static let hairline: CGFloat = 1
-        static let selectionRing: CGFloat = 2
-        static let themePreviewHeight: CGFloat = 76
-        static let themePreviewSidebar: CGFloat = 56
         static let rowActionSlot: CGFloat = slot * 2
         static let commitLines = 1...5
         static let diffMarkerWidth: CGFloat = 16
         static let diffLineInset: CGFloat = 1
         static let diffContextLines = 3
-    }
-
-    enum Chrome {
-        enum Role: CaseIterable {
-            case canvas, editor, panel, surface, divider
-            case text, secondaryText, selection, accent, highlight, highlightedText
-            case sidebar, backdrop, rule, bar
-        }
-
-        static let canvas = ThemeStyle(.canvas)
-        static let editor = ThemeStyle(.editor)
-        static let panel = ThemeStyle(.panel)
-        static let surface = ThemeStyle(.surface)
-        static let divider = ThemeStyle(.divider)
-        static let text = ThemeStyle(.text)
-        static let secondaryText = ThemeStyle(.secondaryText)
-        static let selection = ThemeStyle(.selection)
-        static let accent = ThemeStyle(.accent)
-        static let highlight = ThemeStyle(.highlight)
-        static let sidebar = ThemeStyle(.sidebar)
-        static let backdrop = ThemeStyle(.backdrop)
-        static let rule = ThemeStyle(.rule)
-        static let bar = ThemeStyle(.bar)
-
-        static func systemStyle(_ role: Role) -> AnyShapeStyle {
-            switch role {
-            case .text: AnyShapeStyle(.primary)
-            case .secondaryText: AnyShapeStyle(.secondary)
-            case .selection, .accent: AnyShapeStyle(Color.accentColor)
-            case .bar: AnyShapeStyle(.bar)
-            default: AnyShapeStyle(Color(nsColor: systemColor(role)))
-            }
-        }
-
-        static func systemColor(_ role: Role) -> NSColor {
-            switch role {
-            case .canvas: .windowBackgroundColor
-            case .editor, .panel, .surface: .textBackgroundColor
-            case .divider: .separatorColor
-            case .text: .textColor
-            case .secondaryText: .secondaryLabelColor
-            case .selection, .accent: .controlAccentColor
-            case .highlight: .selectedTextBackgroundColor
-            case .highlightedText: .selectedTextColor
-            case .bar: .windowBackgroundColor
-            case .sidebar, .backdrop, .rule: .clear
-            }
-        }
-
-        private static let paletteColors = Dictionary(uniqueKeysWithValues: AppTheme.allCases.map { theme in
-            (theme, Dictionary(uniqueKeysWithValues: Role.allCases.map { role in
-                (role, NSColor(name: nil) { appearance in
-                    color(role, theme: theme, dark: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
-                })
-            }))
-        })
-
-        static func nsColor(_ role: Role) -> NSColor {
-            let theme = AppTheme.current
-            guard theme.palette != nil else { return systemColor(role) }
-            return paletteColors[theme]?[role] ?? systemColor(role)
-        }
-
-        static func cgColor(_ role: Role, for appearance: NSAppearance) -> CGColor {
-            var resolved = NSColor.clear.cgColor
-            appearance.performAsCurrentDrawingAppearance { resolved = nsColor(role).cgColor }
-            return resolved
-        }
-
-        static func color(_ role: Role, theme: AppTheme, dark: Bool) -> NSColor {
-            guard let palette = theme.palette else { return systemColor(role) }
-            return NSColor(hex: palette.swatch(role).hex(dark: dark))
-        }
-
-        static func terminalTheme(_ theme: AppTheme, dark: Bool) -> [String: String] {
-            let appearance = NSAppearance(named: dark ? .darkAqua : .aqua) ?? NSApp.effectiveAppearance
-            var colors: [String: String] = [:]
-            appearance.performAsCurrentDrawingAppearance {
-                func hex(_ role: Role) -> String {
-                    let rgb = color(role, theme: theme, dark: dark).usingColorSpace(.sRGB) ?? .black
-                    return String(format: "#%02X%02X%02X", Int((rgb.redComponent * 255).rounded()),
-                                  Int((rgb.greenComponent * 255).rounded()), Int((rgb.blueComponent * 255).rounded()))
-                }
-                colors = ["background": hex(.panel), "foreground": hex(.text), "cursor": hex(.text),
-                          "selectionBackground": hex(.highlight)]
-            }
-            return colors
-        }
     }
 
     enum Status {
@@ -893,9 +649,9 @@ struct InputCard: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(RoundedRectangle(cornerRadius: DS.Radius.card)
-                .fill(DS.Chrome.surface))
+                .fill(Color(nsColor: .textBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.card)
-                .stroke(focused ? DS.Chrome.selection : DS.Chrome.divider,
+                .stroke(focused ? Color.accentColor : Color(nsColor: .separatorColor),
                         lineWidth: DS.Layout.hairline))
             .animation(reduceMotion ? nil : DS.Motion.quick, value: focused)
     }
@@ -1031,7 +787,7 @@ struct OutputCard: ViewModifier {
 
     private var fill: AnyShapeStyle {
         switch status {
-        case .neutral: return AnyShapeStyle(DS.Chrome.surface)
+        case .neutral: return AnyShapeStyle(Color(nsColor: .textBackgroundColor))
         case .error: return AnyShapeStyle(Color.red.opacity(0.10))
         case .warning: return AnyShapeStyle(Color.yellow.opacity(0.10))
         }
@@ -1039,7 +795,7 @@ struct OutputCard: ViewModifier {
 
     private var stroke: AnyShapeStyle {
         switch status {
-        case .neutral: return AnyShapeStyle(DS.Chrome.divider)
+        case .neutral: return AnyShapeStyle(Color(nsColor: .separatorColor))
         case .error: return AnyShapeStyle(Color.red.opacity(0.30))
         case .warning: return AnyShapeStyle(Color.yellow.opacity(0.30))
         }

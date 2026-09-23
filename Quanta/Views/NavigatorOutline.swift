@@ -8,9 +8,6 @@ struct NavigatorOutline: NSViewRepresentable {
     let filtering: Bool
     var statusByPath: [String: GitChange.Status] = [:]
     var directoriesWithChanges: Set<String> = []
-    @Environment(\.appTheme) private var theme
-
-    private var themedSelection: Bool { theme.palette != nil }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -51,11 +48,6 @@ struct NavigatorOutline: NSViewRepresentable {
         coordinator.parent = self
         coordinator.updating = true
         defer { coordinator.updating = false }
-        if coordinator.theme != theme, let outline = outline as? NavigatorOutlineView {
-            coordinator.theme = theme
-            outline.themedSelection = themedSelection
-            coordinator.refreshVisibleCells(outline)
-        }
         var tree = root
         tree.children = children
         let treeChanged = coordinator.tree != tree || coordinator.filtering != filtering
@@ -115,7 +107,6 @@ struct NavigatorOutline: NSViewRepresentable {
         var updating = false
         var statusByPath: [String: GitChange.Status] = [:]
         var directoriesWithChanges: Set<String> = []
-        var theme: AppTheme?
         var expansionKey: String { "QuantaNavigatorExpanded.v1.\(parent.root.url.path)" }
         private var app: AppState { AppState.shared }
 
@@ -149,15 +140,8 @@ struct NavigatorOutline: NSViewRepresentable {
             return cell
         }
 
-        func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
-            let row = NavigatorRowView()
-            row.themedSelection = (outlineView as? NavigatorOutlineView)?.themedSelection == true
-            return row
-        }
-
         private func configure(_ cell: NavigatorCellView, for item: Item) {
             let node = item.node
-            cell.themed = parent.themedSelection
             cell.configure(node,
                            status: statusByPath[node.url.path],
                            containsChanges: node.isDirectory && directoriesWithChanges.contains(node.url.path))
@@ -300,15 +284,6 @@ struct NavigatorOutline: NSViewRepresentable {
 }
 
 final class NavigatorOutlineView: NSOutlineView {
-    var themedSelection = false {
-        didSet {
-            for index in 0..<numberOfRows {
-                (rowView(atRow: index, makeIfNecessary: false) as? NavigatorRowView)?
-                    .themedSelection = themedSelection
-            }
-        }
-    }
-
     override func menu(for event: NSEvent) -> NSMenu? {
         _ = super.menu(for: event)
         let row = clickedRow >= 0 ? clickedRow : self.row(at: convert(event.locationInWindow, from: nil))
@@ -322,20 +297,6 @@ final class NavigatorOutlineView: NSOutlineView {
             return
         }
         super.keyDown(with: event)
-    }
-}
-
-final class NavigatorRowView: NSTableRowView {
-    var themedSelection = false { didSet { needsDisplay = true } }
-
-    override func drawSelection(in dirtyRect: NSRect) {
-        guard themedSelection else {
-            super.drawSelection(in: dirtyRect)
-            return
-        }
-        DS.Chrome.nsColor(.highlight).setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: DS.Space.xs, dy: DS.Space.xxs),
-                     xRadius: DS.Radius.card, yRadius: DS.Radius.card).fill()
     }
 }
 
@@ -364,7 +325,6 @@ final class NavigatorCellView: NSTableCellView {
     private var deleted = false
     private var iconColor: NSColor = .secondaryLabelColor
     private var statusColor: NSColor = .secondaryLabelColor
-    var themed = false { didSet { applyColors() } }
 
     init() {
         super.init(frame: .zero)
@@ -411,7 +371,7 @@ final class NavigatorCellView: NSTableCellView {
         deleted = change == .deleted
         icon.image = NSImage(systemSymbolName: node.isDirectory ? "folder.fill" : node.iconName,
                              accessibilityDescription: nil)
-        iconColor = DS.Chrome.nsColor(node.isDirectory ? .accent : .secondaryText)
+        iconColor = node.isDirectory ? .controlAccentColor : .secondaryLabelColor
         if let change {
             status.stringValue = change.letter
             status.toolTip = change.label
@@ -429,20 +389,16 @@ final class NavigatorCellView: NSTableCellView {
 
     private func applyColors() {
         let emphasized = backgroundStyle == .emphasized
-        let textColor: NSColor = themed
-            ? DS.Chrome.nsColor(deleted ? .secondaryText : .text)
-            : (emphasized ? .alternateSelectedControlTextColor
-                          : (deleted ? .secondaryLabelColor : .labelColor))
+        let textColor: NSColor = emphasized ? .alternateSelectedControlTextColor
+                                            : (deleted ? .secondaryLabelColor : .labelColor)
         var attributes: [NSAttributedString.Key: Any] = [
             .foregroundColor: textColor,
             .font: name.font ?? .systemFont(ofSize: NSFont.systemFontSize),
         ]
         if deleted { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
         name.attributedStringValue = NSAttributedString(string: nodeName, attributes: attributes)
-        let selectedOnAccent = emphasized && !themed
-        icon.contentTintColor = selectedOnAccent ? .alternateSelectedControlTextColor : iconColor
-        status.textColor = selectedOnAccent ? .alternateSelectedControlTextColor : statusColor
-        changeDot.contentTintColor = selectedOnAccent ? .alternateSelectedControlTextColor
-                                                      : DS.Chrome.nsColor(.secondaryText)
+        icon.contentTintColor = emphasized ? .alternateSelectedControlTextColor : iconColor
+        status.textColor = emphasized ? .alternateSelectedControlTextColor : statusColor
+        changeDot.contentTintColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
     }
 }

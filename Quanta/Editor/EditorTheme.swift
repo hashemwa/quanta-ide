@@ -7,21 +7,8 @@ enum EditorTheme {
         let f = font
         return ceil(f.ascender - f.descender + f.leading)
     }
-    static var text: NSColor { DS.Chrome.nsColor(.text) }
-    static var background: NSColor { DS.Chrome.nsColor(.editor) }
-    private static let nativeSelection = NSTextView().selectedTextAttributes
-
-    static func style(_ textView: NSTextView) {
-        textView.backgroundColor = background
-        textView.insertionPointColor = DS.Chrome.nsColor(.accent)
-        textView.typingAttributes = [.font: font, .foregroundColor: text]
-        textView.selectedTextAttributes = AppTheme.current.palette == nil ? nativeSelection : [
-            .backgroundColor: DS.Chrome.nsColor(.highlight),
-            .foregroundColor: DS.Chrome.nsColor(.highlightedText),
-        ]
-        if let storage = textView.textStorage { PythonHighlighter.highlight(storage) }
-        textView.needsDisplay = true
-    }
+    static let text = NSColor.textColor
+    static let background = NSColor.textBackgroundColor
 
     static let keyword = syntax(.keyword)
     static let string = syntax(.string)

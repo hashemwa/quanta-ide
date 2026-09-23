@@ -73,7 +73,7 @@ struct BottomPanel: View {
                     .accessibilityHidden(app.bottomPane != .terminal)
             }
         }
-        .background(DS.Chrome.panel)
+        .background(Color(nsColor: .textBackgroundColor))
         .clipped()
         .onAppear { _ = terminal.webView() }
         .onChange(of: app.bottomPane) { _, pane in
@@ -110,12 +110,10 @@ struct BottomPanel: View {
 private struct TerminalSurface: NSViewRepresentable {
     let session: TerminalSession
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.appTheme) private var theme
     @EnvironmentObject private var app: AppState
     func makeNSView(context: Context) -> WKWebView { session.webView() }
     func updateNSView(_ view: WKWebView, context: Context) {
-        session.appearance(DS.Chrome.terminalTheme(theme, dark: scheme == .dark),
-                           size: app.editorFontSize - 1)
+        session.appearance(dark: scheme == .dark, size: app.editorFontSize - 1)
     }
 }
 

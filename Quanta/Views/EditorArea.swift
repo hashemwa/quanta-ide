@@ -135,7 +135,6 @@ private struct EditorPaneView: View {
             }
             DocumentContentView(document: document).id(document.id)
         }
-        .background(DS.Chrome.backdrop)
     }
 }
 
@@ -234,7 +233,7 @@ struct TabBarView: View {
             }
         }
         .frame(height: DS.Bar.primary)
-        .background(DS.Chrome.canvas)
+        .background(Color(nsColor: .windowBackgroundColor))
         .background {
             if insertion != nil {
                 TabDragEndMonitor {
@@ -259,7 +258,7 @@ struct TabItemView: View {
         HStack(spacing: DS.Space.s) {
             Image(systemName: document.iconName)
                 .font(.system(size: 10))
-                .foregroundStyle(isActive ? AnyShapeStyle(DS.Chrome.accent) : AnyShapeStyle(.secondary))
+                .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
             Text(app.tabTitle(document))
                 .font(.callout)
                 .foregroundStyle(isActive ? Color.primary : Color.secondary)
@@ -294,7 +293,7 @@ struct TabItemView: View {
         .frame(height: DS.Bar.primary)
         .background {
             if isActive {
-                Rectangle().fill(DS.Chrome.editor)
+                Color(nsColor: .textBackgroundColor)
             } else if hovering {
                 Rectangle().fill(.quaternary).opacity(0.5)
             }

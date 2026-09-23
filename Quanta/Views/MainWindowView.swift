@@ -5,7 +5,6 @@ struct MainWindowView: View {
     @EnvironmentObject var app: AppState
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.appTheme) private var theme
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
@@ -18,7 +17,6 @@ struct MainWindowView: View {
                                                 max: DS.Layout.sidebarMax)
         } detail: {
             DetailSplitView()
-                .background(DS.Chrome.backdrop)
                 .navigationSplitViewColumnWidth(min: DS.Layout.editorPaneMin,
                                                 ideal: DS.Layout.editorColumnIdeal)
         }
@@ -28,13 +26,11 @@ struct MainWindowView: View {
                 if let session = app.activeDocument?.dataSession { DataColumnInspector(session: session) }
                 else { VariablesPanel() }
             }
-                .background(DS.Chrome.sidebar)
                 .toolbar { inspectorToolbar }
                 .inspectorColumnWidth(min: DS.Layout.inspectorMin,
                                       ideal: DS.Layout.inspectorIdeal,
                                       max: DS.Layout.inspectorMax)
         }
-        .tint(theme.palette == nil ? nil : DS.Chrome.accent)
         .navigationTitle(windowTitle)
         .navigationSubtitle(windowSubtitle)
         .sheet(item: $app.paletteMode) { mode in
