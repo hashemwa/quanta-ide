@@ -30,6 +30,7 @@ struct NotebookScrollView: NSViewRepresentable {
         private var cellHeights: [UUID: CGFloat] = [:]
         private var dirtyCellIDs: Set<UUID> = []
         private var measuredWidth: CGFloat = 0
+        private var measuredViewportWidth: CGFloat = 0
         private var layoutPending = false
         private var needsRebuild = true
         private var handledScrollRequest: UUID?
@@ -105,11 +106,16 @@ struct NotebookScrollView: NSViewRepresentable {
 
         private func updateViewport(_ size: NSSize) {
             guard size.width > DS.Layout.cellGutterWidth + DS.Space.xl else { return }
-            let width = size.width - DS.Space.xl
+            let width = min(DS.Layout.notebookReadingWidth,
+                            size.width - DS.Layout.notebookSidePadding * 2)
             if needsRebuild { rebuild(width: width) }
             if abs(width - measuredWidth) > 0.5 {
                 measuredWidth = width
+                measuredViewportWidth = size.width
                 dirtyCellIDs = Set(cellIDs)
+                layoutCells()
+            } else if abs(size.width - measuredViewportWidth) > 0.5 {
+                measuredViewportWidth = size.width
                 layoutCells()
             } else if let contentView, contentView.frame.height < size.height {
                 contentView.setFrameSize(NSSize(width: size.width, height: size.height))
@@ -155,6 +161,7 @@ struct NotebookScrollView: NSViewRepresentable {
             self.addView = addView
             needsRebuild = false
             measuredWidth = 0
+            measuredViewportWidth = 0
             scrollView?.contentView.scroll(to: origin)
         }
 
@@ -177,7 +184,8 @@ struct NotebookScrollView: NSViewRepresentable {
             let anchor = cellHeights.isEmpty ? nil
                 : cellViews.firstIndex { $0.frame.maxY > oldOrigin }
             let anchorOffset = anchor.map { oldOrigin - cellViews[$0].frame.minY } ?? 0
-            var y = DS.Space.l
+            let x = max(0, (clipView.bounds.width - measuredWidth) / 2)
+            var y = DS.Layout.notebookTopPadding
             var changed = false
             for (index, cellView) in cellViews.enumerated() {
                 let cellID = cellIDs[index]
@@ -189,14 +197,14 @@ struct NotebookScrollView: NSViewRepresentable {
                 } else {
                     height = cellHeights[cellID] ?? 1
                 }
-                cellView.frame = NSRect(x: 0, y: y, width: measuredWidth, height: height)
-                y += height + DS.Space.l
+                cellView.frame = NSRect(x: x, y: y, width: measuredWidth, height: height)
+                y += height + DS.Layout.notebookCellSpacing
             }
             dirtyCellIDs.removeAll()
             if let addView {
                 let height = measuredHeight(of: addView, width: measuredWidth)
-                addView.frame = NSRect(x: 0, y: y, width: measuredWidth, height: height)
-                y += height + DS.Space.l
+                addView.frame = NSRect(x: x, y: y, width: measuredWidth, height: height)
+                y += height + DS.Layout.notebookCellSpacing
             }
             let viewport = clipView.bounds.size
             let totalHeight = max(viewport.height, y)

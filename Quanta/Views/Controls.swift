@@ -76,6 +76,10 @@ enum DS {
         static let tabDividerHeight: CGFloat = 16
         static let cellGutterWidth: CGFloat = 42
         static let cellTextInset: CGFloat = Space.xs + Space.xs + 5
+        static let notebookReadingWidth: CGFloat = 1030
+        static let notebookSidePadding: CGFloat = 24
+        static let notebookTopPadding: CGFloat = 30
+        static let notebookCellSpacing: CGFloat = 18
         static let hairline: CGFloat = 1
         static let rowActionSlot: CGFloat = slot * 2
         static let commitLines = 1...5
