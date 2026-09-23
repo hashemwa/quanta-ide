@@ -5,6 +5,7 @@ import SwiftUI
 final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource {
     var onSizeChange: (() -> Void)?
 
+    private let selectionBar = NotebookSelectionBar()
     private let gutter = NotebookCellGutterView()
     private let gutterStack = NSStackView()
     private let statusContainer = NSView()
@@ -16,6 +17,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private let runButton = NotebookIconButton()
     private let markdownButton = NotebookIconButton()
     private let addButton = NotebookIconButton()
+    private let controlRow = NSStackView()
     private let contentStack = NSStackView()
     private let sourceCard = NotebookCellCardView()
     private var sourceView: NSView?
@@ -29,13 +31,20 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private let editorUndoManager = UndoManager()
     private var cell: NotebookCell?
     var cellID: UUID? { cell?.id }
+    var cellType: CellType? { cell?.cellType }
     private weak var document: Document?
     private weak var notebook: Notebook?
     private var monoFontSize: CGFloat = 12
     private var lastPresentation = Presentation.empty
     private var lastSource = ""
     private var hovering = false
+    private var editorFocused = false
     private var measurementPending = false
+
+    private static let wellInsets = NSEdgeInsets(top: DS.Space.xs, left: DS.Space.s,
+                                                  bottom: DS.Space.xs, right: DS.Space.s)
+    private static let proseLineHeight = NSLayoutManager().defaultLineHeight(
+        for: .systemFont(ofSize: NSFont.systemFontSize))
 
     private struct Presentation: Equatable {
         let type: String
@@ -79,6 +88,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     func resetForReuse() {
         cancellables.removeAll()
         hovering = false
+        editorFocused = false
         cell = nil
         document = nil
         notebook = nil
@@ -135,12 +145,13 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     }
 
     private func configureLayout() {
+        selectionBar.translatesAutoresizingMaskIntoConstraints = false
+        selectionBar.isHidden = true
         gutter.translatesAutoresizingMaskIntoConstraints = false
         gutterStack.translatesAutoresizingMaskIntoConstraints = false
         gutterStack.orientation = .vertical
         gutterStack.alignment = .centerX
         gutterStack.spacing = 4
-        gutterStack.edgeInsets = NSEdgeInsets(top: DS.Space.m, left: 0, bottom: 0, right: 0)
         gutter.addSubview(gutterStack)
 
         contentStack.translatesAutoresizingMaskIntoConstraints = false
@@ -148,9 +159,14 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         contentStack.alignment = .width
         contentStack.spacing = DS.Space.s
 
+        addSubview(selectionBar)
         addSubview(gutter)
         addSubview(contentStack)
         NSLayoutConstraint.activate([
+            selectionBar.leadingAnchor.constraint(equalTo: leadingAnchor),
+            selectionBar.topAnchor.constraint(equalTo: topAnchor),
+            selectionBar.bottomAnchor.constraint(equalTo: bottomAnchor),
+            selectionBar.widthAnchor.constraint(equalToConstant: DS.Layout.selectionBar),
             gutterStack.topAnchor.constraint(equalTo: gutter.topAnchor),
             gutterStack.leadingAnchor.constraint(equalTo: gutter.leadingAnchor),
             gutterStack.trailingAnchor.constraint(equalTo: gutter.trailingAnchor),
@@ -214,12 +230,16 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         configureButton(addButton, symbol: "plus", help: "Insert Code or Markdown Above or Below",
                         action: #selector(showInsertionMenu))
 
+        controlRow.orientation = .horizontal
+        controlRow.spacing = DS.Space.xxs
+        controlRow.addArrangedSubview(runButton)
+        controlRow.addArrangedSubview(markdownButton)
+        controlRow.addArrangedSubview(addButton)
+
         gutterStack.addArrangedSubview(statusContainer)
         gutterStack.addArrangedSubview(staleImage)
         gutterStack.addArrangedSubview(durationLabel)
-        gutterStack.addArrangedSubview(runButton)
-        gutterStack.addArrangedSubview(markdownButton)
-        gutterStack.addArrangedSubview(addButton)
+        gutterStack.addArrangedSubview(controlRow)
         statusContainer.widthAnchor.constraint(equalTo: gutterStack.widthAnchor).isActive = true
     }
 
@@ -305,6 +325,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         guard let cell else { return }
         editor = nil
         editorHeightConstraint = nil
+        editorFocused = false
         if cell.isSourceCollapsed {
             sourceCard.style = .editor
             let button = NSButton(title: "›  \(collapsedPreview(cell))  ⋯",
@@ -342,8 +363,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         let constraint = editor.heightAnchor.constraint(equalToConstant: max(30, cell.editorHeight))
         constraint.isActive = true
         editorHeightConstraint = constraint
-        sourceCard.setContent(editor, insets: NSEdgeInsets(top: 0, left: DS.Space.xs,
-                                                           bottom: 0, right: DS.Space.xs))
+        sourceCard.setContent(editor, insets: Self.wellInsets)
         replaceSource(with: sourceCard)
         scheduleEditorMeasurement(force: true)
     }
@@ -378,8 +398,11 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             return true
         }
         editor.onEscape = { AppState.shared.enterCommandMode() }
-        editor.onFocusChange = { [weak self] focused in
-            guard focused, let self, let cell = self.cell, let document = self.document else { return }
+        editor.onFocusChange = { [weak self, weak editor] focused in
+            guard let self, let editor, self.editor === editor else { return }
+            self.editorFocused = focused
+            self.sourceCard.isFocused = focused
+            guard focused, let cell = self.cell, let document = self.document else { return }
             AppState.shared.activeDocumentID = document.id
             AppState.shared.selectedCellID = cell.id
         }
@@ -448,6 +471,9 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private func refreshStatus() {
         guard let cell else { return }
         let isCode = cell.cellType == .code
+        gutterStack.edgeInsets.top = isCode
+            ? Self.wellInsets.top + DS.Space.s + (EditorTheme.lineHeight - DS.Layout.statusSlot) / 2
+            : DS.Space.s + (Self.proseLineHeight - DS.Layout.slot) / 2
         statusContainer.isHidden = !isCode
         runButton.isHidden = !isCode
         markdownButton.isHidden = cell.cellType != .markdown
@@ -481,8 +507,8 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         guard let cell else { return }
         let selection = AppState.shared.selection
         let selected = selection.selectedCellID == cell.id || selection.selectedCellIDs.contains(cell.id)
-        sourceCard.isSelected = selected
-        statusLabel.textColor = selected ? .controlAccentColor : .secondaryLabelColor
+        selectionBar.isHidden = !selected
+        sourceCard.isFocused = editorFocused
         updateControlVisibility()
     }
 
@@ -798,6 +824,24 @@ private final class NotebookIconButton: NSButton {
     }
 }
 
+private final class NotebookSelectionBar: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = DS.Layout.selectionBar / 2
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 private final class NotebookCellCardView: NSView {
     enum Style {
         case editor
@@ -805,15 +849,16 @@ private final class NotebookCellCardView: NSView {
     }
 
     private var content: NSView?
-    var isSelected = false { didSet { updateAppearance() } }
-    var style = Style.editor { didSet { updateAppearance() } }
+    var isFocused = false { didSet { if isFocused != oldValue { needsDisplay = true } } }
+    var style = Style.editor { didSet { if style != oldValue { needsDisplay = true } } }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.cornerRadius = DS.Radius.card
+        layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
-        updateAppearance()
+        layer?.borderWidth = DS.Layout.hairline
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -831,18 +876,13 @@ private final class NotebookCellCardView: NSView {
         ])
     }
 
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        updateAppearance()
-    }
+    override var wantsUpdateLayer: Bool { true }
 
-    private func updateAppearance() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = (style == .editor ? NSColor.textBackgroundColor : .clear).cgColor
-            layer?.borderWidth = DS.Layout.hairline
-            let border: NSColor = isSelected ? .controlAccentColor : style == .editor ? .separatorColor : .clear
-            layer?.borderColor = border.cgColor
-        }
+    override func updateLayer() {
+        let well = style == .editor
+        layer?.backgroundColor = (well ? NSColor.tertiarySystemFill : .clear).cgColor
+        let border: NSColor = isFocused ? .controlAccentColor : well ? .separatorColor : .clear
+        layer?.borderColor = border.cgColor
     }
 }
 

@@ -12,6 +12,10 @@ struct NotebookScrollView: NSViewRepresentable {
         Coordinator(document: document, notebook: notebook, monoFontSize: monoFontSize)
     }
 
+    static func spacing(after type: CellType?) -> CGFloat {
+        type == .markdown ? DS.Layout.notebookProseSpacing : DS.Layout.notebookCellSpacing
+    }
+
     func makeNSView(context: Context) -> NSScrollView {
         context.coordinator.makeScrollView()
     }
@@ -188,6 +192,7 @@ struct NotebookScrollView: NSViewRepresentable {
             var y = DS.Layout.notebookTopPadding
             var changed = false
             for (index, cellView) in cellViews.enumerated() {
+                if index > 0 { y += NotebookScrollView.spacing(after: cellViews[index - 1].cellType) }
                 let cellID = cellIDs[index]
                 let height: CGFloat
                 if dirtyCellIDs.contains(cellID) || cellHeights[cellID] == nil {
@@ -198,10 +203,11 @@ struct NotebookScrollView: NSViewRepresentable {
                     height = cellHeights[cellID] ?? 1
                 }
                 cellView.frame = NSRect(x: x, y: y, width: measuredWidth, height: height)
-                y += height + DS.Layout.notebookCellSpacing
+                y += height
             }
             dirtyCellIDs.removeAll()
             if let addView {
+                if !cellViews.isEmpty { y += DS.Layout.notebookCellSpacing }
                 let height = measuredHeight(of: addView, width: measuredWidth)
                 addView.frame = NSRect(x: x, y: y, width: measuredWidth, height: height)
                 y += height + DS.Layout.notebookCellSpacing

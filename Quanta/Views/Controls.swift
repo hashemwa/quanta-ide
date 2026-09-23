@@ -15,7 +15,7 @@ enum DS {
     enum Radius {
         static let small: CGFloat = 4
         static let control: CGFloat = 5
-        static let card: CGFloat = 6
+        static let card: CGFloat = 10
         static let panel: CGFloat = 8
     }
 
@@ -72,13 +72,15 @@ enum DS {
         static let symbolGlyph: CGFloat = 10
         static let kernelGlyph: CGFloat = 12
         static let tabDividerHeight: CGFloat = 16
-        static let cellGutterWidth: CGFloat = 42
-        static let cellTextInset: CGFloat = Space.xs + Space.xs + 5
+        static let cellGutterWidth: CGFloat = 48
+        static let cellTextInset: CGFloat = Space.s + Space.xs + 5
         static let notebookReadingWidth: CGFloat = 1030
         static let notebookSidePadding: CGFloat = 24
         static let notebookTopPadding: CGFloat = 30
-        static let notebookCellSpacing: CGFloat = 18
+        static let notebookCellSpacing: CGFloat = 20
+        static let notebookProseSpacing: CGFloat = Space.xs
         static let hairline: CGFloat = 1
+        static let selectionBar: CGFloat = 3
         static let rowActionSlot: CGFloat = slot * 2
         static let commitLines = 1...5
         static let diffMarkerWidth: CGFloat = 16
