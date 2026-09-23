@@ -21,7 +21,6 @@ struct BottomPanel: View {
         VStack(spacing: 0) {
             PanelBar(height: DS.Bar.primary) {
                 IconSegmentedControl(segments: Self.paneSegments, selection: $app.bottomPane, fillsWidth: false)
-                    .fixedSize()
                     .accessibilityLabel("Panel")
                 Spacer(minLength: DS.Space.s)
                 if app.bottomPane == .terminal {

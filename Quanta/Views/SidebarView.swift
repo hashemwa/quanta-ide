@@ -42,7 +42,6 @@ struct SidebarView: View {
             IconSegmentedControl(segments: Self.paneSegments,
                                  selection: Binding(get: { app.sidebarPane },
                                                     set: { app.showSidebarPane($0) }))
-                .frame(maxWidth: .infinity)
                 .accessibilityLabel("Navigator")
         }
     }

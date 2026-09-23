@@ -65,8 +65,6 @@ enum DS {
         static let listRowMinHeight: CGFloat = 24
         static let slot: CGFloat = 22
         static let iconSlot: CGFloat = 16
-        static let segmentHeight: CGFloat = 22
-        static let segmentGlyph: CGFloat = 13
         static let statusSlot: CGFloat = 14
         static let kernelLabelWidth: CGFloat = 244
         static let kernelLabelMinWidth: CGFloat = 140
@@ -448,14 +446,14 @@ struct PanelHeader<Trailing: View>: View {
 struct IconSegmentedControl<Value: Hashable>: View {
     struct Segment: Identifiable {
         let value: Value
-        let icon: String?
+        let image: NSImage?
         let title: String
         let help: String
         var id: Value { value }
 
         init(value: Value, icon: String? = nil, title: String, help: String) {
             self.value = value
-            self.icon = icon
+            self.image = icon.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: title) }
             self.title = title
             self.help = help
         }
@@ -464,58 +462,48 @@ struct IconSegmentedControl<Value: Hashable>: View {
     let segments: [Segment]
     @Binding var selection: Value
     var fillsWidth = true
-    @Namespace private var indicator
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 0) {
+        Picker(selection: $selection) {
             ForEach(segments) { segment in
-                let selected = segment.value == selection
-                Button {
-                    withAnimation(reduceMotion ? nil : DS.Motion.quick) { selection = segment.value }
-                } label: {
-                    HStack(spacing: DS.Space.xs) {
-                        if let icon = segment.icon {
-                            Image(systemName: icon)
-                                .font(.system(size: DS.Layout.segmentGlyph, weight: .medium))
-                        }
-                        if segment.icon == nil {
-                            Text(segment.title)
-                                .font(.callout)
-                        }
-                    }
-                    .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                    .padding(.horizontal, fillsWidth ? 0 : DS.Space.m)
-                    .frame(maxWidth: fillsWidth ? .infinity : nil)
-                    .frame(height: DS.Layout.segmentHeight)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .background {
-                    if selected {
-                        SegmentIndicator()
-                            .matchedGeometryEffect(id: "indicator", in: indicator)
+                Group {
+                    if let image = segment.image {
+                        Image(nsImage: image)
+                    } else {
+                        Text(segment.title)
                     }
                 }
                 .help(segment.help)
-                .accessibilityLabel(segment.title)
-                .accessibilityAddTraits(selected ? [.isSelected] : [])
+                .tag(segment.value)
             }
+        } label: {
+            EmptyView()
         }
-        .padding(DS.Space.xxs)
-        .background(Capsule().fill(.quaternary))
-        .accessibilityElement(children: .contain)
+        .labelsHidden()
+        .modifier(PaneTabsStyle(fillsWidth: fillsWidth))
+        .tint(nil)
     }
 }
 
-private struct SegmentIndicator: View {
-    var body: some View {
-        let shape = Capsule()
-        if #available(macOS 26.0, *) {
-            shape.fill(.clear).glassEffect(.regular, in: shape)
+private struct PaneTabsStyle: ViewModifier {
+    let fillsWidth: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 27.0, *) {
+            sized(content.pickerStyle(.tabs))
         } else {
-            shape.fill(Color(nsColor: .controlColor))
-                .shadow(color: .black.opacity(0.12), radius: 1, y: 1)
+            sized(content.pickerStyle(.segmented))
+        }
+    }
+
+    @ViewBuilder
+    private func sized(_ picker: some View) -> some View {
+        if !fillsWidth {
+            picker.fixedSize()
+        } else if #available(macOS 26.0, *) {
+            picker.buttonSizing(.flexible).frame(maxWidth: .infinity)
+        } else {
+            picker.frame(maxWidth: .infinity)
         }
     }
 }
