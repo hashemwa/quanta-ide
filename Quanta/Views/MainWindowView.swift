@@ -25,7 +25,9 @@ struct MainWindowView: View {
                                         set: { app.setVariablesVisible($0) })) {
             Group {
                 if let session = app.activeDocument?.dataSession { DataColumnInspector(session: session) }
-                else { VariablesPanel() }
+                else if let document = app.activeDocument, document.kind == .dataFrame {
+                    DataFrameColumnInspector(document: document)
+                } else { VariablesPanel() }
             }
                 .toolbar { inspectorToolbar }
                 .inspectorColumnWidth(min: DS.Layout.inspectorMin,
@@ -82,9 +84,9 @@ struct MainWindowView: View {
         ToolbarSpacer(.flexible)
         ToolbarItem(placement: .primaryAction) {
             Button { app.toggleVariables() } label: {
-                Label("Variables", systemImage: "sidebar.trailing")
+                Label("Inspector", systemImage: "sidebar.trailing")
             }
-            .help(app.showVariables ? "Hide Variables (⌥⌘0)" : "Show Variables (⌥⌘0)")
+            .help(app.showVariables ? "Hide Inspector (⌥⌘0)" : "Show Inspector (⌥⌘0)")
         }
     }
 }

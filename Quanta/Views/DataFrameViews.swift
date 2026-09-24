@@ -552,7 +552,7 @@ struct DataFrameTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(document.dataFrameName ?? "DataFrame", systemImage: "tablecells") {
+            PanelBar {
                 if let payload = document.dataFrame {
                     Text(summary(payload))
                         .font(.caption)
@@ -568,6 +568,7 @@ struct DataFrameTabView: View {
                             .help("Load the next 1,000 rows from the kernel")
                     }
                 }
+                Spacer(minLength: DS.Space.s)
                 IconButton("magnifyingglass", help: "Filter Table Rows", isActive: showingSearch || !document.dataFrameFilter.isEmpty) {
                     showingSearch.toggle()
                     filterDraft = document.dataFrameFilter

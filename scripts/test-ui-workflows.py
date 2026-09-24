@@ -71,6 +71,36 @@ class InspectionTests(unittest.TestCase):
         self.assertEqual(results["empty"]["payload"]["total_rows"], 0)
         self.assertEqual(results["invalid"]["type"], "df_error")
 
+    def test_only_structured_variables_are_inspectable(self):
+        messages = exchange([
+            {"id": "setup", "op": "execute", "code": "pair = [10, 10]\nnested = {'k': [1, 2]}\nlong = list(range(20))\nempty = []\nnumber = 3"},
+            {"id": "vars", "op": "vars"},
+        ])
+        variables = next(m for m in messages if m.get("id") == "vars")["variables"]
+        inspectable = {v["name"]: v["inspectable"] for v in variables}
+        self.assertEqual(inspectable, {"empty": False, "long": True, "nested": True, "number": False, "pair": False})
+
+    def test_dataframe_summary_covers_every_row_and_respects_the_filter(self):
+        try:
+            import pandas
+        except ImportError:
+            self.skipTest("pandas is not installed in this interpreter")
+        messages = exchange([
+            {"id": "setup", "op": "execute", "code": "import pandas as pd\ndf = pd.DataFrame({'value': [20, 3, None, 8], 'group': ['keep', 'drop', 'keep', None], 'tags': [[1], [2], [1], [3]]})"},
+            {"id": "all", "op": "dfsummary", "name": "df"},
+            {"id": "kept", "op": "dfsummary", "name": "df", "filter": "keep"},
+            {"id": "wrong", "op": "dfsummary", "name": "absent"},
+        ])
+        results = {m["id"]: m for m in messages if m.get("type") in ("dfsummary", "dfsummary_error")}
+        self.assertEqual(results["all"]["total_rows"], 4)
+        value, group, tags = results["all"]["columns"]
+        self.assertEqual((value["count"], value["missing"], value["min"], value["max"]), (3, 1, "3.0", "20.0"))
+        self.assertAlmostEqual(value["mean"], 31 / 3)
+        self.assertEqual((group["distinct"], group["missing"], group["mean"]), (2, 1, None))
+        self.assertEqual(tags["distinct"], 3)
+        self.assertEqual(results["kept"]["total_rows"], 2)
+        self.assertEqual(results["wrong"]["type"], "dfsummary_error")
+
 
 class RichOutputTests(unittest.TestCase):
     def test_mime_bundle_and_metadata_are_preserved(self):

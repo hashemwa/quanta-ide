@@ -235,6 +235,7 @@ struct VariableInfo: Identifiable {
     let summary: String
     let shape: String?
     let isDataFrame: Bool
+    let isInspectable: Bool
 
     init?(dict: [String: Any]) {
         guard let name = dict["name"] as? String else { return nil }
@@ -243,6 +244,7 @@ struct VariableInfo: Identifiable {
         self.summary = dict["summary"] as? String ?? ""
         self.shape = dict["shape"] as? String
         self.isDataFrame = dict["is_dataframe"] as? Bool ?? false
+        self.isInspectable = dict["inspectable"] as? Bool ?? false
     }
 }
 

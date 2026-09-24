@@ -60,6 +60,48 @@ final class LocalDataTests: XCTestCase {
         XCTAssertThrowsError(try LocalDataEngine.page(source, sql: "SELECT 1; SELECT 2", offset: 0, cancellation: DataQueryCancellation()))
         XCTAssertThrowsError(try LocalDataEngine.page(source, sql: "COPY (SELECT 1) TO '/tmp/quanta-must-not-write.csv'", offset: 0, cancellation: DataQueryCancellation()))
     }
+    func testSummaryCountsWholeResultNotPage() throws {
+        let source = try csv()
+        let sql = "SELECT * FROM \(source.relation)"
+        let page = try LocalDataEngine.page(source, sql: sql, offset: 0, cancellation: DataQueryCancellation())
+        let summary = try LocalDataEngine.summary(source, sql: sql, columns: page.columns, types: page.types,
+                                                  cancellation: DataQueryCancellation())
+        XCTAssertEqual(summary.totalRows, 450)
+        XCTAssertEqual(summary.columns[0], DataColumnStats(count: 450, missing: 0, distinct: 450, min: "0", max: "449", mean: 224.5))
+        XCTAssertEqual(summary.columns[1].distinct, 450)
+        XCTAssertNil(summary.columns[1].mean)
+    }
+
+    func testSQLiteSummaryReportsMissingValues() throws {
+        let source = try sqlite()
+        let sql = "SELECT id, value FROM \"odd table\""
+        let summary = try LocalDataEngine.summary(source, sql: sql, columns: ["id", "value"], types: ["INTEGER", "TEXT"],
+                                                  cancellation: DataQueryCancellation())
+        XCTAssertEqual(summary.totalRows, 3)
+        XCTAssertEqual(summary.columns[1].missing, 1)
+        XCTAssertEqual(summary.columns[1].count, 2)
+    }
+
+    func testKernelDataFrameSummaryParsesIntoTheSameStats() throws {
+        let summary = try XCTUnwrap(DataSummary(["total_rows": 4, "columns": [
+            ["count": 3, "missing": 1, "distinct": 3, "min": "3.0", "max": "20.0", "mean": 10.333],
+            ["count": 3, "missing": 1, "distinct": 2, "min": NSNull(), "max": NSNull(), "mean": NSNull()],
+        ]]))
+        XCTAssertEqual(summary.totalRows, 4)
+        XCTAssertEqual(DataColumnInspector.detail(summary.columns[0], type: "float64"), "3.0 – 20.0 · mean 10.33 · 1 missing")
+        XCTAssertEqual(DataColumnInspector.detail(summary.columns[1], type: "object"), "2 distinct · 1 missing")
+        XCTAssertNil(DataSummary(["columns": []]))
+    }
+
+    func testColumnDetailReadsLikeASentence() {
+        XCTAssertEqual(DataColumnInspector.detail(DataColumnStats(count: 365, missing: 0, distinct: 300, min: "1.4", max: "30.0", mean: 21.337), type: "DOUBLE"),
+                       "1.4 – 30.0 · mean 21.34")
+        XCTAssertEqual(DataColumnInspector.detail(DataColumnStats(count: 360, missing: 5, distinct: 4, min: "Autumn", max: "Winter", mean: nil), type: "VARCHAR"),
+                       "4 distinct · 5 missing")
+        XCTAssertEqual(DataColumnInspector.detail(DataColumnStats(count: 365, missing: 0, distinct: 365, min: "2025-01-01", max: "2025-12-31", mean: nil), type: "DATE"),
+                       "2025-01-01 – 2025-12-31")
+    }
+
     func testDuckDBDatabaseAndParquetAndNullPreservation() throws {
         let library = Bundle.main.bundleURL.appendingPathComponent("Contents/Frameworks/libduckdb.dylib").path
         let handle = try XCTUnwrap(duckOpen(library, ""))

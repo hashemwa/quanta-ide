@@ -1003,9 +1003,19 @@ def variables_snapshot():
         except Exception:
             summary = "<unreadable>"
         out.append({"name": name, "type": type_name, "summary": _clean(summary),
-                    "shape": shape, "is_dataframe": is_df})
+                    "shape": shape, "is_dataframe": is_df, "inspectable": _inspectable(val)})
     out.sort(key=lambda d: d["name"].lower())
     return out[:400]
+
+_CONTAINERS = (dict, list, tuple)
+
+def _inspectable(value):
+    if type(value) not in _CONTAINERS or not value:
+        return False
+    if len(value) > 10:
+        return True
+    children = value.values() if type(value) is dict else value
+    return any(type(child) in _CONTAINERS for child in children)
 
 def handle_variable(msg):
     name = msg.get("name", "")
@@ -1017,7 +1027,7 @@ def handle_variable(msg):
     def node(value, label, depth):
         remaining[0] -= 1
         result = {"name": label, "type": type(value).__name__, "value": safe_repr(value, short=True)}
-        if type(value) not in (dict, list, tuple):
+        if type(value) not in _CONTAINERS:
             return result
         if id(value) in seen:
             result["value"] = "<recursive reference>"
@@ -1040,6 +1050,63 @@ def handle_variable(msg):
     emit({"id": msg.get("id"), "type": "variable", "node": node(value, name, 0),
           "bytes": sys.getsizeof(value)})
 
+def _frame_for(val, msg):
+    query = msg.get("filter", "")
+    sort_column = msg.get("sort_column")
+    if not query and sort_column is None:
+        return val
+    import pandas as pd
+    frame = val.to_frame() if isinstance(val, pd.Series) else val
+    if not isinstance(frame, pd.DataFrame):
+        raise ValueError("The variable is not a DataFrame or Series")
+    if query:
+        mask = pd.Series(False, index=frame.index)
+        for _, column in frame.iloc[:, :msg.get("max_cols", 60)].items():
+            mask |= column.astype(str).str.contains(query, case=False, regex=False, na=False)
+        frame = frame.loc[mask]
+    if sort_column is not None:
+        position = int(sort_column)
+        if not 0 <= position < len(frame.columns):
+            raise ValueError("The sort column no longer exists; clear the sort and retry")
+        order = frame.iloc[:, position].reset_index(drop=True).sort_values(
+            ascending=bool(msg.get("ascending", True)), kind="stable", na_position="last").index
+        frame = frame.iloc[order]
+    return frame
+
+def _column_stats(column):
+    count = int(column.count())
+    try:
+        distinct = int(column.nunique(dropna=True))
+    except TypeError:
+        distinct = int(column.dropna().astype(str).nunique())
+    stats = {"count": count, "missing": int(len(column) - count),
+             "distinct": distinct, "min": None, "max": None, "mean": None}
+    kind = column.dtype.kind
+    if count and kind in "iufmM":
+        stats["min"] = _clean(str(column.min()))
+        stats["max"] = _clean(str(column.max()))
+    if count and kind in "iuf":
+        mean = float(column.mean())
+        if mean == mean:
+            stats["mean"] = mean
+    return stats
+
+def handle_dfsummary(msg):
+    name = msg.get("name", "")
+    val = user_ns.get(name)
+    try:
+        import pandas as pd
+        if not isinstance(val, (pd.DataFrame, pd.Series)):
+            raise ValueError("'%s' is not a DataFrame or Series" % name)
+        frame = _frame_for(val, msg)
+        if isinstance(frame, pd.Series):
+            frame = frame.to_frame()
+        columns = [_column_stats(column) for _, column in frame.iloc[:, :msg.get("max_cols", 60)].items()]
+    except Exception as error:
+        emit({"id": msg.get("id"), "type": "dfsummary_error", "error": _clean(str(error))})
+        return
+    emit({"id": msg.get("id"), "type": "dfsummary", "total_rows": int(len(frame)), "columns": columns})
+
 def handle_df(msg):
     name = msg.get("name", "")
     val = user_ns.get(name)
@@ -1047,30 +1114,11 @@ def handle_df(msg):
         emit({"id": msg.get("id"), "type": "df_error",
               "error": "'%s' is not defined in the kernel" % name})
         return
-    query = msg.get("filter", "")
-    sort_column = msg.get("sort_column")
-    if query or sort_column is not None:
-        try:
-            import pandas as pd
-            frame = val.to_frame() if isinstance(val, pd.Series) else val
-            if not isinstance(frame, pd.DataFrame):
-                raise ValueError("The variable is not a DataFrame or Series")
-            if query:
-                mask = pd.Series(False, index=frame.index)
-                for _, column in frame.iloc[:, :msg.get("max_cols", 60)].items():
-                    mask |= column.astype(str).str.contains(query, case=False, regex=False, na=False)
-                frame = frame.loc[mask]
-            if sort_column is not None:
-                position = int(sort_column)
-                if not 0 <= position < len(frame.columns):
-                    raise ValueError("The sort column no longer exists; clear the sort and retry")
-                order = frame.iloc[:, position].reset_index(drop=True).sort_values(
-                    ascending=bool(msg.get("ascending", True)), kind="stable", na_position="last").index
-                frame = frame.iloc[order]
-            val = frame
-        except Exception as error:
-            emit({"id": msg.get("id"), "type": "df_error", "error": _clean(str(error))})
-            return
+    try:
+        val = _frame_for(val, msg)
+    except Exception as error:
+        emit({"id": msg.get("id"), "type": "df_error", "error": _clean(str(error))})
+        return
     payload = dataframe_payload(val, msg.get("offset", 0), msg.get("limit", 500), name,
                                 max_cols=msg.get("max_cols", 150))
     if payload is None:
@@ -1256,6 +1304,8 @@ def _handle_internal_error(op, msg):
     elif op == "df":
         last = err.strip().splitlines()[-1] if err.strip() else "internal error"
         emit({"id": msg.get("id"), "type": "df_error", "error": last})
+    elif op == "dfsummary":
+        emit({"id": msg.get("id"), "type": "dfsummary_error", "error": "internal error"})
     elif op == "latex":
         emit({"id": msg.get("id"), "type": "latex_error", "error": "internal error"})
     elif op == "complete":
@@ -1317,6 +1367,8 @@ def main():
                 handle_variable(msg)
             elif op == "df":
                 handle_df(msg)
+            elif op == "dfsummary":
+                handle_dfsummary(msg)
             elif op == "latex":
                 handle_latex(msg)
             elif op == "complete":

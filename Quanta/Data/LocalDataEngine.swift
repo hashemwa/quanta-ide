@@ -64,6 +64,33 @@ struct DataPage {
     }
 }
 
+struct DataColumnStats: Equatable {
+    let count: Int
+    let missing: Int
+    let distinct: Int
+    let min: String?
+    let max: String?
+    let mean: Double?
+}
+
+struct DataSummary: Equatable {
+    let totalRows: Int
+    let columns: [DataColumnStats]
+}
+
+extension DataSummary {
+    init?(_ message: [String: Any]) {
+        guard let total = message["total_rows"] as? Int,
+              let columns = message["columns"] as? [[String: Any]] else { return nil }
+        totalRows = total
+        self.columns = columns.map {
+            DataColumnStats(count: $0["count"] as? Int ?? 0, missing: $0["missing"] as? Int ?? 0,
+                            distinct: $0["distinct"] as? Int ?? 0, min: $0["min"] as? String,
+                            max: $0["max"] as? String, mean: $0["mean"] as? Double)
+        }
+    }
+}
+
 final class DataQueryCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var action: (() -> Void)?
@@ -112,6 +139,39 @@ enum LocalDataEngine {
             guard row.count == 3, let schema = row[0], let name = row[1], let type = row[2] else { return nil }
             return DataTable(schema: schema, name: name, type: type)
         }
+    }
+
+    static func isNumeric(_ type: String) -> Bool {
+        let upper = type.uppercased()
+        return ["INT", "DOUBLE", "REAL", "FLOAT", "DECIMAL", "NUMERIC"].contains { upper.contains($0) }
+    }
+
+    static func summary(_ source: LocalDataSource, sql: String, columns: [String], types: [String],
+                        cancellation: DataQueryCancellation) throws -> DataSummary {
+        let connection = try connection(source, cancellation: cancellation)
+        var query = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.hasSuffix(";") { query.removeLast() }
+        var parts = ["count(*)"]
+        for (index, column) in columns.enumerated() {
+            let name = identifier(column)
+            let numeric = types.indices.contains(index) && isNumeric(types[index])
+            parts += ["count(\(name))", "count(DISTINCT \(name))", "min(\(name))", "max(\(name))",
+                      numeric ? "avg(\(name))" : "NULL"]
+        }
+        let aggregate = "SELECT \(parts.joined(separator: ", ")) FROM (\n\(query)\n) AS quanta_summary"
+        if let duck = connection as? DuckDataConnection { try duck.validate(query) }
+        let result = try connection.query(aggregate, limit: 1, cancellation: cancellation)
+        guard let row = result.rows.first, row.count == 1 + columns.count * 5,
+              let total = row[0].flatMap(Int.init) else { throw QuantaError("Could not summarize this table.") }
+        let stats = columns.indices.map { index -> DataColumnStats in
+            let base = 1 + index * 5
+            let count = row[base].flatMap(Int.init) ?? 0
+            return DataColumnStats(count: count, missing: total - count,
+                                   distinct: row[base + 1].flatMap(Int.init) ?? 0,
+                                   min: row[base + 2], max: row[base + 3],
+                                   mean: row[base + 4].flatMap(Double.init))
+        }
+        return DataSummary(totalRows: total, columns: stats)
     }
 
     static func page(_ source: LocalDataSource, sql: String, offset: Int, cancellation: DataQueryCancellation) throws -> DataPage {

@@ -16,7 +16,6 @@ final class AppState: ObservableObject {
     @Published var primarySplitDocumentID: UUID?
     @Published var userNotice: String?
     @Published var externallyChangedDocumentID: UUID?
-    @Published var changedVariables: Set<String> = []
     @Published var workspace: Workspace?
     @Published var openDocuments: [Document] = [] {
         didSet { releaseClosedDocumentViews() }
@@ -37,7 +36,15 @@ final class AppState: ObservableObject {
     private var navigationHistory: [UUID] = []
     private var navigationIndex = -1
     private var isNavigatingHistory = false
-    @Published var variables: [VariableInfo] = []
+    let variableStore = VariableStore()
+    var variables: [VariableInfo] {
+        get { variableStore.items }
+        set { variableStore.items = newValue }
+    }
+    var changedVariables: Set<String> {
+        get { variableStore.changed }
+        set { variableStore.changed = newValue }
+    }
     let console = ConsoleModel()
     let plots = PlotHistory()
     let dataBrowser = DataBrowser()
@@ -1419,13 +1426,31 @@ final class AppState: ObservableObject {
         document.dataFrameRequest += 1
         let request = document.dataFrameRequest
         document.dataFrameError = nil
+        document.dataFrameSummary = nil
         document.isLoadingDataFrame = true
         fetchDataFrame(name: name, offset: 0, limit: 1000, filter: document.dataFrameFilter,
-                       sortColumn: document.dataFrameSortColumn, ascending: document.dataFrameSortAscending) { [weak document] payload, error in
-            guard document?.dataFrameRequest == request else { return }
-            document?.isLoadingDataFrame = false
-            document?.dataFrame = payload
-            document?.dataFrameError = error
+                       sortColumn: document.dataFrameSortColumn, ascending: document.dataFrameSortAscending) { [weak self, weak document] payload, error in
+            guard let document, document.dataFrameRequest == request else { return }
+            document.isLoadingDataFrame = false
+            document.dataFrame = payload
+            document.dataFrameError = error
+            if payload != nil { self?.fetchDataFrameSummary(document, request: request) }
+        }
+    }
+
+    private func fetchDataFrameSummary(_ document: Document, request: Int) {
+        guard let name = document.dataFrameName, isWorkspaceTrusted, kernelTransition == nil, kernel.isRunning else { return }
+        kernel.request(["op": "dfsummary", "name": name, "filter": document.dataFrameFilter, "max_cols": 60]) { [weak document] message in
+            switch message["type"] as? String {
+            case "dfsummary":
+                guard let document, document.dataFrameRequest == request else { return true }
+                document.dataFrameSummary = DataSummary(message)
+                return true
+            case "dfsummary_error", "dead":
+                return true
+            default:
+                return false
+            }
         }
     }
 

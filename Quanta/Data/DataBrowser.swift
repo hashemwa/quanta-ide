@@ -24,7 +24,9 @@ final class DataSession: ObservableObject {
     @Published var ascending = true
     @Published var selectedColumn = 0
     @Published private(set) var selectedTable: DataTable?
+    @Published private(set) var summary: DataSummary?
     private(set) var executedSQL = ""
+    private var summaryCancellation: DataQueryCancellation?
     private var cancellation: DataQueryCancellation?
     private var generation = 0
     private var knownColumns: [String] = []
@@ -33,7 +35,10 @@ final class DataSession: ObservableObject {
         self.source = source
         if !source.isDatabase { query = "SELECT * FROM \(source.relation)" }
     }
-    deinit { cancellation?.cancel() }
+    deinit {
+        cancellation?.cancel()
+        summaryCancellation?.cancel()
+    }
 
     func open() {
         if !source.isDatabase { run(); return }
@@ -70,6 +75,9 @@ final class DataSession: ObservableObject {
         executedSQL = base
         page = nil
         payload = nil
+        summary = nil
+        summaryCancellation?.cancel()
+        summaryCancellation = nil
         load(offset: 0)
     }
     func load(offset: Int) {
@@ -80,6 +88,23 @@ final class DataSession: ObservableObject {
             self?.page = page
             self?.payload = page.payload
             if let self, !page.columns.indices.contains(self.selectedColumn) { self.selectedColumn = 0 }
+            if let self, self.summary == nil, self.summaryCancellation == nil { self.summarize(page) }
+        }
+    }
+    private func summarize(_ page: DataPage) {
+        let token = DataQueryCancellation()
+        summaryCancellation = token
+        let sql = executedSQL
+        let timeout = DispatchWorkItem { token.cancel() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: timeout)
+        DispatchQueue.global(qos: .utility).async { [weak self, source] in
+            let result = try? LocalDataEngine.summary(source, sql: sql, columns: page.columns,
+                                                      types: page.types, cancellation: token)
+            timeout.cancel()
+            DispatchQueue.main.async {
+                guard let self, self.summaryCancellation === token, self.executedSQL == sql else { return }
+                self.summary = result
+            }
         }
     }
     func stop() {

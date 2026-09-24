@@ -89,7 +89,6 @@ struct PlotsPanel: View {
                     Divider()
                     if let selected {
                         VStack(spacing: DS.Space.s) {
-                            Text(selected.origin.label).font(.caption).foregroundStyle(.secondary)
                             if let image = selected.image, case .image = selected.output.kind {
                                 Image(nsImage: image).resizable().scaledToFit()
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)

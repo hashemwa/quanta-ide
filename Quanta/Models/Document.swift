@@ -25,6 +25,7 @@ final class Document: ObservableObject, Identifiable {
     let dataFrameName: String?
     @Published var dataFrame: DataFramePayload?
     @Published var dataFrameError: String?
+    @Published var dataFrameSummary: DataSummary?
     @Published var isLoadingDataFrame = false
     @Published var dataFrameFilter = ""
     @Published var dataFrameSortColumn: Int?

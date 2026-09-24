@@ -438,6 +438,65 @@ struct PanelHeader<Trailing: View>: View {
     }
 }
 
+struct InspectorRow<Actions: View>: View {
+    let title: String
+    let type: String
+    let detail: String
+    var marked = false
+    @ViewBuilder var actions: Actions
+    @Environment(\.monoFontSize) private var monoFontSize
+    @State private var hovering = false
+
+    init(_ title: String, type: String, detail: String, marked: Bool = false,
+         @ViewBuilder actions: () -> Actions) {
+        self.title = title
+        self.type = type
+        self.detail = detail
+        self.marked = marked
+        self.actions = actions()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.xxs) {
+            HStack(spacing: DS.Space.s) {
+                if marked {
+                    Circle().fill(DS.StatusColors.warning)
+                        .frame(width: DS.Layout.statusDot, height: DS.Layout.statusDot)
+                        .help("New or changed since the previous refresh")
+                        .accessibilityLabel("Changed")
+                }
+                Text(title)
+                    .font(.system(size: monoFontSize, design: .monospaced))
+                    .lineLimit(1)
+                Spacer(minLength: DS.Space.s)
+                HStack(spacing: DS.Space.xxs) { actions }
+                    .opacity(hovering ? 1 : 0)
+                    .allowsHitTesting(hovering)
+                Text(type)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if !detail.isEmpty {
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 1)
+        .contentShape(Rectangle())
+        .help(detail.isEmpty ? type : "\(type) · \(detail)")
+        .scrollAwareHover($hovering)
+    }
+}
+
+extension InspectorRow where Actions == EmptyView {
+    init(_ title: String, type: String, detail: String, marked: Bool = false) {
+        self.init(title, type: type, detail: detail, marked: marked) { EmptyView() }
+    }
+}
+
 struct IconSegmentedControl<Value: Hashable>: View {
     struct Segment: Identifiable {
         let value: Value

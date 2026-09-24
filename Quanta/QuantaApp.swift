@@ -354,7 +354,7 @@ struct QuantaCommands: Commands {
             Button("Refresh File Tree") { app.refreshWorkspace() }
                 .disabled(app.workspace == nil)
             Divider()
-            Button(app.showVariables ? "Hide Variables" : "Show Variables") { app.toggleVariables() }
+            Button(app.showVariables ? "Hide Inspector" : "Show Inspector") { app.toggleVariables() }
                 .keyboardShortcut("0", modifiers: [.command, .option])
             Button(app.showConsole ? "Hide Bottom Panel" : "Show Bottom Panel") { app.toggleConsole() }
                 .keyboardShortcut("y", modifiers: [.command, .shift])

@@ -1,16 +1,23 @@
 import AppKit
+import Combine
 import SwiftUI
 
+final class VariableStore: ObservableObject {
+    @Published var items: [VariableInfo] = []
+    @Published var changed: Set<String> = []
+}
+
 struct VariablesPanel: View {
-    @EnvironmentObject var app: AppState
+    @ObservedObject private var store = AppState.shared.variableStore
+    private var app: AppState { AppState.shared }
     @State private var selected: String?
+    @State private var detailsFor: String?
     @State private var query = ""
     @State private var typeFilter = "All Types"
     @State private var sortByType = false
-    @State private var inspected: VariableInfo?
 
     private var visibleVariables: [VariableInfo] {
-        app.variables.filter {
+        store.items.filter {
             (query.isEmpty || $0.name.localizedStandardContains(query) || $0.summary.localizedStandardContains(query))
                 && (typeFilter == "All Types" || $0.typeName == typeFilter)
         }.sorted {
@@ -19,7 +26,7 @@ struct VariablesPanel: View {
     }
 
     private var filterMenu: BarMenu {
-        let types = ["All Types"] + Set(app.variables.map(\.typeName)).sorted()
+        let types = ["All Types"] + Set(store.items.map(\.typeName)).sorted()
         return BarMenu(sections: [
             .init(title: "Type", items: types.map { type in
                 .init(title: type, isOn: typeFilter == type) { typeFilter = type }
@@ -40,15 +47,25 @@ struct VariablesPanel: View {
                     IconButton("xmark.circle.fill", help: "Show All Variable Types") { typeFilter = "All Types" }
                 }
             }
-            if app.variables.isEmpty {
+            if store.items.isEmpty {
                 NavigatorEmptyState("No Variables", systemImage: "cube.transparent",
                                     detail: "Run code to see the variables it defines.")
             } else {
                 List(visibleVariables, selection: $selected) { variable in
-                    VariableRowView(variable: variable, changed: app.changedVariables.contains(variable.name), inspect: { inspected = variable })
+                    VariableRowView(variable: variable, changed: store.changed.contains(variable.name),
+                                    showingDetails: detailsBinding(for: variable))
                         .tag(variable.name)
                 }
                 .listStyle(.sidebar)
+                .contextMenu(forSelectionType: String.self) { names in
+                    if let variable = variable(named: names.first) {
+                        VariableMenuItems(variable: variable) { detailsFor = variable.name }
+                    }
+                } primaryAction: { names in
+                    guard let variable = variable(named: names.first) else { return }
+                    if variable.isDataFrame { app.openDataFrame(named: variable.name) }
+                    else if variable.isInspectable { detailsFor = variable.name }
+                }
                 .overlay {
                     if visibleVariables.isEmpty {
                         NavigatorEmptyState("No Matching Variables", systemImage: "magnifyingglass",
@@ -63,84 +80,79 @@ struct VariablesPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .sheet(item: $inspected) { variable in VariableInspector(variable: variable) }
-        .onChange(of: app.variables.map(\.typeName)) { _, types in
+        .onChange(of: store.items.map(\.typeName)) { _, types in
             if typeFilter != "All Types", !types.contains(typeFilter) { typeFilter = "All Types" }
         }
+    }
+
+    private func variable(named name: String?) -> VariableInfo? {
+        guard let name else { return nil }
+        return store.items.first { $0.name == name }
+    }
+
+    private func detailsBinding(for variable: VariableInfo) -> Binding<Bool> {
+        Binding(get: { detailsFor == variable.name },
+                set: { if !$0, detailsFor == variable.name { detailsFor = nil } })
+    }
+}
+
+private struct VariableMenuItems: View {
+    let variable: VariableInfo
+    let showDetails: () -> Void
+    private var app: AppState { AppState.shared }
+
+    var body: some View {
+        if variable.isInspectable {
+            Button("Show Details", action: showDetails)
+        }
+        if variable.isDataFrame {
+            Button("Open as Table") { app.openDataFrame(named: variable.name) }
+        }
+        Button("Copy Name") { copy(variable.name) }
+        Button("Copy Summary") { copy(variable.detail) }
+        Divider()
+        Button("Delete Variable…", role: .destructive) {
+            app.deleteVariable(named: variable.name)
+        }
+    }
+
+    private func copy(_ string: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
     }
 }
 
 struct VariableRowView: View {
     let variable: VariableInfo
     var changed = false
-    var inspect: () -> Void = {}
+    @Binding var showingDetails: Bool
     private var app: AppState { AppState.shared }
-    @Environment(\.monoFontSize) private var monoFontSize
-
-    private var detail: String {
-        variable.summary.isEmpty
-            ? variable.typeName
-            : "\(variable.typeName) · \(variable.summary)"
-    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.Space.xxs) {
-            HStack(spacing: DS.Space.s) {
-                if changed {
-                    Circle().fill(DS.StatusColors.warning).frame(width: DS.Layout.statusDot, height: DS.Layout.statusDot)
-                        .help("New or changed since the previous variable refresh")
-                        .accessibilityLabel("Changed")
-                }
-                Text(variable.name)
-                    .font(.system(size: monoFontSize, design: .monospaced))
-                    .lineLimit(1)
-                if let shape = variable.shape {
-                    Pill(shape)
-                        .help("Shape: \(shape)")
-                }
-                Spacer(minLength: 0)
-                IconButton("magnifyingglass", help: "Inspect Variable") { inspect() }
-                if variable.isDataFrame {
-                    IconButton("arrow.up.forward.square", help: "Open as Table") {
-                        app.openDataFrame(named: variable.name)
-                    }
-                }
+        InspectorRow(variable.name, type: variable.typeName, detail: variable.detail, marked: changed) {
+            if variable.isInspectable {
+                IconButton("info.circle", help: "Show Details") { showingDetails = true }
             }
-            Text(detail)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .padding(.vertical, 1)
-        .contentShape(Rectangle())
-        .help(detail)
-        .onTapGesture(count: 2) {
-            if variable.isDataFrame { app.openDataFrame(named: variable.name) } else { inspect() }
-        }
-        .contextMenu {
-            Button("Inspect Variable…") { inspect() }
             if variable.isDataFrame {
-                Button("Open as Table") { app.openDataFrame(named: variable.name) }
-            }
-            Button("Copy Name") { copyToPasteboard(variable.name) }
-            Button("Copy Summary") { copyToPasteboard(detail) }
-            Divider()
-            Button("Delete Variable…", role: .destructive) {
-                app.deleteVariable(named: variable.name)
+                IconButton("arrow.up.forward.square", help: "Open as Table") {
+                    app.openDataFrame(named: variable.name)
+                }
             }
         }
-    }
-
-    private func copyToPasteboard(_ string: String) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(string, forType: .string)
+        .popover(isPresented: $showingDetails, arrowEdge: .leading) {
+            VariableDetails(variable: variable)
+        }
     }
 }
 
-private struct VariableInspector: View {
+extension VariableInfo {
+    var detail: String {
+        [shape, summary.isEmpty ? nil : summary].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+private struct VariableDetails: View {
     let variable: VariableInfo
-    @Environment(\.dismiss) private var dismiss
     @State private var root: VariableNode?
     @State private var error: String?
     @State private var bytes: Int?
@@ -149,24 +161,31 @@ private struct VariableInspector: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(variable.name, systemImage: "cube") {
-                IconButton("arrow.clockwise", help: "Refresh Inspection") { load() }
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
             if let root {
                 List {
-                    OutlineGroup([root], children: \.children) { node in
+                    OutlineGroup(root.children ?? [], children: \.children) { node in
                         VStack(alignment: .leading, spacing: DS.Space.xxs) {
-                            Text(node.name + " · " + node.type).font(.caption.weight(.semibold))
+                            HStack(spacing: DS.Space.s) {
+                                Text(node.name).font(.caption.monospaced().weight(.semibold)).lineLimit(1)
+                                Spacer(minLength: DS.Space.s)
+                                Text(node.type).font(.caption).foregroundStyle(.secondary)
+                            }
                             Text(node.value).font(.caption.monospaced()).lineLimit(3).textSelection(.enabled).help(node.value)
                         }
                     }
                 }
+                .listStyle(.inset)
             } else if let error {
-                ContentUnavailableView("Couldn’t Inspect Variable", systemImage: "exclamationmark.triangle", description: Text(error))
-            } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
-            Text((bytes.map { "\($0.formatted()) bytes (shallow) · " } ?? "") + "Preview: up to 4 levels / 300 entries")
-                .font(.caption).foregroundStyle(.secondary).padding(DS.Space.m)
+                ContentUnavailableView("Couldn’t Show Details", systemImage: "exclamationmark.triangle", description: Text(error))
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            PanelBar {
+                Text(bytes.map { "\($0.formatted(.byteCount(style: .memory))) · first 4 levels, 300 items" } ?? "")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: DS.Space.s)
+                IconButton("arrow.clockwise", help: "Refresh Details") { load() }
+            }
         }
         .frame(width: DS.Layout.inspectionWidth, height: DS.Layout.inspectionHeight)
         .onAppear(perform: load)

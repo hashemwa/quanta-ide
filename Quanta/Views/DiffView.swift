@@ -14,7 +14,7 @@ struct DiffView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(document.displayName, systemImage: "plus.forwardslash.minus") {
+            PanelBar {
                 if let diff = document.diff, diff.isNotebook {
                     Text("Cell sources only")
                         .font(.caption)
@@ -28,6 +28,7 @@ struct DiffView: View {
                         .foregroundStyle(.secondary)
                         .help("\(diff.additions) added, \(diff.deletions) removed · \(diff.oldLabel) → \(diff.newLabel)")
                 }
+                Spacer(minLength: DS.Space.s)
                 if let source, source.status != .deleted {
                     IconButton("doc.text", help: "Open File") { app.openFile(source.url) }
                 }
