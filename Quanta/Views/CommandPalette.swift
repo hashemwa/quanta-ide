@@ -95,10 +95,14 @@ struct CommandPalette: View {
                     .disabled(!entry.enabled)
                     .tag(entry.id)
                     .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { selected = entry.id; activate() }
                     .help(entry.detail)
                 }
                 .listStyle(.plain)
+                .contextMenu(forSelectionType: String.self, menu: { _ in }) { ids in
+                    guard let id = ids.first else { return }
+                    selected = id
+                    activate()
+                }
                 .onChange(of: selected) { _, id in if let id { proxy.scrollTo(id) } }
                 .overlay {
                     if entries.isEmpty { ContentUnavailableView.search(text: query) }

@@ -166,6 +166,11 @@ final class DataFrameTableView: NSTableView {
     private var menuRow = -1
     private var menuColumn = -1
 
+    override func tile() {
+        super.tile()
+        enumerateAvailableRowViews { rowView, _ in rowView.needsDisplay = true }
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if window?.firstResponder === self,
