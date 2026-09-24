@@ -32,13 +32,20 @@ fi
 
 VERSION="${2:-$(defaults read "$APP/Contents/Info" CFBundleShortVersionString)}"
 OUT="$HOME/Desktop/Quanta-${VERSION}.dmg"
-STAGE="$(mktemp -d)/dmg"
+STAGE_ROOT="$(mktemp -d)"
+trap 'rm -rf "$STAGE_ROOT"' EXIT
+STAGE="$STAGE_ROOT/dmg"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 
-echo "==> Code-signing Quanta.app with: $IDENTITY"
-codesign --force --deep --options runtime --timestamp \
-  --sign "$IDENTITY" "$STAGE/Quanta.app"
+if xcrun stapler validate "$STAGE/Quanta.app" >/dev/null 2>&1 \
+  && spctl -a -t execute "$STAGE/Quanta.app" >/dev/null 2>&1; then
+  echo "==> Preserving the app's existing notarized signature"
+else
+  echo "==> Code-signing Quanta.app with: $IDENTITY"
+  codesign --force --deep --options runtime --timestamp \
+    --sign "$IDENTITY" "$STAGE/Quanta.app"
+fi
 codesign --verify --strict --verbose=1 "$STAGE/Quanta.app"
 
 BG_ARGS=()

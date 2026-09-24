@@ -18,8 +18,8 @@ not observe `AppState`, because that would re-render every cell on each kernel p
 
 ## Requirements
 
-- macOS 15 or later
-- Xcode 26 or later (the project builds against the macOS 26 SDK and ships to macOS 15)
+- macOS 27 or later on Apple Silicon
+- Xcode 27 or later (the project builds against the macOS 27 SDK and ships to macOS 27)
 - A Python 3 interpreter. pandas, numpy and matplotlib are used when present; the kernel
   itself is standard-library only and must stay that way.
 
@@ -64,8 +64,8 @@ echo '{"op":"execute","id":"1","code":"print(1+1)"}' | python3 Quanta/Resources/
   a shared component to `Controls.swift` rather than a one-off literal in a single view.
 - Every new command gets a menu item, so it is discoverable and keyboard-reachable.
 - Icon-only controls need `.help("Verb noun (⌘⇧X)")`, which also supplies the VoiceOver name.
-- macOS 26 APIs go behind `#available(macOS 26.0, *)` with a working macOS 15 fallback.
-- Do not edit `Quanta.xcodeproj/project.pbxproj` by hand. The project uses Xcode 26
+- macOS 27 is the minimum supported version. APIs introduced later need availability checks and a working macOS 27 fallback.
+- Do not edit `Quanta.xcodeproj/project.pbxproj` by hand. The project uses Xcode 27
   filesystem-synced groups, so a new file under `Quanta/` joins the target automatically.
 - Prefer deleting code to commenting it out.
 

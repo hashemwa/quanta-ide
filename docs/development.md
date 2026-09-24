@@ -2,7 +2,8 @@
 
 ## Build and test
 
-Quanta requires Xcode 26 or later and targets macOS 15 or later.
+Quanta requires Xcode 27 or later and targets macOS 27 or later on Apple Silicon (arm64 only).
+App Intents metadata extraction is disabled because the app does not define App Intents.
 
 ```sh
 ./scripts/quanta build
@@ -21,15 +22,15 @@ are in `Quanta/Resources/Terminal/DEPENDENCIES.md`.
 
 ## Automated checks
 
-`.github/workflows/ci.yml` runs the existing build and unit-test commands on macOS 26
-with Xcode 26.3, and the Python bridge suite on Python 3.11 and 3.13. Bridge checks run
+`.github/workflows/ci.yml` runs the existing build and unit-test commands on the `xcode-27` Apple Silicon runner
+with macOS 27 and Xcode 27, and the Python bridge suite on Python 3.11 and 3.13. Bridge checks run
 both without site packages and with optional scientific packages installed. Failed
 macOS runs retain the build/test logs as artifacts. CI activates after the workflow
 is pushed; a local test pass is not a hosted CI result.
 
 Builds fetch a checksum-pinned DuckDB 1.5.5 artifact into the ignored
-`.build/native-tools` cache. The shared Xcode scheme embeds and signs its universal
-macOS library in the application. The first build needs network access; subsequent
+`.build/native-tools` cache. The shared Xcode scheme extracts, embeds, and signs its
+arm64 library in the application. The first build needs network access; subsequent
 builds use the verified cache. The app never installs tools into users' Python environments.
 
 The suite exercises kernel-backed completion edits, native SQLite/DuckDB, CSV/Parquet
@@ -89,11 +90,10 @@ existing Vortex preferences without overwriting Quanta settings. Recovery drafts
 copied into `Application Support/Quanta/Drafts`; originals are retained. Legacy names
 in migration code and its tests are intentional.
 
-## README screenshots
+## Example notebook
 
-The screenshots show `Examples/showcase.ipynb` running in Quanta with numpy,
-pandas, matplotlib, plotly, and scikit-learn. The notebook generates synthetic
+`Examples/showcase.ipynb` uses numpy, pandas, matplotlib, plotly, and scikit-learn.
+The notebook generates synthetic
 solar and studio energy data locally, plus CSV and SQLite files in a temporary
-demo folder. The Data browser screenshot uses that generated SQLite database.
-Images live in `docs/images/`: `notebook.png`, `data-browser.jpg`, and `plots.png`.
-They are captures of the app's actual interface.
+demo folder for the Data browser.
+The README uses `docs/images/notebook.png`, a capture of the app's actual interface.

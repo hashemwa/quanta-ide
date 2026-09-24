@@ -1,13 +1,13 @@
 # Quanta
 
-Native macOS data-science IDE for `.py` and `.ipynb` — SwiftUI + AppKit, a Python kernel over stdio, no Electron and no JVM. Built with the macOS 26 SDK, ships to macOS 15.
+Native macOS data-science IDE for `.py` and `.ipynb` — SwiftUI + AppKit, a Python kernel over stdio, no Electron and no JVM. Built with the macOS 27 SDK, ships to macOS 27 on Apple Silicon only.
 
 ## Absolute rules
 
 - **No comments in code.** Not `//`, `///`, `/* */`, `#`, or Python docstrings. Names and structure carry the meaning. If something genuinely needs explaining, it goes in the commit message, in this file, or in `README.md` — never in the source.
 - **Never commit or push unless I explicitly say so.** Staging is fine, committing is not. "Looks good" is not permission.
 - **Never add attribution to commits or PRs.** No `Co-Authored-By`, no "Generated with Claude Code", no tool footers. My name only.
-- **Never edit `Quanta.xcodeproj/project.pbxproj` by hand.** Xcode 26 filesystem-synced groups mean any file added under `Quanta/` joins the target automatically.
+- **Never edit `Quanta.xcodeproj/project.pbxproj` by hand.** Xcode 27 filesystem-synced groups mean any file added under `Quanta/` joins the target automatically.
 
 ## Build and test
 
@@ -50,7 +50,7 @@ Add `-r` for Release. The same commands are Zed tasks (`cmd-shift-r`).
 
 - Everything chrome-related comes from `Quanta/Views/Controls.swift`: `DS` tokens (`Space`, `Radius`, `Bar`, `Motion`, `Layout`), `IconButton`, `PanelHeader`, `.hoverHighlight()`, `.outputCard()`, `FloatingToolbar`, `FilterBar`. Add a token rather than a magic number.
 - Let the platform render its own controls. A `Menu` in a `ToolbarItem` is already a native toolbar control — no `menuStyle` or `buttonStyle` override. Before hand-rolling behaviour, check the SDK interface (`$(xcrun --show-sdk-path)/System/Library/Frameworks/SwiftUI.framework/Modules/SwiftUI.swiftmodule/*.swiftinterface`) and Apple's docs.
-- macOS 26 APIs go behind `#available(macOS 26.0, *)` with a working macOS 15 fallback. Liquid Glass is for controls that float over content: `FloatingToolbar` strips and the controls of a footer `FilterBar`. Never as the background of a panel, card, bar or the sidebar, and never a glass control inside another glass control.
+- macOS 27 is the minimum supported version. APIs introduced later need availability checks and a working macOS 27 fallback. Liquid Glass is for controls that float over content: `FloatingToolbar` strips and the controls of a footer `FilterBar`. Never as the background of a panel, card, bar or the sidebar, and never a glass control inside another glass control.
 - Sidebar and inspector footers are a `FilterBar` (`DS.Bar.footer`): an optional glass circle action (`FilterBarButton`/`FilterBarMenu`) and the native filter field at large size. Filter options open from the field's filter icon, which fills in while a non-default option is on; there is no chevron and no `…` menu. Actions that used to live in `…` menus belong in context menus and the menu bar.
 - The tab bar and the bottom panel sit on the page colour (`textBackgroundColor`), each separated from the editor by a single hairline `Divider`, as is the split-editor divider.
 - Editor tabs have no background of their own. The active tab gets a soft `DS.Radius.selection` rounded fill (`.quaternary`, `.quinary` on hover), inset `DS.Space.xs` so it floats clear of the hairline under the tab bar, the same language as the sidebar's selected row. No accent line, no separators, never a capsule. Capsule pills (`IconSegmentedControl`) are for switching panes.

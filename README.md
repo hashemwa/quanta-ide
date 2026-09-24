@@ -9,9 +9,17 @@ A native Python and Jupyter notebook editor for macOS, built with SwiftUI and Ap
 - Browse local databases and data files with read-only SQL.
 - Review changes with built-in Git and export notebooks to Python, HTML, or PDF.
 
-## Build and run
+## Download
 
-Requires **macOS 15+**, **Xcode 26+**, and **Python 3**.
+[Download Quanta for Apple Silicon](https://github.com/hashemwa/quanta-ide/releases/download/v1.0/Quanta-1.0.dmg).
+Requires **macOS 27+** and a local **Python 3** installation.
+
+Open the DMG and drag Quanta to Applications. Select a Python environment in the
+toolbar and choose **Trust and Enable Python** to run code in your workspace.
+
+## Build from source
+
+Building also requires **Xcode 27+**.
 
 ```sh
 git clone https://github.com/hashemwa/quanta-ide.git
@@ -20,8 +28,6 @@ cd quanta-ide
 ```
 
 You can also open `Quanta.xcodeproj` in Xcode and run the **Quanta** scheme.
-Select a Python environment in the toolbar and choose **Trust and Enable Python**
-to run code in your workspace.
 
 ## Example
 

@@ -19,6 +19,7 @@ xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
 
 echo "==> Stapling the notarization ticket onto the DMG..."
 xcrun stapler staple "$DMG"
+xcrun stapler validate "$DMG"
 
 echo "==> Verifying Gatekeeper acceptance..."
 spctl -a -t open --context context:primary-signature -vv "$DMG"
