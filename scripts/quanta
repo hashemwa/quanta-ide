@@ -7,6 +7,8 @@ PROJECT="$PROJECT_DIR/Quanta.xcodeproj"
 SCHEME="Quanta"
 APP_NAME="Quanta"
 CACHE_DIR="$PROJECT_DIR/.build"
+SIGNING=()
+if [[ -n "${CI:-}" ]]; then SIGNING=(DEVELOPMENT_TEAM=); fi
 
 bold=$'\033[1m'; red=$'\033[31m'; green=$'\033[32m'; dim=$'\033[2m'; off=$'\033[0m'
 die() { printf '%s%s%s\n' "$red" "$*" "$off" >&2; exit 1; }
@@ -38,7 +40,8 @@ build() {
   mkdir -p "$CACHE_DIR"
   set +e
   xcodebuild build -project "$PROJECT" -scheme "$SCHEME" -configuration "$config" \
-    -destination "platform=macOS,arch=$(uname -m)" -quiet 2>&1 | tee "$log" | grep -E '(error|warning):'
+    -destination "platform=macOS,arch=$(uname -m)" -quiet ${SIGNING[@]+"${SIGNING[@]}"} 2>&1 \
+    | tee "$log" | grep -E '(error|warning):'
   local rc=${PIPESTATUS[0]}
   set -e
   if (( rc == 0 )); then
@@ -116,7 +119,7 @@ case "$cmd" in
     mkdir -p "$CACHE_DIR"
     set +e
     xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -configuration "$config" \
-      -destination "platform=macOS,arch=$(uname -m)" -only-testing:QuantaTests 2>&1 \
+      -destination "platform=macOS,arch=$(uname -m)" -only-testing:QuantaTests ${SIGNING[@]+"${SIGNING[@]}"} 2>&1 \
       | tee "$log" | grep -E "(failed|error:|XCTAssert|recorded an issue)"
     rc=${PIPESTATUS[0]}
     set -e

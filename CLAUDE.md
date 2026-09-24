@@ -22,6 +22,7 @@ Native macOS data-science IDE for `.py` and `.ipynb` — SwiftUI + AppKit, a Pyt
 
 Add `-r` for Release. The same commands are Zed tasks (`cmd-shift-r`).
 
+- Every target signs with team `TK6TS5Q6G9`. When `CI` is set the script passes `DEVELOPMENT_TEAM=` so runners without the certificate sign ad hoc, the way unsigned local builds do.
 - Use the script, not `xcodebuild` directly — it shares Xcode's DerivedData, caches build settings, filters output to diagnostics, and detects "another build is already running".
 - Build before claiming anything works. Run the tests after touching models, the kernel, or the exporters.
 - Report outcomes exactly: if a build or test fails, say so and show the output. Never describe unverified work as done.
