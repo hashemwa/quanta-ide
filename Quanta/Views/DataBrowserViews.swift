@@ -9,7 +9,7 @@ struct DataNavigatorView: View {
     var body: some View {
         VStack(spacing: 0) {
             if browser.sources.isEmpty {
-                NavigatorEmptyState("No Data Sources", systemImage: "externaldrive",
+                NavigatorEmptyState("No Data Sources", systemImage: "cylinder.split.1x2",
                                     detail: "Open a local database or a CSV, TSV, or Parquet file.")
             } else {
                 let visibleSources = browser.sources.filter { filter.isEmpty || $0.name.localizedCaseInsensitiveContains(filter) }
@@ -20,7 +20,7 @@ struct DataNavigatorView: View {
                                source.isDatabase {
                                 DataSourceOutline(session: session)
                             } else {
-                                Label(source.name, systemImage: source.isDatabase ? "externaldrive" : "tablecells")
+                                Label(source.name, systemImage: source.isDatabase ? "cylinder.split.1x2" : "tablecells")
                             }
                         }.tag(source.url)
                             .help(source.url.path)
@@ -197,7 +197,7 @@ private struct DataSourceOutline: View {
                 .help("Open " + table.name)
             }
         } label: {
-            Label(session.source.name, systemImage: "externaldrive")
+            Label(session.source.name, systemImage: "cylinder.split.1x2")
         }
     }
 }

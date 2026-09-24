@@ -21,7 +21,7 @@ enum SidebarPane: String, CaseIterable {
 
     var icon: String {
         switch self {
-        case .data: return "externaldrive"
+        case .data: return "cylinder.split.1x2"
         case .files: return "folder"
         case .search: return "magnifyingglass"
         case .sourceControl: return "arrow.triangle.branch"
