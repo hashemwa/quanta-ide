@@ -2,17 +2,23 @@
 
 <p align="center">A native workspace for Python and Jupyter notebooks on macOS.</p>
 <p align="center"><sub>SwiftUI + AppKit · macOS 15+ · MIT licensed</sub></p>
+<p align="center">
+  <a href="#get-started">Get started</a> ·
+  <a href="Examples/showcase.ipynb">Example notebook</a> ·
+  <a href="https://github.com/hashemwa/quanta-ide/releases">Releases</a> ·
+  <a href="docs/notebook-compatibility.md">Notebook compatibility</a>
+</p>
 
-![Python notebook with an inline plot and live variables in Quanta](docs/images/notebook.png)
+![Python notebook with an inline chart, section outline, and live variables in Quanta](docs/images/notebook.png)
 
 ## Explore, run, understand
 
-- **Notebooks and scripts** — edit `.ipynb` and `.py` files with syntax highlighting, keyboard shortcuts, and a shared Python session.
-- **Data you can inspect** — native DataFrame tables, a variable explorer, and an interactive console.
-- **Plots beside your code** — inline matplotlib charts and interactive Plotly figures, plus a Plots tab beside Console and Terminal with thumbnails, export controls, and source navigation.
-- **Git built in** — review diffs, stage changes, and commit. Notebook diffs focus on source, so rerunning cells stays out of the way.
-
-![A pandas DataFrame displayed as a native table in Quanta](docs/images/dataframe.png)
+- **Notebooks and scripts** — edit `.ipynb` and `.py` files with syntax highlighting, live completions, and a shared Python session.
+- **Find your place** — jump between notebook headings and cells with Outline, and use cell controls to insert, move, duplicate, or collapse cells.
+- **Inspect your results** — explore native DataFrame tables, NumPy array previews, JSON trees, and model cards alongside your code.
+- **Keep your plots close** — view inline matplotlib charts and interactive Plotly figures, then revisit and export them from the Plots panel.
+- **Browse local data** — open SQLite, DuckDB, CSV, TSV, and Parquet sources, inspect columns, and run read-only SQL without starting Python.
+- **Review and share** — review source-focused notebook diffs with built-in Git, or export notebooks as Python, HTML, and PDF.
 
 ## Get started
 
@@ -26,27 +32,61 @@ cd quanta-ide
 
 Or open `Quanta.xcodeproj` in Xcode and run the **Quanta** scheme.
 
-Quanta discovers local Python environments automatically. Select yours in the toolbar.
-New workspaces open in restricted mode until you choose **Trust and Enable Python**.
-You can browse and edit without trusting a folder; Python version probes, execution,
-and kernel-backed previews remain disabled. Trust is remembered for that exact folder.
-Use **Run → Trust Workspace…** to enable Python later.
+Quanta discovers local Python environments automatically. Select yours in the toolbar,
+then choose **Trust and Enable Python** when you're ready to run code. New workspaces
+start in restricted mode: you can browse and edit, but Python execution, interpreter
+probes, and kernel-backed previews stay disabled. Trust applies to that exact folder;
+use **Run → Trust Workspace…** to enable it later.
 
-Switching projects or interpreters asks before replacing a running Python session.
-Choose **Restart in Workspace** to clear variables and use the new directory, or
-**Keep Current Session** to retain its variables and directory. The interpreter menu
-shows the session's interpreter and directory, including directory changes reported
-after running code.
+### Try the showcase
 
-For the sample notebook, install these packages in that environment:
+Install the example's packages in your selected Python environment:
 
 ```sh
-python -m pip install numpy pandas matplotlib
+python -m pip install numpy pandas matplotlib plotly scikit-learn
 ```
 
-Open `Examples/exploration.ipynb` and press **⌘R** to run it. The example uses synthetic data.
-The Python bridge itself needs only the standard library. See [Notebook compatibility](docs/notebook-compatibility.md)
-for supported commands and current output limitations.
+Open [Examples/showcase.ipynb](Examples/showcase.ipynb) and press **⌘R**. Follow a
+fictional solar-powered studio from daily measurements to tables, charts, equations,
+array previews, and a fitted model. The notebook generates synthetic data locally
+with a fixed seed and creates sample CSV and SQLite files in a temporary folder.
+After installing the packages, it runs without network access.
+
+For a smaller example using only NumPy, pandas, and matplotlib, try
+[Examples/exploration.ipynb](Examples/exploration.ipynb).
+
+Quanta's Python bridge needs only the standard library. It supports ordinary Python,
+but does not run an IPython or Jupyter kernel; most magics, shell escapes, and
+interactive Jupyter widgets are unsupported. See
+[Notebook compatibility](docs/notebook-compatibility.md) for details.
+
+## From files to answers
+
+![Monthly SQL aggregation in Quanta's native data browser with a column inspector](docs/images/data-browser.jpg)
+
+Use **Data → Open Data Source…** to open a local database or data file. **⌘3** opens
+the Data navigator. Tables appear in editor tabs with filtering, sorting, and a
+column inspector; the SQL button opens a read-only query editor.
+
+Export a result page as CSV, or choose **Data Actions → Open Loading Code in Notebook**
+to create reproducible Python loading code. Pages contain up to 200 rows, and
+inspector statistics describe the current page. Queries have a Stop action, a
+10-second limit, and a 4 MB result-page budget; DuckDB also has a 128 MB memory limit.
+See [Data browser development](docs/data-browser.md) for supported sources and limits.
+
+## Inspect models and revisit plots
+
+![A fitted model card, live variables, and the plot gallery in Quanta](docs/images/plots.png)
+
+Choose **Navigate → Show Plots** to open the gallery beside Console and Terminal.
+It defaults to the active file; choose **All Files and Console** to include other
+figures. Use its controls to export a plot or jump to its source.
+
+The gallery retains up to 200 plots during the app session, including earlier runs.
+Notebook outputs stay inline and save independently. Script figures appear in the
+panel as well.
+
+## Make it your workspace
 
 | Shortcut | Action |
 | :--- | :--- |
@@ -54,43 +94,34 @@ for supported commands and current output limitations.
 | ⇧↩ | Run cell and advance |
 | ⌘R | Run notebook or script |
 | ⌘. | Interrupt execution |
+| ⌘5 | Show notebook Outline |
+| ⌘3 | Show Data navigator |
 | ⌃Space | Show completions |
 | ⇧Tab | Show documentation or call signature |
 
-Python syntax coloring is implemented in the native editor. Completions and parameter
-help use the selected notebook kernel, so they reflect the live session without bundling
-a separate analyzer or language-server runtime.
+**Navigate and edit.** Use Outline to filter and jump between headings and cells.
+Select a cell to reveal its floating controls, or open its context menu for more
+actions. The **+** menu inserts Code or Markdown above or below. Press **Esc** for
+command mode, then **A** / **B** to insert code above or below, or **M** / **Y** to
+change the cell type.
 
-Use **Data → Open Data Source…** to browse local SQLite/DuckDB databases and CSV,
-TSV, or Parquet files without starting Python. **⌘3** opens the Data navigator.
-Tables open in editor tabs with a column inspector. The SQL button exposes a read-only
-query editor; filters and sorting apply to the query before pagination. Pages contain
-up to 200 rows and can be exported as CSV. **Data Actions → Open Loading Code in
-Notebook** creates a notebook with reproducible Python loading code.
+**Work with live state.** The notebook, Variables inspector, and interactive console
+share one Python session. Completions and parameter help use that session too.
+Switching projects or interpreters asks before replacing a running session:
+**Restart in Workspace** clears variables and uses the new directory;
+**Keep Current Session** retains its variables and directory. The interpreter menu
+shows the session's interpreter and working directory.
 
-Queries have a Stop action, a 10-second limit, and a 4 MB result-page budget. DuckDB
-also has a 128 MB memory limit. Inspector statistics describe the current page only.
-Database writes, remote connections, and full-dataset profiling are deferred.
-See [Data browser development](docs/data-browser.md) to contribute additional sources.
+**Copy your data.** DataFrame context menus distinguish formatted **Previews** from
+**Original Values**. Original values preserve full strings, newlines, and numeric
+precision for the captured snapshot; column copying covers loaded rows only.
 
-Select or hover over a cell and open its **+** menu to insert **Code** or **Markdown**
-above or below it. The same choices appear in the cell's context menu, the notebook
-toolbar, the **Cell** menu, and the command palette. Press **Esc** for command mode,
-then **A** or **B** to insert code above or below, or **M** / **Y** to change the cell type.
+**Share a notebook.** Use **File → Export Notebook** for Python, HTML, or PDF.
+HTML includes offline math, Markdown tables, full text outputs, and interactive
+Plotly figures. PDF export paginates the notebook and waits for figures to render.
 
-Use **File → Export Notebook → As PDF…** or the notebook toolbar's **… → Export Notebook** menu
-to save a paginated PDF. HTML export includes offline math, Markdown tables, full text
-outputs, and interactive Plotly figures. PDF export waits for figures to finish rendering.
-
-DataFrame context menus distinguish formatted **Previews** from **Original Values**.
-Original values preserve full strings, newlines, and numeric precision for the rows
-captured in the table snapshot; column copying covers loaded rows only.
-
-The Plots panel defaults to the active file. Choose **All Files and Console** to browse
-other figures. It retains up to 200 plots during the app session, including earlier
-runs; notebook outputs remain inline and are saved independently. Script figures appear
-in the panel rather than opening external image files. Use **Navigate → Show Plots** or the
-command palette to open it.
+**Review changes.** Built-in Git supports diffs, staging, and commits. Notebook
+diffs focus on source, so rerunning cells stays out of the way.
 
 ## Contribute
 

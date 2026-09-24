@@ -91,6 +91,9 @@ in migration code and its tests are intentional.
 
 ## README screenshots
 
-The screenshots show `Examples/exploration.ipynb` running in Quanta with numpy,
-pandas, and matplotlib. The notebook generates a small synthetic dataset locally.
-Images live in `docs/images/` and show the app's actual interface.
+The screenshots show `Examples/showcase.ipynb` running in Quanta with numpy,
+pandas, matplotlib, plotly, and scikit-learn. The notebook generates synthetic
+solar and studio energy data locally, plus CSV and SQLite files in a temporary
+demo folder. The Data browser screenshot uses that generated SQLite database.
+Images live in `docs/images/`: `notebook.png`, `data-browser.jpg`, and `plots.png`.
+They are captures of the app's actual interface.
