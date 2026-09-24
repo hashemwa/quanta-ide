@@ -820,26 +820,28 @@ struct InlineMathText: View {
     private var composed: Text {
         var out = Text(verbatim: "")
         for segment in segments {
+            let part: Text
             switch segment {
             case .text(let text):
-                out = out + Text(MarkdownView.inlineAttributed(text))
+                part = Text(MarkdownView.inlineAttributed(text))
             case .math(let tex):
                 if case .image(let image, let depth)? = rendered[tex] {
-                    out = out + Text(Image(nsImage: image)).baselineOffset(-depth)
+                    part = Text(Image(nsImage: image)).baselineOffset(-depth)
                 } else {
-                    out = out + Text(verbatim: "$\(tex)$")
+                    part = Text(verbatim: "$\(tex)$")
                         .font(.system(size: monoSize, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
             case .image(let alt, let url):
                 if let (_, image) = MarkdownView.loadImage(url: url, attachments: attachments,
                                                            baseDirectory: baseDirectory) {
-                    out = out + Text(Image(nsImage: image))
+                    part = Text(Image(nsImage: image))
                 } else {
-                    out = out + Text(verbatim: alt.isEmpty ? url : alt)
+                    part = Text(verbatim: alt.isEmpty ? url : alt)
                         .foregroundStyle(.secondary)
                 }
             }
+            out = Text("\(out)\(part)")
         }
         return out
     }

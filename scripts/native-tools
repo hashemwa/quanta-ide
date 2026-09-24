@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+unset SWIFT_DEBUG_INFORMATION_FORMAT SWIFT_DEBUG_INFORMATION_VERSION
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="$ROOT/.build/native-tools"
 mkdir -p "$CACHE"
@@ -39,7 +40,7 @@ case "${1:-prepare}" in
     fi
     mkdir -p "$APP/Contents/Frameworks"
     rm -f "$APP/Contents/MacOS/ty"
-    cp "$CACHE/duckdb/libduckdb.dylib" "$APP/Contents/Frameworks/libduckdb.dylib"
+    lipo "$CACHE/duckdb/libduckdb.dylib" -thin arm64 -output "$APP/Contents/Frameworks/libduckdb.dylib"
     TIMESTAMP=--timestamp=none
     if [[ "$SIGN" != "-" && ( "${CONFIGURATION:-}" == "Release" || "${ACTION:-}" == "install" ) ]]; then
       TIMESTAMP=--timestamp

@@ -79,7 +79,7 @@ struct MainWindowView: View {
 
     @ToolbarContentBuilder
     private var inspectorToolbar: some ToolbarContent {
-        if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
+        ToolbarSpacer(.flexible)
         ToolbarItem(placement: .primaryAction) {
             Button { app.toggleVariables() } label: {
                 Label("Variables", systemImage: "sidebar.trailing")
@@ -220,25 +220,15 @@ struct DetailSplitView: View {
 
     @ToolbarContentBuilder
     private var editorToolbar: some ToolbarContent {
-        if #available(macOS 26.0, *) {
-            ToolbarItemGroup(placement: .navigation) { HistoryControls() }
-            ToolbarSpacer(.flexible)
-            ToolbarItem(placement: .primaryAction) { KernelStatusMenu() }
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-            ToolbarItemGroup(placement: .primaryAction) { RunControls() }
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-            ToolbarItemGroup(placement: .primaryAction) {
-                splitButton
-                consoleButton
-            }
-        } else {
-            ToolbarItemGroup {
-                HistoryControls()
-                KernelStatusMenu()
-                RunControls()
-                splitButton
-                consoleButton
-            }
+        ToolbarItemGroup(placement: .navigation) { HistoryControls() }
+        ToolbarSpacer(.flexible)
+        ToolbarItem(placement: .primaryAction) { KernelStatusMenu() }
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+        ToolbarItemGroup(placement: .primaryAction) { RunControls() }
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+        ToolbarItemGroup(placement: .primaryAction) {
+            splitButton
+            consoleButton
         }
     }
 
@@ -517,4 +507,3 @@ struct KernelStatusMenu: View {
         return env.name
     }
 }
-

@@ -38,7 +38,7 @@ build() {
   mkdir -p "$CACHE_DIR"
   set +e
   xcodebuild build -project "$PROJECT" -scheme "$SCHEME" -configuration "$config" \
-    -destination 'platform=macOS' -quiet 2>&1 | tee "$log" | grep -E '(error|warning):'
+    -destination "platform=macOS,arch=$(uname -m)" -quiet 2>&1 | tee "$log" | grep -E '(error|warning):'
   local rc=${PIPESTATUS[0]}
   set -e
   if (( rc == 0 )); then
@@ -116,7 +116,7 @@ case "$cmd" in
     mkdir -p "$CACHE_DIR"
     set +e
     xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -configuration "$config" \
-      -destination 'platform=macOS' -only-testing:QuantaTests 2>&1 \
+      -destination "platform=macOS,arch=$(uname -m)" -only-testing:QuantaTests 2>&1 \
       | tee "$log" | grep -E "(failed|error:|XCTAssert|recorded an issue)"
     rc=${PIPESTATUS[0]}
     set -e

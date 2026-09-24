@@ -140,16 +140,8 @@ struct FloatingToolbar<Content: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Group {
-            if #available(macOS 26.0, *) {
-                GlassEffectContainer(spacing: 0) {
-                    strip.glassEffect(visible ? .regular : .identity, in: .capsule)
-                }
-            } else {
-                strip
-                    .background(Capsule().fill(.regularMaterial))
-                    .overlay(Capsule().stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
-            }
+        GlassEffectContainer(spacing: 0) {
+            strip.glassEffect(visible ? .regular : .identity, in: .capsule)
         }
         .background(ArrowCursorZone(active: visible))
         .opacity(visible ? 1 : 0)
@@ -493,21 +485,15 @@ private struct PaneTabsStyle: ViewModifier {
     let fillsWidth: Bool
 
     func body(content: Content) -> some View {
-        if #available(macOS 27.0, *) {
-            sized(content.pickerStyle(.tabs))
-        } else {
-            sized(content.pickerStyle(.segmented))
-        }
+        sized(content.pickerStyle(.tabs))
     }
 
     @ViewBuilder
     private func sized(_ picker: some View) -> some View {
         if !fillsWidth {
             picker.fixedSize()
-        } else if #available(macOS 26.0, *) {
-            picker.buttonSizing(.flexible).frame(maxWidth: .infinity)
         } else {
-            picker.frame(maxWidth: .infinity)
+            picker.buttonSizing(.flexible).frame(maxWidth: .infinity)
         }
     }
 }
@@ -817,17 +803,10 @@ private struct MenuAnchorView: NSViewRepresentable {
 
 private struct FilterBarControlStyle: ViewModifier {
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .controlSize(.large)
-        } else {
-            content
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
-                .controlSize(.large)
-        }
+        content
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .controlSize(.large)
     }
 }
 
@@ -1099,29 +1078,10 @@ final class CursorZoneView: NSView {
 @MainActor
 enum FloatingPanelSurface {
     static func make(content: NSView) -> NSView {
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView()
-            glass.style = .regular
-            glass.cornerRadius = DS.Radius.panel
-            glass.contentView = content
-            return glass
-        }
-        let effect = NSVisualEffectView()
-        effect.material = .menu
-        effect.state = .active
-        effect.wantsLayer = true
-        effect.layer?.cornerRadius = DS.Radius.panel
-        effect.layer?.masksToBounds = true
-        effect.layer?.borderWidth = 0.5
-        effect.layer?.borderColor = NSColor.separatorColor.cgColor
-        content.translatesAutoresizingMaskIntoConstraints = false
-        effect.addSubview(content)
-        NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: effect.topAnchor),
-            content.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
-            content.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
-        ])
-        return effect
+        let glass = NSGlassEffectView()
+        glass.style = .regular
+        glass.cornerRadius = DS.Radius.panel
+        glass.contentView = content
+        return glass
     }
 }

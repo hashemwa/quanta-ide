@@ -53,7 +53,7 @@ final class IDEWorkflowTests: XCTestCase {
 
         let copied = FileOperations.transfer([file], to: destination, copying: true) { _ in .keepBoth }
         XCTAssertEqual(copied.completed.count, 1)
-        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("data 1.txt")), "one")
+        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("data 1.txt"), encoding: .utf8), "one")
 
         let rejected = FileOperations.transfer([source], to: source.appendingPathComponent("nested"),
                                                copying: false) { _ in .cancel }

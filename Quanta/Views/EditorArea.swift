@@ -388,17 +388,11 @@ private struct TabReorderDropDelegate: DropDelegate {
 
     static func loadTabID(from info: DropInfo, deliver: @escaping (UUID) -> Void) -> Bool {
         let types: [UTType] = [.utf8PlainText, .plainText, .text]
-        guard let provider = info.itemProviders(for: types).first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.utf8PlainText.identifier, options: nil) { item, _ in
-            let raw: String?
-            if let data = item as? Data {
-                raw = String(data: data, encoding: .utf8)
-            } else if let string = item as? String {
-                raw = string
-            } else {
-                raw = (item as? NSString) as String?
-            }
-            guard let raw, let id = UUID(uuidString: raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+        guard let provider = info.itemProviders(for: types).first,
+              provider.canLoadObject(ofClass: NSString.self) else { return false }
+        provider.loadObject(ofClass: NSString.self) { item, _ in
+            guard let raw = item as? String,
+                  let id = UUID(uuidString: raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
             DispatchQueue.main.async { deliver(id) }
         }
         return true
