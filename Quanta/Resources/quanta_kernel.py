@@ -66,6 +66,9 @@ def _finite(v):
     return f if math.isfinite(f) else None
 
 def emit(obj):
+    if _current_id is not None and obj.get("id") == _current_id and obj.get("type") != "stream":
+        stdout_writer.flush()
+        stderr_writer.flush()
     if _current_id is not None and obj.get("id") == _current_id and "mime_bundle" not in obj:
         bundle = _portable_output(obj)
         if bundle:
@@ -1086,9 +1089,7 @@ def _column_stats(column):
         stats["min"] = _clean(str(column.min()))
         stats["max"] = _clean(str(column.max()))
     if count and kind in "iuf":
-        mean = float(column.mean())
-        if mean == mean:
-            stats["mean"] = mean
+        stats["mean"] = _finite(column.mean())
     return stats
 
 def handle_dfsummary(msg):

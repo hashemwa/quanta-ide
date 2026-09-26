@@ -112,7 +112,7 @@ final class DataQueryCancellation: @unchecked Sendable {
 }
 
 protocol LocalDataConnection {
-    func query(_ sql: String, limit: Int, cancellation: DataQueryCancellation) throws -> DataPage
+    func query(_ sql: String, limit: Int, columnLimit: Int, cancellation: DataQueryCancellation) throws -> DataPage
 }
 
 enum LocalDataEngine {
@@ -133,7 +133,7 @@ enum LocalDataEngine {
         let sql = source.kind == .sqlite
             ? "SELECT 'main', name, type FROM sqlite_schema WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name"
             : "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog') ORDER BY table_schema, table_name"
-        let page = try connection.query(sql, limit: 1001, cancellation: cancellation)
+        let page = try connection.query(sql, limit: 1001, columnLimit: 3, cancellation: cancellation)
         guard page.rows.count <= 1000 else { throw QuantaError("This database has more than 1,000 tables. Open a narrower database to browse it.") }
         return page.rows.compactMap { row in
             guard row.count == 3, let schema = row[0], let name = row[1], let type = row[2] else { return nil }
@@ -151,27 +151,35 @@ enum LocalDataEngine {
         let connection = try connection(source, cancellation: cancellation)
         var query = sql.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.hasSuffix(";") { query.removeLast() }
-        var parts = ["count(*)"]
-        for (index, column) in columns.enumerated() {
-            let name = identifier(column)
-            let numeric = types.indices.contains(index) && isNumeric(types[index])
-            parts += ["count(\(name))", "count(DISTINCT \(name))", "min(\(name))", "max(\(name))",
-                      numeric ? "avg(\(name))" : "NULL"]
-        }
-        let aggregate = "SELECT \(parts.joined(separator: ", ")) FROM (\n\(query)\n) AS quanta_summary"
         if let duck = connection as? DuckDataConnection { try duck.validate(query) }
-        let result = try connection.query(aggregate, limit: 1, cancellation: cancellation)
-        guard let row = result.rows.first, row.count == 1 + columns.count * 5,
-              let total = row[0].flatMap(Int.init) else { throw QuantaError("Could not summarize this table.") }
-        let stats = columns.indices.map { index -> DataColumnStats in
-            let base = 1 + index * 5
-            let count = row[base].flatMap(Int.init) ?? 0
-            return DataColumnStats(count: count, missing: total - count,
-                                   distinct: row[base + 1].flatMap(Int.init) ?? 0,
-                                   min: row[base + 2], max: row[base + 3],
-                                   mean: row[base + 4].flatMap(Double.init))
+        var totalRows: Int?
+        var stats: [DataColumnStats] = []
+        for start in stride(from: 0, to: max(1, columns.count), by: 32) {
+            try cancellation.check()
+            let indices = start..<min(start + 32, columns.count)
+            var parts = ["count(*)"]
+            for index in indices {
+                let name = identifier(columns[index])
+                let numeric = types.indices.contains(index) && isNumeric(types[index])
+                parts += ["count(\(name))", "count(DISTINCT \(name))", "min(\(name))", "max(\(name))",
+                          numeric ? "avg(\(name))" : "NULL"]
+            }
+            let aggregate = "SELECT \(parts.joined(separator: ", ")) FROM (\n\(query)\n) AS quanta_summary"
+            let result = try connection.query(aggregate, limit: 1, columnLimit: 1 + indices.count * 5, cancellation: cancellation)
+            guard let row = result.rows.first, row.count == 1 + indices.count * 5,
+                  let total = row[0].flatMap(Int.init) else { throw QuantaError("Could not summarize this table.") }
+            if let totalRows, totalRows != total { throw QuantaError("The table changed while its columns were being summarized. Reload to retry.") }
+            totalRows = total
+            stats += indices.enumerated().map { offset, _ in
+                let base = 1 + offset * 5
+                let count = row[base].flatMap(Int.init) ?? 0
+                return DataColumnStats(count: count, missing: total - count,
+                                       distinct: row[base + 1].flatMap(Int.init) ?? 0,
+                                       min: row[base + 2], max: row[base + 3],
+                                       mean: row[base + 4].flatMap(Double.init))
+            }
         }
-        return DataSummary(totalRows: total, columns: stats)
+        return DataSummary(totalRows: totalRows ?? 0, columns: stats)
     }
 
     static func page(_ source: LocalDataSource, sql: String, offset: Int, cancellation: DataQueryCancellation) throws -> DataPage {
@@ -181,7 +189,7 @@ enum LocalDataEngine {
         guard !query.isEmpty else { throw QuantaError("Enter a SELECT query.") }
         let bounded = "SELECT * FROM (\n\(query)\n) AS quanta_result LIMIT \(pageSize + 1) OFFSET \(max(0, offset))"
         if let duck = connection as? DuckDataConnection { try duck.validate(query) }
-        let page = try connection.query(bounded, limit: pageSize + 1, cancellation: cancellation)
+        let page = try connection.query(bounded, limit: pageSize + 1, columnLimit: 256, cancellation: cancellation)
         return DataPage(columns: page.columns, types: page.types, rows: Array(page.rows.prefix(pageSize)), offset: offset, hasMore: page.rows.count > pageSize)
     }
 }
@@ -199,12 +207,11 @@ private final class SQLiteDataConnection: LocalDataConnection {
         }
         sqlite3_busy_timeout(db, 500)
         sqlite3_limit(db, SQLITE_LIMIT_LENGTH, Int32(LocalDataEngine.maxBytes))
-        sqlite3_limit(db, SQLITE_LIMIT_COLUMN, 256)
         if let db { cancellation.install { sqlite3_interrupt(db) } }
     }
     deinit { cancellation.install(nil); sqlite3_close(db) }
 
-    func query(_ sql: String, limit: Int, cancellation: DataQueryCancellation) throws -> DataPage {
+    func query(_ sql: String, limit: Int, columnLimit: Int, cancellation: DataQueryCancellation) throws -> DataPage {
         try cancellation.check()
         var statement: OpaquePointer?
         let valid = sql.withCString { pointer -> Bool in
@@ -217,6 +224,7 @@ private final class SQLiteDataConnection: LocalDataConnection {
             throw QuantaError("Read-only query failed: \(String(cString: sqlite3_errmsg(db)))")
         }
         let count = sqlite3_column_count(statement)
+        guard count <= columnLimit else { throw QuantaError("Select at most \(columnLimit) columns for a preview.") }
         let columns = (0..<count).map { String(cString: sqlite3_column_name(statement, $0)) }
         let types = (0..<count).map { sqlite3_column_decltype(statement, $0).map(String.init(cString:)) ?? "value" }
         var rows: [[String?]] = [], bytes = 0
@@ -267,11 +275,11 @@ private final class DuckDataConnection: LocalDataConnection {
     func validate(_ sql: String) throws {
         guard duckValidate(handle, sql) == 0 else { throw QuantaError(duckError(handle).map(String.init(cString:)) ?? "Enter a read-only SELECT query.") }
     }
-    func query(_ sql: String, limit: Int, cancellation: DataQueryCancellation) throws -> DataPage {
+    func query(_ sql: String, limit: Int, columnLimit: Int, cancellation: DataQueryCancellation) throws -> DataPage {
         try cancellation.check()
         guard duckQuery(handle, "DESCRIBE (\n\(sql)\n)") == 0 else { throw QuantaError(duckError(handle).map(String.init(cString:)) ?? "Query failed") }
         let count = Int(duckRows(handle))
-        guard count <= 256 else { throw QuantaError("Select at most 256 columns for a preview.") }
+        guard count <= columnLimit else { throw QuantaError("Select at most \(columnLimit) columns for a preview.") }
         var columns: [String] = [], types: [String] = []
         for row in 0..<count {
             columns.append(try value(column: 0, row: row) ?? "Column \(row + 1)")

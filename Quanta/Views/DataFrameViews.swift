@@ -115,9 +115,13 @@ final class DataFrameRowView: NSTableRowView {
 
 enum DataFrameClipboard {
     static func tsv(header: [String]? = nil, rows: [[String]]) -> String {
+        func quote(_ value: String) -> String {
+            guard value.unicodeScalars.contains(where: { $0 == "\t" || $0 == "\r" || $0 == "\n" || $0 == "\"" }) else { return value }
+            return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
         var lines: [String] = []
-        if let header { lines.append(header.joined(separator: "\t")) }
-        lines.append(contentsOf: rows.map { $0.joined(separator: "\t") })
+        if let header { lines.append(header.map(quote).joined(separator: "\t")) }
+        lines.append(contentsOf: rows.map { $0.map(quote).joined(separator: "\t") })
         return lines.joined(separator: "\n")
     }
 
@@ -144,16 +148,22 @@ enum DataFrameClipboard {
         let items = values.map { value -> String in
             if bare {
                 switch value {
-                case "", "<NA>", "NaT": return "None"
+                case "", "<NA>", "NaT", "NULL", "null": return "None"
                 case "NaN": return "float('nan')"
                 case "inf": return "float('inf')"
                 case "-inf": return "float('-inf')"
+                case "true": return "True"
+                case "false": return "False"
                 default: return value
                 }
             }
             let escaped = value
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "'", with: "\\'")
+                .replacingOccurrences(of: "\n", with: "\\n")
+                .replacingOccurrences(of: "\r", with: "\\r")
+                .replacingOccurrences(of: "\t", with: "\\t")
+                .replacingOccurrences(of: "\0", with: "\\x00")
             return "'" + escaped + "'"
         }
         return "[" + items.joined(separator: ", ") + "]"

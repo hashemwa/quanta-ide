@@ -25,7 +25,10 @@ limited to 1,000 tables/views. Queries run on fresh connections; an externally l
 database reports the engine error. Paging reruns a bounded query, so an external writer
 can change later pages. Add ORDER BY when stable ordering matters. Header detection
 currently assumes the first CSV/TSV row contains column names; custom reader options
-can be entered in SQL. Column statistics are explicitly page-level.
+can be entered in SQL. Column statistics cover the whole filtered query result,
+using aggregate queries in batches of at most 32 columns to bound memory use.
+All batches share the operation's cancellation token and 10-second deadline;
+inconsistent row counts across batches are rejected if the source changes.
 
 The loading-code action opens a new unsaved notebook. SQLite and DuckDB loading code
 uses a read-only connection and the executed SQL. CSV/TSV/Parquet code loads the source

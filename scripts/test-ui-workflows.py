@@ -26,6 +26,21 @@ def exchange(messages):
 
 
 class InspectionTests(unittest.TestCase):
+    def test_dataframe_summary_nonfinite_means_are_valid_json(self):
+        try:
+            import pandas
+        except ImportError:
+            self.skipTest("pandas is not installed in this interpreter")
+        messages = exchange([
+            {"id": "setup", "op": "execute", "code": "import pandas as pd\ndf = pd.DataFrame({'positive': [float('inf'), 1], 'negative': [float('-inf'), 1], 'overflow': [1e308, 1e308]})"},
+            {"id": "summary", "op": "dfsummary", "name": "df"},
+        ])
+        summary = next(m for m in messages if m.get("type") == "dfsummary")
+        json.dumps(summary, allow_nan=False)
+        self.assertEqual([column["mean"] for column in summary["columns"]], [None, None, None])
+        self.assertEqual(summary["columns"][0]["max"], "inf")
+        self.assertEqual(summary["columns"][1]["min"], "-inf")
+
     def test_execution_reports_directory_after_chdir_and_errors(self):
         with tempfile.TemporaryDirectory() as directory:
             messages = exchange([
@@ -167,6 +182,17 @@ class RichOutputTests(unittest.TestCase):
 
 
 class NotebookCompatTests(unittest.TestCase):
+    def test_buffered_streams_precede_results_and_errors(self):
+        messages = exchange([
+            {"id": "result", "op": "execute", "code": "print('before result', end=''); 42"},
+            {"id": "error", "op": "execute", "code": "print('before error', end=''); raise ValueError('failure')"},
+            {"id": "stderr", "op": "execute", "code": "import sys; sys.stderr.write('before exit'); exit(1)"},
+        ])
+        for identifier, expected in [("result", "result"), ("error", "error"), ("stderr", "error")]:
+            with self.subTest(identifier=identifier):
+                outputs = [m for m in messages if m.get("id") == identifier]
+                self.assertEqual([m["type"] for m in outputs], ["stream", expected, "done"])
+
     def test_matplotlib_magic_is_ignored(self):
         messages = exchange([
             {"id": "imports", "op": "execute",
@@ -256,8 +282,8 @@ class NotebookCompatTests(unittest.TestCase):
         except ImportError:
             self.skipTest("matplotlib is not installed")
         messages = exchange([
+            {"id": "setup", "op": "execute", "code": "import matplotlib.pyplot as plt"},
             {"id": "plots", "op": "execute", "code": "\n".join([
-                "import matplotlib.pyplot as plt",
                 "print('first')",
                 "plt.plot([1, 2], label='one')",
                 "plt.legend()",

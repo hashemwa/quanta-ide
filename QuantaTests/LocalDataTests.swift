@@ -82,6 +82,35 @@ final class LocalDataTests: XCTestCase {
         XCTAssertEqual(summary.columns[1].count, 2)
     }
 
+    func testWideResultsHaveSummariesAndStillEnforceThePreviewColumnLimit() throws {
+        for source in [try sqlite(), try csv()] {
+            let sql = "SELECT " + (0..<256).map { "\($0) AS column_\($0)" }.joined(separator: ", ")
+            let page = try LocalDataEngine.page(source, sql: sql, offset: 0, cancellation: DataQueryCancellation())
+            let summary = try LocalDataEngine.summary(source, sql: sql, columns: page.columns, types: page.types,
+                                                      cancellation: DataQueryCancellation())
+            XCTAssertEqual(summary.totalRows, 1)
+            XCTAssertEqual(summary.columns.count, 256)
+            XCTAssertEqual(summary.columns.last?.min, "255")
+            XCTAssertEqual(summary.columns.last?.max, "255")
+            XCTAssertEqual(summary.columns.last?.count, 1)
+            XCTAssertThrowsError(try LocalDataEngine.page(source, sql: sql + ", 256 AS column_256", offset: 0,
+                                                        cancellation: DataQueryCancellation()))
+        }
+    }
+
+    func testSQLiteCanSelectNarrowResultsFromWideTables() throws {
+        let source = try sqlite()
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(source.url.path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        let columns = (0..<300).map { "column_\($0) INTEGER" }.joined(separator: ", ")
+        XCTAssertEqual(sqlite3_exec(database, "CREATE TABLE wide (\(columns)); INSERT INTO wide (column_299) VALUES (7)", nil, nil, nil), SQLITE_OK)
+        let page = try LocalDataEngine.page(source, sql: "SELECT column_299 FROM wide", offset: 0,
+                                          cancellation: DataQueryCancellation())
+        XCTAssertEqual(page.columns, ["column_299"])
+        XCTAssertEqual(page.rows, [["7"]])
+    }
+
     func testKernelDataFrameSummaryParsesIntoTheSameStats() throws {
         let summary = try XCTUnwrap(DataSummary(["total_rows": 4, "columns": [
             ["count": 3, "missing": 1, "distinct": 3, "min": "3.0", "max": "20.0", "mean": 10.333],
