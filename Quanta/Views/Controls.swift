@@ -757,9 +757,9 @@ struct InputCard: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(RoundedRectangle(cornerRadius: DS.Radius.card)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.control, style: .continuous)
                 .fill(Color(nsColor: .textBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.card)
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.control, style: .continuous)
                 .stroke(focused ? Color.accentColor : Color(nsColor: .separatorColor),
                         lineWidth: DS.Layout.hairline))
             .animation(reduceMotion ? nil : DS.Motion.quick, value: focused)

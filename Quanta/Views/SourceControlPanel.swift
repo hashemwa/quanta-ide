@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 struct SourceControlPanel: View {
-    @ObservedObject private var app = AppState.shared
-    @ObservedObject private var git = AppState.shared.git
-    @ObservedObject private var draft = AppState.shared.git.draft
+    @ObservedObject private var app: AppState
+    @ObservedObject private var git: SourceControlState
+    @ObservedObject private var draft: CommitDraft
     @FocusState private var messageFocused: Bool
     @State private var scope = GitChangeScope.all
     @State private var selectedChangeID: String?
@@ -12,6 +12,12 @@ struct SourceControlPanel: View {
     @State private var stagedExpanded = true
     @State private var changesExpanded = true
     @State private var filenameFilter = ""
+
+    init(app: AppState = .shared) {
+        self.app = app
+        self.git = app.git
+        self.draft = app.git.draft
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -81,9 +87,7 @@ struct SourceControlPanel: View {
         if !snapshot.hiddenNotebooks.isEmpty || snapshot.truncatedCount > 0 {
             footer(snapshot)
         }
-        if !snapshot.isClean {
-            commitBox(snapshot)
-        }
+        commitBox(snapshot)
         filterBar
     }
 
@@ -162,6 +166,7 @@ struct SourceControlPanel: View {
                     .foregroundStyle(.tertiary)
             }
         }
+        .accessibilityIdentifier("git.branch")
     }
 
     private func branchHelp(_ snapshot: GitSnapshot) -> String {
@@ -194,6 +199,7 @@ struct SourceControlPanel: View {
                 .inputCard(focused: messageFocused)
                 .focused($messageFocused)
                 .accessibilityLabel("Commit message")
+                .accessibilityIdentifier("git.commit.message")
                 .onChange(of: draft.focusRequest, initial: true) { _, value in
                     guard value != draft.handledFocusRequest else { return }
                     draft.handledFocusRequest = value
@@ -202,22 +208,42 @@ struct SourceControlPanel: View {
             HStack(spacing: DS.Space.s) {
                 branchMenu(snapshot)
                     .disabled(git.isBusy)
-                    .fixedSize()
-                Spacer(minLength: DS.Space.s)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if snapshot.ahead > 0 || snapshot.behind > 0 {
+                    Text(syncCounts(snapshot))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                        .help(syncHelp(snapshot))
+                        .accessibilityLabel(syncHelp(snapshot))
+                        .accessibilityIdentifier("git.sync")
+                }
+            }
+            HStack(spacing: DS.Space.s) {
                 Button("Pull", systemImage: "arrow.down") { app.pull() }
+                    .accessibilityIdentifier("git.pull")
                     .disabled(!git.canPull)
                     .help(pullHelp(snapshot))
                     .fixedSize()
                 Button("Push", systemImage: "arrow.up") { app.push() }
+                    .accessibilityIdentifier("git.push")
                     .disabled(!git.canPush)
                     .help(pushHelp(snapshot))
                     .fixedSize()
+                Spacer(minLength: 0)
                 commitButton(snapshot)
             }
             .controlSize(.small)
         }
         .padding(.horizontal, DS.Space.bar)
         .padding(.vertical, DS.Space.m)
+    }
+
+    private func syncCounts(_ snapshot: GitSnapshot) -> String {
+        var parts: [String] = []
+        if snapshot.ahead > 0 { parts.append("↑ \(snapshot.ahead)") }
+        if snapshot.behind > 0 { parts.append("↓ \(snapshot.behind)") }
+        return parts.joined(separator: "  ")
     }
 
     private func pullHelp(_ snapshot: GitSnapshot) -> String {
@@ -237,6 +263,7 @@ struct SourceControlPanel: View {
 
     private func commitButton(_ snapshot: GitSnapshot) -> some View {
         Button("Commit", systemImage: "checkmark") { app.commit() }
+            .accessibilityIdentifier("git.commit")
             .disabled(!canCommit(snapshot))
             .help(commitHelp(snapshot))
             .fixedSize()
