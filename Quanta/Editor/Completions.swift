@@ -13,7 +13,8 @@ final class EditorRegistry {
 
     func view(for id: UUID) -> QuantaTextView? {
         let views = map[id]?.allObjects ?? []
-        return views.first { $0.window?.firstResponder === $0 }
+        return views.first { $0.window?.firstResponder === $0 && !$0.isHiddenOrHasHiddenAncestor }
+            ?? views.first { $0.window != nil && !$0.isHiddenOrHasHiddenAncestor }
             ?? views.first { $0.window != nil } ?? views.first
     }
 

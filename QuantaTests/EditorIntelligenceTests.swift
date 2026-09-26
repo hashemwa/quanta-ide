@@ -4,6 +4,24 @@ import XCTest
 
 @MainActor
 final class EditorIntelligenceTests: XCTestCase {
+    func testRegistryPrefersTheVisibleSplitEditorOverAHiddenTab() throws {
+        let id = UUID()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let window = NSWindow(contentRect: container.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = container
+        defer { window.close() }
+        let editors = [CodeEditorFactory.makeTextView(), CodeEditorFactory.makeTextView()]
+        for editor in editors {
+            container.addSubview(editor)
+            EditorRegistry.shared.register(editor, for: id)
+        }
+        for visible in editors {
+            for editor in editors { editor.isHidden = editor !== visible }
+            XCTAssertTrue(EditorRegistry.shared.view(for: id) === visible)
+        }
+    }
+
     func testImportInsertionAtCompletionStart() throws {
         var completion = CodeCompletion(label: "Path", range: NSRange(location: 0, length: 4))
         completion.additionalEdits = [CompletionEdit(range: NSRange(location: 0, length: 0), text: "from pathlib import Path\n")]

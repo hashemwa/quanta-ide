@@ -66,6 +66,50 @@ final class NotebookCellStyleTests: XCTestCase {
         XCTAssertEqual(rgba(try XCTUnwrap(cardLayer(of: code)).borderColor), rgba(NSColor.separatorColor))
     }
 
+    func testOutputUpdatesPreserveTheFocusedEditorAndSelection() throws {
+        let cellView = try XCTUnwrap(cellView(code))
+        let editor = try XCTUnwrap(first(QuantaTextView.self, in: cellView))
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        let selection = NSRange(location: 1, length: 2)
+        editor.setSelectedRange(selection)
+
+        for update in [
+            { self.code.outputs = [CellOutput(kind: .stream(name: "stdout", text: "1\n"))] },
+            { self.code.isOutputCollapsed = true },
+            { self.code.isOutputCollapsed = false },
+            { self.code.outputs = [] },
+        ] {
+            update()
+            settle()
+            XCTAssertTrue(first(QuantaTextView.self, in: cellView) === editor)
+            XCTAssertTrue(window.firstResponder === editor)
+            XCTAssertEqual(editor.selectedRange(), selection)
+        }
+    }
+
+    func testCollapsedSourcePreviewTracksSourceChanges() throws {
+        code.isSourceCollapsed = true
+        settle()
+        let cellView = try XCTUnwrap(cellView(code))
+        code.source = "updated = 42"
+        settle()
+        XCTAssertTrue(all(NSButton.self, in: cellView).contains { $0.title.contains("updated = 42") })
+        XCTAssertFalse(all(NSButton.self, in: cellView).contains { $0.title.contains("x = 1") })
+    }
+
+    func testCollapsedSourcePreviewFollowsFontSizeChanges() throws {
+        let cell = NotebookCell(type: .code, source: "value = 42")
+        cell.isSourceCollapsed = true
+        let notebook = Notebook(cells: [cell], metadata: [:])
+        let document = Document(notebook: notebook, url: nil)
+        let view = NotebookCellAppKitView(frame: NSRect(x: 0, y: 0, width: 600, height: 100))
+        for size in [12.0, 20.0] {
+            view.configure(cell: cell, document: document, notebook: notebook, monoFontSize: size)
+            let preview = try XCTUnwrap(all(NSButton.self, in: view).first { $0.title.contains("value = 42") })
+            XCTAssertEqual(preview.font?.pointSize, size - 1)
+        }
+    }
+
     func testProseBindsToTheCodeBelowIt() throws {
         let frames = try [title, caption, code, closing].map { try XCTUnwrap(cellView($0)).frame }
         XCTAssertEqual(frames[1].minY - frames[0].maxY, DS.Layout.notebookProseSpacing, accuracy: 0.5)

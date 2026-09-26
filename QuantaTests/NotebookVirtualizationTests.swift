@@ -60,9 +60,16 @@ final class NotebookVirtualizationTests: XCTestCase {
         hosting.rootView = stage(scrollRequest: cells[1].id)
         settle()
         let rebuilt = try XCTUnwrap(EditorRegistry.shared.view(for: cells[1].id))
-        XCTAssertFalse(rebuilt === editor)
         XCTAssertEqual(rebuilt.undoManager?.canUndo, true)
         XCTAssertTrue(cells[1].source.hasPrefix("x"))
+        rebuilt.undoManager?.undo()
+        settle()
+        XCTAssertEqual(cells[1].source, "value_1 = 1\nprint(value_1)")
+        XCTAssertEqual(rebuilt.string, cells[1].source)
+        rebuilt.undoManager?.redo()
+        settle()
+        XCTAssertEqual(cells[1].source, "xvalue_1 = 1\nprint(value_1)")
+        XCTAssertEqual(rebuilt.string, cells[1].source)
     }
 
     func testCellsBuiltLaterKeepTheNotebookRhythm() throws {
@@ -76,6 +83,29 @@ final class NotebookVirtualizationTests: XCTestCase {
             let gap = below.frame.minY - above.frame.maxY
             XCTAssertEqual(gap, NotebookCanvas.spacing(after: cells[upper].cellType), accuracy: 0.5)
         }
+    }
+
+    func testRemovingMostCellsWhileScrolledToTheBottomKeepsTheCanvasValid() throws {
+        hosting.rootView = stage(scrollRequest: cells[399].id)
+        settle()
+        document.notebook?.cells = Array(cells.prefix(3))
+        settle()
+        let scroll = try XCTUnwrap(scrollView())
+        XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 0.5)
+        XCTAssertEqual(Set(cellViews().compactMap(\.cellID)), Set(cells.prefix(3).map(\.id)))
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(scroll.documentView).frame.height, scroll.contentView.bounds.height)
+    }
+
+    func testRemovingCellsAboveTheViewportPreservesTheVisibleAnchor() throws {
+        hosting.rootView = stage(scrollRequest: cells[301].id)
+        settle()
+        let clip = try XCTUnwrap(scrollView()).contentView
+        let anchor = try XCTUnwrap(cellViews().filter { $0.frame.maxY > clip.bounds.minY }
+            .min { $0.frame.minY < $1.frame.minY })
+        let before = anchor.frame.minY - clip.bounds.minY
+        document.notebook?.cells.removeFirst(100)
+        settle()
+        XCTAssertEqual(anchor.frame.minY - clip.bounds.minY, before, accuracy: 0.5)
     }
 
     func testIdlePrefetchBuildsTheNextScreenWithoutMovingContent() throws {

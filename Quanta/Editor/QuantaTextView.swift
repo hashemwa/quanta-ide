@@ -109,6 +109,14 @@ final class QuantaTextView: NSTextView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 
+    override func setMarkedText(_ value: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        completionWork?.cancel()
+        completionGeneration += 1
+        CompletionPanel.shared.hide()
+        super.setMarkedText(value, selectedRange: selectedRange, replacementRange: replacementRange)
+        onLayoutChange?()
+    }
+
     override func mouseDown(with event: NSEvent) {
         completionWork?.cancel()
         completionGeneration += 1

@@ -2,6 +2,11 @@ import AppKit
 import Combine
 import SwiftUI
 
+final class NotebookCellEditorState {
+    let undoManager = UndoManager()
+    var editor: QuantaTextView?
+}
+
 final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource {
     var onSizeChange: (() -> Void)?
 
@@ -28,7 +33,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private var editorHeightConstraint: NSLayoutConstraint?
     private var trackingArea: NSTrackingArea?
     private var cancellables: Set<AnyCancellable> = []
-    private var editorUndoManager = UndoManager()
+    private var editorState = NotebookCellEditorState()
     private var cell: NotebookCell?
     var cellID: UUID? { cell?.id }
     private weak var document: Document?
@@ -70,9 +75,10 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func configure(cell: NotebookCell, document: Document, notebook: Notebook,
-                   monoFontSize: CGFloat, undoManager: UndoManager? = nil) {
-        if let undoManager { editorUndoManager = undoManager }
+                   monoFontSize: CGFloat, editorState: NotebookCellEditorState? = nil) {
+        if let editorState { self.editorState = editorState }
         let changedCell = self.cell !== cell || self.document !== document || self.notebook !== notebook
+        let fontChanged = self.monoFontSize != monoFontSize
         self.cell = cell
         self.document = document
         self.notebook = notebook
@@ -83,7 +89,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             lastSource = ""
             bindModel()
         }
-        refresh(force: changedCell)
+        refresh(force: changedCell, fontChanged: fontChanged)
     }
 
     func resetForReuse() {
@@ -91,6 +97,15 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         hovering = false
         editorFocused = false
         isSelected = false
+        editorHeightConstraint?.isActive = false
+        editorState.editor?.removeFromSuperview()
+        editorState.editor?.delegate = nil
+        editorState.editor?.onFocusChange = nil
+        editorState.editor?.onCommand = nil
+        editorState.editor?.onLayoutChange = nil
+        if !editorState.undoManager.canUndo && !editorState.undoManager.canRedo {
+            editorState.editor = nil
+        }
         cell = nil
         document = nil
         notebook = nil
@@ -293,33 +308,41 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             .store(in: &cancellables)
     }
 
-    private func refresh(force: Bool) {
+    private func refresh(force: Bool, fontChanged: Bool = false) {
         guard let cell else { return }
         let presentation = Presentation(type: cell.cellType.rawValue,
                                         sourceCollapsed: cell.isSourceCollapsed,
                                         outputCollapsed: cell.isOutputCollapsed,
                                         editingMarkdown: cell.isEditingMarkdown,
                                         hasOutputs: !cell.outputs.isEmpty)
-        if force || presentation != lastPresentation {
+        let sourceChanged = force || presentation.type != lastPresentation.type
+            || presentation.sourceCollapsed != lastPresentation.sourceCollapsed
+            || presentation.editingMarkdown != lastPresentation.editingMarkdown
+            || (fontChanged && editor == nil)
+        let outputChanged = force || fontChanged || presentation.type != lastPresentation.type
+            || presentation.outputCollapsed != lastPresentation.outputCollapsed
+            || presentation.hasOutputs != lastPresentation.hasOutputs
+        if sourceChanged {
             rebuildSource()
-            rebuildOutput()
-            lastPresentation = presentation
             lastSource = cell.source
         } else if cell.source != lastSource {
             if let editor, !editor.hasMarkedText(), editor.string != cell.source {
                 let selection = editor.selectedRange()
                 editor.string = cell.source
-                editorUndoManager.removeAllActions()
+                editorState.undoManager.removeAllActions()
                 if let storage = editor.textStorage { PythonHighlighter.highlight(storage) }
                 editor.setSelectedRange(NSRange(location: min(selection.location,
                                                                 (editor.string as NSString).length),
                                                 length: 0))
                 scheduleEditorMeasurement(force: true)
-            } else if cell.cellType == .markdown && !cell.isEditingMarkdown {
+            } else if cell.isSourceCollapsed || (cell.cellType == .markdown && !cell.isEditingMarkdown) {
                 rebuildSource()
             }
             lastSource = cell.source
         }
+        if outputChanged { rebuildOutput() }
+        if fontChanged { scheduleEditorMeasurement(force: true) }
+        lastPresentation = presentation
         refreshStatus()
         refreshSelection()
         onSizeChange?()
@@ -327,6 +350,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
 
     private func rebuildSource() {
         guard let cell else { return }
+        editorHeightConstraint?.isActive = false
         editor = nil
         editorHeightConstraint = nil
         editorFocused = false
@@ -366,6 +390,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         let editor = makeEditor(for: cell)
         self.editor = editor
         let constraint = editor.heightAnchor.constraint(equalToConstant: max(30, cell.editorHeight))
+        constraint.priority = .defaultHigh
         constraint.isActive = true
         editorHeightConstraint = constraint
         sourceCard.setContent(editor, insets: Self.wellInsets)
@@ -387,14 +412,18 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     }
 
     private func makeEditor(for cell: NotebookCell) -> QuantaTextView {
-        let editor = CodeEditorFactory.makeTextView()
+        let editor = editorState.editor ?? CodeEditorFactory.makeTextView()
+        editorState.editor = editor
         editor.translatesAutoresizingMaskIntoConstraints = false
         editor.isVerticallyResizable = true
         editor.isHorizontallyResizable = false
         editor.autoresizingMask = []
         editor.drawsBackground = false
         editor.delegate = self
-        editor.string = cell.source
+        if editor.string != cell.source {
+            editor.string = cell.source
+            editorState.undoManager.removeAllActions()
+        }
         if let storage = editor.textStorage { PythonHighlighter.highlight(storage) }
         EditorRegistry.shared.register(editor, for: cell.id)
         editor.onCommand = { [weak self] command in
@@ -598,12 +627,13 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private func measureEditor(force: Bool) {
         guard let editor, let cell, let layoutManager = editor.layoutManager,
               let container = editor.textContainer else { return }
-        let width = editor.bounds.width
+        let width = editor.bounds.width - editor.textContainerInset.width * 2
         guard width > 0 else { return }
         container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: container)
         let used = layoutManager.usedRect(for: container)
-        let height = max(used.height + editor.textContainerInset.height * 2 + 2, 30)
+        let textHeight = max(used.maxY, layoutManager.extraLineFragmentRect.maxY)
+        let height = max(textHeight + editor.textContainerInset.height * 2 + 2, 30)
         guard force || abs(height - (editorHeightConstraint?.constant ?? 0)) > 0.5 else { return }
         editorHeightConstraint?.constant = height
         if abs(cell.editorHeight - height) > 0.5 { cell.editorHeight = height }
@@ -611,7 +641,9 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     }
 
     func textDidChange(_ notification: Notification) {
-        guard let editor, let cell, let document, !editor.hasMarkedText() else { return }
+        guard let editor, let cell, let document else { return }
+        scheduleEditorMeasurement(force: true)
+        guard !editor.hasMarkedText() else { return }
         if cell.source != editor.string {
             cell.source = editor.string
             if !document.isDirty { document.isDirty = true }
@@ -620,10 +652,9 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             PythonHighlighter.highlight(storage, editedRange: editor.lastEditedRange)
         }
         lastSource = editor.string
-        scheduleEditorMeasurement(force: true)
     }
 
-    func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
+    func undoManager(for view: NSTextView) -> UndoManager? { editorState.undoManager }
 
     private func selectCell() {
         guard let cell, let notebook, let document else { return }

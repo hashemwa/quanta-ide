@@ -278,8 +278,8 @@ struct NDArrayView: View {
     @Environment(\.monoFontSize) private var monoSize
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            WrappingHStack {
                 Pill("ndarray \(payload.shapeLabel)", tone: .strong, monospaced: true)
                     .help("shape (\(payload.shape.map(String.init).joined(separator: ", "))) · \(payload.dtype)")
                 Pill(payload.dtype, monospaced: true)

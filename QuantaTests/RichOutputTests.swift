@@ -28,9 +28,10 @@ final class RichOutputTests: XCTestCase {
         let observer = LoadObserver(finished)
         let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 500, height: 300),
                              configuration: RichOutputView.configuration())
+        let titleReady = keyValueObservingExpectation(for: view, keyPath: "title", expectedValue: "safe")
         view.navigationDelegate = observer
         view.loadHTMLString(RichOutput.safeDocument("<title>safe</title><script>document.title='unsafe'</script><p>visible</p>"), baseURL: nil)
-        await fulfillment(of: [finished], timeout: 15)
+        await fulfillment(of: [finished, titleReady], timeout: 15)
         XCTAssertEqual(view.title, "safe")
         XCTAssertEqual(view.url?.absoluteString, "about:blank")
     }

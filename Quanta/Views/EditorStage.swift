@@ -77,7 +77,7 @@ struct EditorStage: NSViewRepresentable {
         case .notebook:
             guard let notebook = document.notebook else { return nil }
             let canvas = DocumentViewCache.shared.canvas(for: key) {
-                NotebookCanvas(document: document, notebook: notebook, monoFontSize: monoFontSize)
+                NotebookCanvas(document: document, notebook: notebook, monoFontSize: monoFontSize, pane: pane)
             }
             canvas.update(document: document, notebook: notebook, monoFontSize: monoFontSize,
                           scrollRequest: scrollRequest)

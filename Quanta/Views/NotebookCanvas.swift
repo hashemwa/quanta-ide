@@ -15,12 +15,14 @@ final class NotebookCanvas: DocumentCanvas {
     private var document: Document
     private var notebook: Notebook
     private var monoFontSize: CGFloat
+    private let pane: EditorPane
     private var cells: [NotebookCell] = []
     private var cellIDs: [UUID] = []
     private var views: [UUID: NotebookCellAppKitView] = [:]
     private var heights: [UUID: CGFloat] = [:]
-    private var undoManagers: [UUID: UndoManager] = [:]
+    private var editorStates: [UUID: NotebookCellEditorState] = [:]
     private var offsets: [CGFloat] = []
+    private var offsetCellIDs: [UUID] = []
     private var dirtyCellIDs: Set<UUID> = []
     private var measuredWidth: CGFloat = 0
     private var measuredViewportWidth: CGFloat = 0
@@ -42,10 +44,11 @@ final class NotebookCanvas: DocumentCanvas {
 
     var realizedCellCount: Int { views.count }
 
-    init(document: Document, notebook: Notebook, monoFontSize: CGFloat) {
+    init(document: Document, notebook: Notebook, monoFontSize: CGFloat, pane: EditorPane = .primary) {
         self.document = document
         self.notebook = notebook
         self.monoFontSize = monoFontSize
+        self.pane = pane
         scrollCancellable = ScrollActivityMonitor.shared.$isLiveScrolling
             .receive(on: DispatchQueue.main)
             .sink { [weak self] active in
@@ -86,7 +89,7 @@ final class NotebookCanvas: DocumentCanvas {
         self.scrollView = scrollView
         self.contentView = contentView
         installToolbar(in: contentView, scrollView: scrollView)
-        NotebookScrolling.register(scrollView: scrollView)
+        NotebookScrolling.register(scrollView: scrollView, documentID: document.id, pane: pane)
         DispatchQueue.main.async { [weak self] in
             guard let self, let scrollView = self.scrollView else { return }
             self.updateViewport(scrollView.contentView.bounds.size)
@@ -99,7 +102,7 @@ final class NotebookCanvas: DocumentCanvas {
     }
 
     func focus(in window: NSWindow) {
-        guard let catcher = CommandCatcherView.activeCatcher(in: window) else { return }
+        guard let catcher = CommandCatcherView.activeCatcher(in: window, documentID: document.id, pane: pane) else { return }
         window.makeFirstResponder(catcher)
     }
 
@@ -205,8 +208,9 @@ final class NotebookCanvas: DocumentCanvas {
         guard let contentView else { return }
         views.keys.forEach(unrealize)
         heights.removeAll()
-        undoManagers.removeAll()
+        editorStates.removeAll()
         offsets.removeAll()
+        offsetCellIDs.removeAll()
         dirtyCellIDs.removeAll()
         cells = notebook.cells
         cellIDs = cells.map(\.id)
@@ -233,7 +237,7 @@ final class NotebookCanvas: DocumentCanvas {
         let present = Set(cellIDs)
         views.keys.filter { !present.contains($0) }.forEach(unrealize)
         heights = heights.filter { present.contains($0.key) }
-        undoManagers = undoManagers.filter { present.contains($0.key) }
+        editorStates = editorStates.filter { present.contains($0.key) }
         needsSync = false
     }
 
@@ -254,6 +258,7 @@ final class NotebookCanvas: DocumentCanvas {
     }
 
     private func recomputeOffsets() {
+        offsetCellIDs = cellIDs
         var y = DS.Layout.notebookTopPadding
         offsets = cells.indices.map { index in
             if index > 0 { y += Self.spacing(after: cells[index - 1].cellType) + height(at: index - 1) }
@@ -287,10 +292,10 @@ final class NotebookCanvas: DocumentCanvas {
         let cellView = NotebookCellAppKitView(frame: NSRect(x: columnX, y: offsets[index],
                                                           width: measuredWidth, height: height(at: index)))
         cellView.translatesAutoresizingMaskIntoConstraints = false
-        let undoManager = undoManagers[cell.id] ?? UndoManager()
-        undoManagers[cell.id] = undoManager
+        let editorState = editorStates[cell.id] ?? NotebookCellEditorState()
+        editorStates[cell.id] = editorState
         cellView.configure(cell: cell, document: document, notebook: notebook,
-                           monoFontSize: monoFontSize, undoManager: undoManager)
+                           monoFontSize: monoFontSize, editorState: editorState)
         contentView.addSubview(cellView, positioned: .below, relativeTo: toolbar)
         cellView.onSizeChange = { [weak self, weak cellView] in
             guard let self, let cellID = cellView?.cellID else { return }
@@ -335,7 +340,7 @@ final class NotebookCanvas: DocumentCanvas {
         let clipView = scrollView.contentView
         let viewport = clipView.bounds.size
         let oldTop = clipView.bounds.minY
-        let anchor = index(atY: oldTop).map { (id: cellIDs[$0], delta: oldTop - offsets[$0]) }
+        let anchor = index(atY: oldTop).map { (id: offsetCellIDs[$0], delta: oldTop - offsets[$0]) }
         var changed = false
         for id in dirtyCellIDs {
             if let cellView = views[id], measure(id, cellView) { changed = true }
@@ -545,22 +550,34 @@ private struct NotebookAddCellView: View {
     let notebook: Notebook
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button {
-                AppState.shared.appendCell(type: .code, to: notebook, in: document)
-            } label: {
-                Label("Code", systemImage: "plus")
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: DS.Space.s) {
+                buttons
             }
-            Button {
-                AppState.shared.appendCell(type: .markdown, to: notebook, in: document)
-            } label: {
-                Label("Markdown", systemImage: "plus")
+            .fixedSize()
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                buttons
             }
-            Spacer()
+            .fixedSize()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .buttonStyle(.bordered)
         .controlSize(.small)
         .padding(.leading, DS.Space.m + DS.Layout.cellGutterWidth + DS.Space.m)
         .padding(.top, DS.Space.xs)
+    }
+
+    @ViewBuilder
+    private var buttons: some View {
+        Button {
+            AppState.shared.appendCell(type: .code, to: notebook, in: document)
+        } label: {
+            Label("Code", systemImage: "plus")
+        }
+        Button {
+            AppState.shared.appendCell(type: .markdown, to: notebook, in: document)
+        } label: {
+            Label("Markdown", systemImage: "plus")
+        }
     }
 }

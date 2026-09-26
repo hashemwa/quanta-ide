@@ -167,7 +167,7 @@ struct DocumentContentView: View {
     @ViewBuilder
     private var chrome: some View {
         if document.kind == .notebook {
-            NotebookChrome(document: document)
+            NotebookChrome(document: document, pane: pane)
         }
     }
 

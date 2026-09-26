@@ -4,10 +4,12 @@ import SwiftUI
 struct NotebookChrome: View {
     @ObservedObject var document: Document
     @ObservedObject var find: FindState
+    let pane: EditorPane
 
-    init(document: Document) {
+    init(document: Document, pane: EditorPane) {
         self.document = document
         self.find = document.find
+        self.pane = pane
     }
 
     var body: some View {
@@ -18,7 +20,7 @@ struct NotebookChrome: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .background(CommandModeHost())
+        .background(CommandModeHost(documentID: document.id, pane: pane))
     }
 }
 
@@ -97,20 +99,53 @@ struct FindBarView: View {
 }
 
 private struct CommandModeHost: NSViewRepresentable {
+    let documentID: UUID
+    let pane: EditorPane
+
     func makeNSView(context: Context) -> CommandCatcherView {
-        CommandCatcherView(frame: .zero)
+        let view = CommandCatcherView(frame: .zero)
+        view.documentID = documentID
+        view.pane = pane
+        return view
     }
 
-    func updateNSView(_ view: CommandCatcherView, context: Context) {}
+    func updateNSView(_ view: CommandCatcherView, context: Context) {
+        view.documentID = documentID
+        view.pane = pane
+    }
 }
 
 enum NotebookScrolling {
     private static var scrollViews = NSHashTable<NSScrollView>.weakObjects()
+    private static var destinations: [ObjectIdentifier: DocumentViewCache.Key] = [:]
 
-    static func register(scrollView: NSScrollView) { scrollViews.add(scrollView) }
+    static func register(scrollView: NSScrollView, documentID: UUID, pane: EditorPane = .primary) {
+        scrollViews.add(scrollView)
+        let present = Set(scrollViews.allObjects.map(ObjectIdentifier.init))
+        destinations = destinations.filter { present.contains($0.key) }
+        destinations[ObjectIdentifier(scrollView)] = .init(documentID: documentID, pane: pane)
+    }
+
+    static func focusedPane(in window: NSWindow) -> EditorPane? {
+        guard let focused = window.firstResponder as? NSView,
+              let scrollView = scrollViews.allObjects.first(where: { focused.isDescendant(of: $0) }) else { return nil }
+        return destinations[ObjectIdentifier(scrollView)]?.pane
+    }
 
     static func scrollView(in window: NSWindow?) -> NSScrollView? {
-        scrollViews.allObjects.first { $0.window === window && !$0.isHiddenOrHasHiddenAncestor }
+        guard let window else { return nil }
+        let visible = scrollViews.allObjects.filter { $0.window === window && !$0.isHiddenOrHasHiddenAncestor }
+        if let focused = window.firstResponder as? NSView,
+           let scrollView = visible.first(where: { focused.isDescendant(of: $0) }) {
+            return scrollView
+        }
+        if let catcher = window.firstResponder as? CommandCatcherView,
+           let documentID = catcher.documentID {
+            let destination = DocumentViewCache.Key(documentID: documentID, pane: catcher.pane)
+            return visible.first { destinations[ObjectIdentifier($0)] == destination }
+        }
+        return visible.first { destinations[ObjectIdentifier($0)]?.documentID == AppState.shared.activeDocumentID }
+            ?? visible.first
     }
 
     static func page(up: Bool, in window: NSWindow?) {
@@ -150,6 +185,8 @@ enum NotebookScrolling {
 
 final class CommandCatcherView: NSView {
     private static var all = NSHashTable<CommandCatcherView>.weakObjects()
+    var documentID: UUID?
+    var pane: EditorPane = .primary
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -158,8 +195,13 @@ final class CommandCatcherView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    static func activeCatcher(in window: NSWindow) -> CommandCatcherView? {
-        all.allObjects.first { $0.window === window }
+    static func activeCatcher(in window: NSWindow, documentID: UUID? = nil,
+                              pane: EditorPane? = nil) -> CommandCatcherView? {
+        let visible = all.allObjects.filter { $0.window === window && !$0.isHiddenOrHasHiddenAncestor }
+        let documentID = documentID ?? AppState.shared.activeDocumentID
+        let matching = visible.filter { $0.documentID == documentID }
+        let pane = pane ?? (window.firstResponder as? CommandCatcherView)?.pane ?? NotebookScrolling.focusedPane(in: window)
+        return matching.first { $0.pane == pane } ?? matching.first ?? visible.first
     }
 
     override var acceptsFirstResponder: Bool { true }
