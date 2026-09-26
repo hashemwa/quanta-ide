@@ -1,5 +1,5 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src data:"><link rel="stylesheet" href="xterm.css"><style>html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent}#terminal{height:100%;box-sizing:border-box;padding:6px 10px}.xterm{height:100%}</style></head><body><div id="terminal"></div><script src="xterm.js"></script><script src="addon-fit.js"></script><script>
+<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src data:"><link rel="stylesheet" href="xterm.css"><style>html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent}body{box-sizing:border-box;padding:6px 10px}#terminal{height:100%}.xterm{height:100%}</style></head><body><div id="terminal"></div><script src="xterm.js"></script><script src="addon-fit.js"></script><script>
 const dark = matchMedia('(prefers-color-scheme: dark)').matches;
 const darkTheme={background:'#1e1e1e',foreground:'#eeeeee',cursor:'#eeeeee',selectionBackground:'#4b638a'};
 const lightTheme={background:'#ffffff',foreground:'#202020',cursor:'#202020',selectionBackground:'#b4d5ff'};
@@ -18,5 +18,4 @@ function configureTerminal(theme,size) {
 new ResizeObserver(() => {if(document.body.clientWidth>0&&document.body.clientHeight>0)fit.fit()}).observe(document.body);
 fit.fit();
 send({type:'ready'});
-term.focus();
 </script></body></html>

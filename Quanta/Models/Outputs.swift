@@ -20,19 +20,21 @@ extension String {
     }
 
     func appendingTerminalOutput(_ incoming: String) -> String {
-        guard incoming.contains("\r") else { return self + incoming }
-        var result = self
+        guard incoming.utf8.contains(13) || hasSuffix("\r") else { return self + incoming }
+        var carriageReturn = hasSuffix("\r")
+        var result = carriageReturn ? String(dropLast()) : self
         for ch in incoming.replacingOccurrences(of: "\r\n", with: "\n") {
-            if ch == "\r" {
+            if carriageReturn, ch != "\n", ch != "\r" {
                 if let idx = result.lastIndex(of: "\n") {
                     result = String(result[...idx])
                 } else {
                     result = ""
                 }
-            } else {
-                result.append(ch)
             }
+            carriageReturn = ch == "\r"
+            if !carriageReturn { result.append(ch) }
         }
+        if carriageReturn { result.append("\r") }
         return result
     }
 }
@@ -262,27 +264,8 @@ final class ConsoleModel: ObservableObject {
     @Published private(set) var lines: [ConsoleLine] = []
     @Published private(set) var revision = 0
     @Published var focusRequest = 0
-    private(set) var history: [String] = []
+    let input = ConsoleInputState()
     var handledFocusRequest = 0
-
-    func recordHistory(_ code: String) {
-        guard !code.isEmpty else { return }
-        if history.last == code { return }
-        history.append(code)
-        if history.count > 200 { history.removeFirst(history.count - 200) }
-    }
-
-    func historyEntry(offset: Int, from index: Int) -> (text: String, index: Int)? {
-        guard !history.isEmpty else { return nil }
-        let start = min(max(index, 0), history.count)
-        let target = start + offset
-        if target < 0 { return (history[0], 0) }
-        if target >= history.count {
-            guard start < history.count else { return nil }
-            return ("", history.count)
-        }
-        return (history[target], target)
-    }
 
     func append(_ kind: ConsoleLine.Kind, _ text: String) {
         guard !text.isEmpty else { return }
@@ -301,6 +284,52 @@ final class ConsoleModel: ObservableObject {
     func clear() {
         lines.removeAll()
         revision += 1
+    }
+
+}
+
+final class ConsoleInputState: ObservableObject {
+    @Published var text = ""
+    private(set) var history: [String] = []
+    private(set) var historyIndex = 0
+    private var historyDraft = ""
+
+    func recordHistory(_ code: String) {
+        guard !code.isEmpty else { return }
+        if history.last != code { history.append(code) }
+        if history.count > 200 { history.removeFirst(history.count - 200) }
+        historyIndex = history.count
+    }
+
+    @discardableResult
+    func submitInput(_ submit: (String) -> Bool) -> Bool {
+        let code = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty, submit(code) else { return false }
+        recordHistory(code)
+        text = ""
+        historyDraft = ""
+        return true
+    }
+
+    @discardableResult
+    func recallHistory(_ offset: Int) -> Bool {
+        guard let entry = historyEntry(offset: offset, from: historyIndex) else { return false }
+        if historyIndex == history.count { historyDraft = text }
+        historyIndex = entry.index
+        text = entry.index == history.count ? historyDraft : entry.text
+        return true
+    }
+
+    func historyEntry(offset: Int, from index: Int) -> (text: String, index: Int)? {
+        guard !history.isEmpty else { return nil }
+        let start = min(max(index, 0), history.count)
+        let target = start + offset
+        if target < 0 { return (history[0], 0) }
+        if target >= history.count {
+            guard start < history.count else { return nil }
+            return ("", history.count)
+        }
+        return (history[target], target)
     }
 
 }

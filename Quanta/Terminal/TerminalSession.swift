@@ -23,12 +23,17 @@ final class TerminalSession: NSObject, ObservableObject {
     private var pid: Int32 = 0
     private var restartDirectory: URL?
     private var generation = 0
+    private var processExitStatus: Int32?
+    private var outputEnded = false
     private var pending = Data()
     private var flushScheduled = false
     @Published private(set) var isReady = false
     private let inputQueue = DispatchQueue(label: "quanta.terminal.input")
     private var browser: WKWebView?
     private var bridge: TerminalBridge?
+    private var active = false
+    private var focusRequested = false
+    private var configuredAppearance: (dark: Bool, size: CGFloat)?
     var onOutput: ((Data) -> Void)?
 
     func start(in directory: URL, shell: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh") {
@@ -36,6 +41,8 @@ final class TerminalSession: NSObject, ObservableObject {
         self.directory = directory
         error = nil
         exitStatus = nil
+        processExitStatus = nil
+        outputEnded = false
         generation += 1
         let generation = generation
         var environment = ProcessInfo.processInfo.environment
@@ -62,6 +69,11 @@ final class TerminalSession: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 guard let self, self.generation == generation else { return }
                 if !bytes.isEmpty { self.receive(bytes) }
+                else {
+                    self.outputEnded = true
+                    self.master = nil
+                    self.finishIfExited()
+                }
             }
             if bytes.isEmpty { handle.readabilityHandler = nil }
         }
@@ -71,16 +83,20 @@ final class TerminalSession: NSObject, ObservableObject {
             let result = status
             DispatchQueue.main.async {
                 guard let self, self.generation == generation else { return }
-                self.running = false
-                self.pid = 0
-                self.exitStatus = result & 0x7f == 0 ? (result >> 8) & 0xff : 128 + (result & 0x7f)
-                self.master?.readabilityHandler = nil
-                self.master = nil
-                if let next = self.restartDirectory {
-                    self.restartDirectory = nil
-                    self.start(in: next)
-                }
+                self.processExitStatus = result
+                self.finishIfExited()
             }
+        }
+    }
+
+    private func finishIfExited() {
+        guard let status = processExitStatus, outputEnded else { return }
+        running = false
+        pid = 0
+        exitStatus = status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
+        if let next = restartDirectory {
+            restartDirectory = nil
+            start(in: next)
         }
     }
 
@@ -109,10 +125,38 @@ final class TerminalSession: NSObject, ObservableObject {
         kill(-pid, SIGHUP)
         master?.readabilityHandler = nil
         master = nil
+        outputEnded = true
+        finishIfExited()
     }
 
     func clear() { browser?.evaluateJavaScript("term.clear()") }
-    func focus() { browser?.evaluateJavaScript("term.focus()") }
+
+    func setActive(_ active: Bool) {
+        guard self.active != active else { return }
+        self.active = active
+        if active { applyFocus() }
+        else {
+            focusRequested = false
+            if isReady { browser?.evaluateJavaScript("term.blur()") }
+            if let browser, let responder = browser.window?.firstResponder as? NSView,
+               responder === browser || responder.isDescendant(of: browser) {
+                browser.window?.makeFirstResponder(nil)
+            }
+        }
+    }
+
+    func focus() {
+        focusRequested = true
+        applyFocus()
+    }
+
+    private func applyFocus() {
+        guard active, isReady, focusRequested, let browser else { return }
+        if let window = browser.window {
+            focusRequested = !window.makeFirstResponder(browser)
+        }
+        browser.evaluateJavaScript("term.focus()")
+    }
 
     private func receive(_ data: Data) {
         onOutput?(data)
@@ -138,7 +182,8 @@ final class TerminalSession: NSObject, ObservableObject {
         let bridge = TerminalBridge(session: self)
         config.userContentController.add(bridge, name: "terminal")
         self.bridge = bridge
-        let view = WKWebView(frame: .zero, configuration: config)
+        let view = TerminalWebView(frame: .zero, configuration: config)
+        view.didAttach = { [weak self] in self?.applyFocus() }
         view.navigationDelegate = bridge
         view.setValue(false, forKey: "drawsBackground")
         view.underPageBackgroundColor = .clear
@@ -154,6 +199,7 @@ final class TerminalSession: NSObject, ObservableObject {
     }
 
     func appearance(dark: Bool, size: CGFloat) {
+        configuredAppearance = (dark, size)
         guard isReady, let data = try? JSONSerialization.data(withJSONObject: Self.colors(dark: dark),
                                                                options: [.sortedKeys]),
               let theme = String(data: data, encoding: .utf8) else { return }
@@ -179,13 +225,22 @@ final class TerminalSession: NSObject, ObservableObject {
         switch body["type"] as? String {
         case "ready":
             isReady = true
-            let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            appearance(dark: dark, size: AppState.shared.editorFontSize - 1)
+            let dark = configuredAppearance?.dark ?? (NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+            appearance(dark: dark, size: configuredAppearance?.size ?? (AppState.shared.editorFontSize - 1))
             flush()
+            applyFocus()
         case "input": if let text = body["data"] as? String { send(text) }
         case "resize": resize(columns: body["cols"] as? Int ?? 80, rows: body["rows"] as? Int ?? 24)
         default: break
         }
+    }
+}
+
+private final class TerminalWebView: WKWebView {
+    var didAttach: (() -> Void)?
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { didAttach?() }
     }
 }
 

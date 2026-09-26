@@ -897,12 +897,13 @@ final class AppState: ObservableObject {
         }
     }
 
-    func runConsoleInput(_ code: String) {
-        guard allowExecution() else { return }
+    @discardableResult
+    func runConsoleInput(_ code: String) -> Bool {
+        guard allowExecution() else { return false }
         startKernelIfNeeded()
         guard kernel.isRunning else {
             appendConsole(.system, "Kernel is not running — cannot execute.")
-            return
+            return false
         }
         appendConsole(.input, code)
         let plotOrigin = plots.beginRun(document: nil)
@@ -910,6 +911,7 @@ final class AppState: ObservableObject {
             guard let self else { return true }
             return self.handleConsoleExecution(message, plotOrigin: plotOrigin)
         }
+        return true
     }
 
     private func handleConsoleExecution(_ message: [String: Any], plotOrigin: PlotOrigin) -> Bool {
@@ -2674,14 +2676,15 @@ final class AppState: ObservableObject {
         let range = ns.lineRange(for: NSRange(location: min(selection.location, ns.length),
                                               length: min(selection.length, ns.length - min(selection.location, ns.length))))
         let code = Self.dedent(ns.substring(with: range))
+        if !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            revealConsole(force: true)
+            guard runConsoleInput(code) else { return }
+        }
         if advance, selection.length == 0 {
             let next = min(NSMaxRange(range), ns.length)
             tv.setSelectedRange(NSRange(location: next, length: 0))
             tv.scrollRangeToVisible(NSRange(location: next, length: 0))
         }
-        guard !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        revealConsole(force: true)
-        runConsoleInput(code)
     }
 
     static func dedent(_ code: String) -> String {

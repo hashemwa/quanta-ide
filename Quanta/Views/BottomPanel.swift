@@ -63,7 +63,7 @@ struct BottomPanel: View {
             }
             ZStack {
                 if app.bottomPane == .plots { PlotsPanel(history: app.plots, selection: $plotSelection, allFiles: $plotAllFiles) }
-                ConsoleView(query: consoleQuery, scope: consoleScope)
+                ConsoleView(query: consoleQuery, scope: consoleScope, isActive: app.bottomPane == .console)
                     .opacity(app.bottomPane == .console ? 1 : 0)
                     .allowsHitTesting(app.bottomPane == .console)
                     .accessibilityHidden(app.bottomPane != .console)
@@ -77,7 +77,9 @@ struct BottomPanel: View {
         .background(Color(nsColor: .textBackgroundColor))
         .clipped()
         .onAppear { _ = terminal.webView() }
+        .onDisappear { terminal.setActive(false) }
         .onChange(of: app.bottomPane) { _, pane in
+            if pane == .console { app.console.focusRequest += 1 }
             if pane == .terminal { app.showTerminal() }
             if pane == .plots { app.showPlots() }
         }
@@ -91,17 +93,17 @@ struct BottomPanel: View {
                 Button("Try Again") { app.showTerminal() }
             }
         } else {
-            TerminalSurface(session: terminal)
-            if !terminal.running, terminal.exitStatus != nil {
-                VStack {
-                    Spacer(minLength: 0)
+            VStack(spacing: 0) {
+                TerminalSurface(session: terminal, isActive: app.bottomPane == .terminal)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if !terminal.running, terminal.exitStatus != nil {
+                    Divider()
                     HStack {
                         Text("Shell exited. Start a new session to continue.")
                         Spacer()
                         Button("Restart Session") { app.showTerminal() }
                     }.font(.caption).padding(DS.Space.s)
                 }
-                .allowsHitTesting(true)
             }
         }
     }
@@ -109,10 +111,12 @@ struct BottomPanel: View {
 
 private struct TerminalSurface: NSViewRepresentable {
     let session: TerminalSession
+    let isActive: Bool
     @Environment(\.colorScheme) private var scheme
     @EnvironmentObject private var app: AppState
     func makeNSView(context: Context) -> WKWebView { session.webView() }
     func updateNSView(_ view: WKWebView, context: Context) {
+        session.setActive(isActive)
         session.appearance(dark: scheme == .dark, size: app.editorFontSize - 1)
     }
 }
@@ -138,6 +142,7 @@ extension AppState {
             self.terminal.restart(in: directory)
             self.bottomPane = .terminal
             self.setConsoleVisible(true)
+            self.terminal.focus()
         }
     }
 }

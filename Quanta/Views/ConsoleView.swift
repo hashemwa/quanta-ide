@@ -3,19 +3,20 @@ import SwiftUI
 struct ConsoleView: View {
     var query = ""
     var scope = "All"
+    var isActive = true
     @EnvironmentObject var app: AppState
 
     var body: some View {
-        ConsoleBody(console: app.console, query: query, scope: scope)
+        ConsoleBody(console: app.console, query: query, scope: scope, isActive: isActive)
     }
 }
 
 private struct ConsoleBody: View {
     @ObservedObject var console: ConsoleModel
     @EnvironmentObject var app: AppState
-    @State private var input = ""
     let query: String
     let scope: String
+    let isActive: Bool
 
     private var visibleLines: [ConsoleLine] {
         console.lines.filter { line in
@@ -26,17 +27,6 @@ private struct ConsoleBody: View {
         }
     }
     @State private var pinnedToBottom = true
-    @State private var historyIndex = 0
-    @FocusState private var inputFocused: Bool
-
-    private func recallHistory(_ offset: Int) -> KeyPress.Result {
-        guard let entry = console.historyEntry(offset: offset, from: historyIndex) else {
-            return .ignored
-        }
-        historyIndex = entry.index
-        input = entry.text
-        return .handled
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -83,37 +73,54 @@ private struct ConsoleBody: View {
 
             Divider()
 
-            HStack(spacing: DS.Space.s) {
-                Text("»")
-                    .font(.system(size: app.editorFontSize - 1, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                TextField("Run Python in the kernel…", text: $input)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: app.editorFontSize - 1, design: .monospaced))
-                    .focused($inputFocused)
-                    .disabled(app.kernelStatus == .busy || app.kernelStatus == .starting)
-                    .help(app.kernelStatus == .busy ? "Wait for execution to finish, or interrupt the kernel" : "Run Python in the current kernel")
-                    .onSubmit {
-                        let code = input.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !code.isEmpty else { return }
-                        input = ""
-                        console.recordHistory(code)
-                        historyIndex = console.history.count
-                        app.runConsoleInput(code)
+            ConsoleInputView(input: console.input, console: console, isActive: isActive,
+                             focusRequest: console.focusRequest) { pinnedToBottom = true }
+        }
+    }
+}
+
+private struct ConsoleInputView: View {
+    @ObservedObject var input: ConsoleInputState
+    let console: ConsoleModel
+    let isActive: Bool
+    let focusRequest: Int
+    let didSubmit: () -> Void
+    @EnvironmentObject private var app: AppState
+    @FocusState private var inputFocused: Bool
+
+    private func focusIfRequested() {
+        guard isActive, focusRequest != console.handledFocusRequest else { return }
+        console.handledFocusRequest = focusRequest
+        inputFocused = true
+    }
+
+    var body: some View {
+        HStack(spacing: DS.Space.s) {
+            Text("»")
+                .font(.system(size: app.editorFontSize - 1, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            TextField("Run Python in the kernel…", text: $input.text)
+                .textFieldStyle(.plain)
+                .font(.system(size: app.editorFontSize - 1, design: .monospaced))
+                .focused($inputFocused)
+                .help(app.kernelStatus == .busy ? "Wait for execution to finish, or interrupt the kernel" : "Run Python in the current kernel")
+                .onSubmit {
+                    guard app.kernelStatus != .busy, app.kernelStatus != .starting else { return }
+                    if input.submitInput(app.runConsoleInput) {
+                        didSubmit()
                         inputFocused = true
                     }
-                    .onKeyPress(.upArrow) { recallHistory(-1) }
-                    .onKeyPress(.downArrow) { recallHistory(1) }
-                    .onAppear { historyIndex = console.history.count }
-                    .onChange(of: console.focusRequest, initial: true) { _, value in
-                        guard value != console.handledFocusRequest else { return }
-                        console.handledFocusRequest = value
-                        DispatchQueue.main.async { inputFocused = true }
-                    }
-            }
-            .padding(.horizontal, DS.Space.bar)
-            .frame(minHeight: DS.Bar.footer)
+                }
+                .onKeyPress(.upArrow) { input.recallHistory(-1) ? .handled : .ignored }
+                .onKeyPress(.downArrow) { input.recallHistory(1) ? .handled : .ignored }
+                .onChange(of: focusRequest, initial: true) { _, _ in focusIfRequested() }
+                .onChange(of: isActive) { _, active in
+                    if active { focusIfRequested() }
+                    else { inputFocused = false }
+                }
         }
+        .padding(.horizontal, DS.Space.bar)
+        .frame(minHeight: DS.Bar.footer)
     }
 }
 
