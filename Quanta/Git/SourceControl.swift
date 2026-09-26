@@ -436,6 +436,10 @@ extension AppState {
             userNotice = "Nothing is staged. Stage the changes you want to commit, or use Stage All and Commit."
             return
         }
+        commitStagedChanges(message: message)
+    }
+
+    private func commitStagedChanges(message: String) {
         git.commit(message: message) { [weak self] succeeded in
             if succeeded, self?.git.draft.message.trimmingCharacters(in: .whitespacesAndNewlines) == message {
                 self?.git.draft.message = ""
@@ -451,7 +455,7 @@ extension AppState {
         let paths = snapshot.unstaged.map(\.path)
         guard !paths.isEmpty else { commit(); return }
         git.stage(paths: paths) { [weak self] succeeded in
-            if succeeded { self?.commit() }
+            if succeeded { self?.commitStagedChanges(message: message) }
         }
     }
 
@@ -536,6 +540,11 @@ extension AppState {
 
     func reloadDiff(_ document: Document) {
         guard let source = document.diffSource else { return }
+        if let comparedDocumentID = source.comparedDocumentID {
+            guard let comparedDocument = openDocuments.first(where: { $0.id == comparedDocumentID }) else { return }
+            updateExternalComparison(document, from: comparedDocument)
+            return
+        }
         guard let snapshot = git.snapshot else {
             document.diff = nil
             document.diffError = "Not a git repository"
@@ -588,6 +597,7 @@ extension AppState {
                     let selectedNBID = document.notebook?.cells.first { $0.id == selectedCellID }?.nbID
                     document.notebook = notebook
                     document.deletedCells = []
+                    document.clearedOutputs = []
                     document.find.matches = []
                     document.find.currentIndex = 0
                     if activeDocumentID == document.id {
@@ -600,6 +610,7 @@ extension AppState {
             }
             document.isDirty = false
             document.fileModificationDate = fileModificationDate(of: url)
+            if externallyChangedDocumentID == document.id { externallyChangedDocumentID = nil }
             clearDraft(for: document)
         } catch {
             appendConsole(.system, "Could not reload \(document.displayName): \(error.localizedDescription)")
@@ -609,10 +620,12 @@ extension AppState {
     func reloadExternallyChangedDocuments() {
         for document in openDocuments where document.isFileBacked {
             guard let url = document.url, let known = document.fileModificationDate,
-                  let current = fileModificationDate(of: url), current > known else { continue }
+                  let current = fileModificationDate(of: url), current != known else { continue }
             if document.isDirty {
-                externallyChangedDocumentID = document.id
-                if activeDocumentID != document.id { activeDocumentID = document.id }
+                if externallyChangedDocumentID == nil {
+                    externallyChangedDocumentID = document.id
+                    if activeDocumentID != document.id { activeDocumentID = document.id }
+                }
             } else {
                 reloadFromDisk(document)
             }
@@ -631,34 +644,47 @@ extension AppState {
         guard let id = externallyChangedDocumentID,
               let document = openDocuments.first(where: { $0.id == id }) else { return }
         reloadFromDisk(document)
-        externallyChangedDocumentID = nil
     }
 
     func compareExternalVersion() {
         guard let id = externallyChangedDocumentID,
               let sourceDocument = openDocuments.first(where: { $0.id == id }),
-              let url = sourceDocument.url,
-              let diskData = try? Data(contentsOf: url) else { return }
-        let disk: String
-        let current: String
-        if sourceDocument.kind == .notebook,
-           let diskNotebook = try? Notebook.load(from: diskData),
-           let memoryNotebook = sourceDocument.notebook,
-           let diskJSON = try? diskNotebook.serializedData(),
-           let memoryJSON = try? memoryNotebook.serializedData() {
-            disk = String(decoding: diskJSON, as: UTF8.self)
-            current = String(decoding: memoryJSON, as: UTF8.self)
-        } else {
-            disk = String(decoding: diskData, as: UTF8.self)
-            current = sourceDocument.text
+              let url = sourceDocument.url else { return }
+        let source = DiffSource(path: relativePath(url), url: url, area: .unstaged, status: .modified,
+                                comparedDocumentID: sourceDocument.id)
+        if let existing = openDocuments.first(where: { $0.diffSource == source }) {
+            updateExternalComparison(existing, from: sourceDocument)
+            activeDocumentID = existing.id
+            return
         }
-        let source = DiffSource(path: relativePath(url), url: url, area: .unstaged, status: .modified)
         let comparison = Document(diff: source)
-        comparison.diff = DiffDocument.compare(oldText: disk, newText: current,
-                                               oldLabel: "Disk", newLabel: "Your Edits",
-                                               isNotebook: sourceDocument.kind == .notebook)
+        updateExternalComparison(comparison, from: sourceDocument)
         openDocuments.append(comparison)
         activeDocumentID = comparison.id
+    }
+
+    private func updateExternalComparison(_ comparison: Document, from sourceDocument: Document) {
+        guard let url = sourceDocument.url else { return }
+        do {
+            let diskData = try Data(contentsOf: url)
+            let disk: String
+            let current: String
+            if sourceDocument.kind == .notebook, let memoryNotebook = sourceDocument.notebook {
+                let diskNotebook = try Notebook.load(from: diskData)
+                disk = String(decoding: try diskNotebook.serializedData(), as: UTF8.self)
+                current = String(decoding: try memoryNotebook.serializedData(), as: UTF8.self)
+            } else {
+                disk = String(decoding: diskData, as: UTF8.self)
+                current = sourceDocument.text
+            }
+            comparison.diff = DiffDocument.compare(oldText: disk, newText: current,
+                                                   oldLabel: "Disk", newLabel: "Your Edits",
+                                                   isNotebook: false)
+            comparison.diffError = nil
+        } catch {
+            comparison.diff = nil
+            comparison.diffError = error.localizedDescription
+        }
     }
 
     func confirmDestructive(title: String, message: String, button: String,

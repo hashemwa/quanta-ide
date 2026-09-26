@@ -19,10 +19,10 @@ struct EditorAreaView: View {
     private var documents: some View {
         VStack(spacing: 0) {
             Group {
-                if app.externallyChangedDocumentID != nil {
+                if let changedDocument = app.openDocuments.first(where: { $0.id == app.externallyChangedDocumentID }) {
                     HStack(spacing: DS.Space.s) {
                         Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
-                        Text("This file changed on disk while you have unsaved edits.")
+                        Text("\(changedDocument.displayName) changed on disk while you have unsaved edits.")
                             .font(.callout)
                         Spacer(minLength: DS.Space.s)
                         Button("Compare") { app.compareExternalVersion() }

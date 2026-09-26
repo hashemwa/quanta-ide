@@ -22,9 +22,16 @@ enum FileOperations {
                          collision: (URL) -> FileCollisionChoice) -> FileOperationReport {
         var report = FileOperationReport()
         let fm = FileManager.default
+        let directoryPath = directory.resolvingSymlinksInPath().standardizedFileURL.path
         for source in normalized(sources) {
-            if directory.path == source.path || directory.path.hasPrefix(source.path + "/") {
+            let sourcePath = source.deletingLastPathComponent().resolvingSymlinksInPath()
+                .appendingPathComponent(source.lastPathComponent).standardizedFileURL.path
+            if directoryPath == sourcePath || directoryPath.hasPrefix(sourcePath + "/") {
                 report.failures.append((source, "A folder can’t be moved into itself."))
+                continue
+            }
+            if !copying, source.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path == directoryPath {
+                report.skipped.append(source)
                 continue
             }
             var destination = directory.appendingPathComponent(source.lastPathComponent)
@@ -62,7 +69,7 @@ enum FileOperations {
     }
 
     private static func normalized(_ urls: [URL]) -> [URL] {
-        let sorted = Array(Set(urls)).sorted { $0.path.count < $1.path.count }
+        let sorted = Array(Set(urls.map(\.standardizedFileURL))).sorted { $0.path.count < $1.path.count }
         return sorted.filter { candidate in
             !sorted.contains { other in
                 other != candidate && candidate.path.hasPrefix(other.path + "/")

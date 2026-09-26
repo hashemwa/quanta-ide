@@ -18,7 +18,10 @@ final class AppState: ObservableObject {
     @Published var externallyChangedDocumentID: UUID?
     @Published var workspace: Workspace?
     @Published var openDocuments: [Document] = [] {
-        didSet { releaseClosedDocumentViews() }
+        didSet {
+            releaseClosedDocumentViews()
+            updateNavigationAvailability()
+        }
     }
     @Published var activeDocumentID: UUID? {
         didSet {
@@ -345,6 +348,7 @@ final class AppState: ObservableObject {
     }
 
     func navigateHistory(_ delta: Int) {
+        guard delta != 0 else { return }
         var target = navigationIndex + delta
         while target >= 0, target < navigationHistory.count {
             let id = navigationHistory[target]
@@ -361,8 +365,10 @@ final class AppState: ObservableObject {
     }
 
     private func updateNavigationAvailability() {
-        canNavigateBack = navigationIndex > 0
-        canNavigateForward = navigationIndex >= 0 && navigationIndex + 1 < navigationHistory.count
+        let openIDs = Set(openDocuments.map(\.id))
+        canNavigateBack = navigationHistory.prefix(max(0, navigationIndex)).contains { openIDs.contains($0) }
+        canNavigateForward = navigationIndex >= 0
+            && navigationHistory.dropFirst(navigationIndex + 1).contains { openIDs.contains($0) }
     }
 
     func closeOtherDocuments(except document: Document) {
@@ -732,6 +738,7 @@ final class AppState: ObservableObject {
         }
         if splitDocumentID == document.id { splitDocumentID = nil; primarySplitDocumentID = nil }
         endRunChain(in: document)
+        if externallyChangedDocumentID == document.id { externallyChangedDocumentID = nil }
         clearDraft(for: document)
         let position = openDocuments.firstIndex { $0.id == document.id } ?? openDocuments.count
         document.dataSession?.stop()
@@ -781,7 +788,7 @@ final class AppState: ObservableObject {
         }
         guard let target = url else { return false }
         if document.url != nil, let known = document.fileModificationDate,
-           let current = fileModificationDate(of: target), current > known {
+           let current = fileModificationDate(of: target), current != known {
             guard interactive, confirmOverwritingChangedFile(document) else { return false }
         }
         do {
@@ -797,6 +804,7 @@ final class AppState: ObservableObject {
             clearDraft(for: document)
             document.url = target
             document.isDirty = false
+            if externallyChangedDocumentID == document.id { externallyChangedDocumentID = nil }
             userNotice = nil
             document.fileModificationDate = fileModificationDate(of: target)
             clearDraft(for: document)
@@ -2250,11 +2258,12 @@ final class AppState: ObservableObject {
         draftQueue.async { try? FileManager.default.removeItem(at: target) }
     }
 
-    func restoreUntitledDrafts() {
+    func restoreUntitledDrafts(from directory: URL? = nil) {
         let fm = FileManager.default
-        guard let items = try? fm.contentsOfDirectory(at: draftsDirectory,
+        guard let items = try? fm.contentsOfDirectory(at: directory ?? draftsDirectory,
                                                       includingPropertiesForKeys: nil) else { return }
-        for url in items where url.lastPathComponent.hasPrefix("untitled-") {
+        for url in items where url.lastPathComponent.hasPrefix("untitled-")
+            && ["ipynb", "py"].contains(url.pathExtension) {
             let key = url.deletingPathExtension().lastPathComponent
                 .replacingOccurrences(of: "untitled-", with: "")
             do {

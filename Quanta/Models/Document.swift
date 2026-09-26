@@ -107,7 +107,7 @@ final class Document: ObservableObject, Identifiable {
     var displayName: String {
         switch kind {
         case .dataFrame: return dataFrameName ?? "DataFrame"
-        case .diff: return "\(untitledName) (\(diffSource?.area.label ?? "Diff"))"
+        case .diff: return "\(untitledName) (\(diffSource?.comparedDocumentID != nil ? "Your Edits" : diffSource?.area.label ?? "Diff"))"
         default: return url?.lastPathComponent ?? untitledName
         }
     }

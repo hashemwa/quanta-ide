@@ -203,6 +203,7 @@ struct DiffSource: Equatable {
     let area: GitChange.Area
     let status: GitChange.Status
     let isAdHoc: Bool
+    let comparedDocumentID: UUID?
 
     init(change: GitChange) {
         path = change.path
@@ -211,19 +212,24 @@ struct DiffSource: Equatable {
         area = change.area
         status = change.status
         isAdHoc = false
+        comparedDocumentID = nil
     }
 
-    init(path: String, url: URL, area: GitChange.Area, status: GitChange.Status) {
+    init(path: String, url: URL, area: GitChange.Area, status: GitChange.Status,
+         comparedDocumentID: UUID? = nil) {
         self.path = path
         self.originalPath = nil
         self.url = url
         self.area = area
         self.status = status
         self.isAdHoc = true
+        self.comparedDocumentID = comparedDocumentID
     }
 
     static func == (lhs: DiffSource, rhs: DiffSource) -> Bool {
         lhs.path == rhs.path && lhs.area == rhs.area
+            && lhs.url.resolvingSymlinksInPath().standardizedFileURL == rhs.url.resolvingSymlinksInPath().standardizedFileURL
+            && lhs.comparedDocumentID == rhs.comparedDocumentID
     }
 
     var fileName: String { url.lastPathComponent }
