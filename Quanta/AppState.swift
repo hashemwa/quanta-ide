@@ -314,9 +314,9 @@ final class AppState: ObservableObject {
     }
 
     private func performKernelRestart() {
+        clearRunningFlags()
         kernel.stop()
         variables = []
-        clearRunningFlags()
         appendConsole(.system, "Restarting kernel…")
         startKernel()
     }
@@ -422,6 +422,11 @@ final class AppState: ObservableObject {
 
     private func clearRunningFlags() {
         runningChainDocumentID = nil
+        runningChainGeneration += 1
+        runningChainCellIDs = []
+        runningChainIndex = 0
+        pausedRunDocumentID = nil
+        pausedRunCellIDs = []
         for document in openDocuments {
             document.notebook?.cells.forEach {
                 $0.isRunning = false
@@ -738,6 +743,11 @@ final class AppState: ObservableObject {
         }
         if splitDocumentID == document.id { splitDocumentID = nil; primarySplitDocumentID = nil }
         endRunChain(in: document)
+        if pausedRunDocumentID == document.id {
+            pausedRunDocumentID = nil
+            pausedRunCellIDs = []
+        }
+        if pendingRunAllDocumentID == document.id { pendingRunAllDocumentID = nil }
         if externallyChangedDocumentID == document.id { externallyChangedDocumentID = nil }
         clearDraft(for: document)
         let position = openDocuments.firstIndex { $0.id == document.id } ?? openDocuments.count
@@ -1157,10 +1167,11 @@ final class AppState: ObservableObject {
 
     func runAllCells(in document: Document) {
         guard allowExecution() else { return }
-        guard let notebook = document.notebook,
+        guard runningChainDocumentID == nil, let notebook = document.notebook,
               !notebook.cells.contains(where: { $0.isRunning }) else { return }
         notebook.cells.forEach { $0.isQueued = $0.cellType == .code }
         runningChainDocumentID = document.id
+        runningChainGeneration += 1
         runningChainCellIDs = notebook.cells.filter { $0.cellType == .code }.map(\.id)
         runningChainIndex = 0
         pausedRunDocumentID = nil
@@ -1181,9 +1192,12 @@ final class AppState: ObservableObject {
     }
 
     private func endRunChain(in document: Document) {
-        if runningChainDocumentID == document.id { runningChainDocumentID = nil }
-        runningChainCellIDs = []
-        runningChainIndex = 0
+        if runningChainDocumentID == document.id {
+            runningChainDocumentID = nil
+            runningChainGeneration += 1
+            runningChainCellIDs = []
+            runningChainIndex = 0
+        }
         document.notebook?.cells.forEach { $0.isQueued = false }
     }
 
@@ -1204,13 +1218,17 @@ final class AppState: ObservableObject {
             runNextQueuedCell(in: document)
             return
         }
+        let generation = runningChainGeneration
         runCell(cell, in: document, advance: false) { [weak self] ok in
-            guard let self else { return }
+            guard let self, self.runningChainDocumentID == document.id,
+                  self.runningChainGeneration == generation else { return }
             guard ok else {
                 self.pausedRunDocumentID = document.id
                 self.pausedRunCellIDs = Array(self.runningChainCellIDs.dropFirst(self.runningChainIndex))
-                self.selectedCellID = cell.id
-                self.scrollRequest = cell.id
+                if self.activeDocumentID == document.id {
+                    self.selectedCellID = cell.id
+                    self.scrollRequest = cell.id
+                }
                 self.userNotice = "Run All stopped at a cell error. Fix the error or continue the remaining cells."
                 self.endRunChain(in: document)
                 return
@@ -1220,10 +1238,11 @@ final class AppState: ObservableObject {
     }
 
     func continueRemainingCells() {
-        guard let id = pausedRunDocumentID,
+        guard runningChainDocumentID == nil, let id = pausedRunDocumentID,
               let document = openDocuments.first(where: { $0.id == id }),
               let notebook = document.notebook, !pausedRunCellIDs.isEmpty else { return }
         runningChainDocumentID = id
+        runningChainGeneration += 1
         runningChainCellIDs = pausedRunCellIDs
         runningChainIndex = 0
         pausedRunDocumentID = nil
@@ -1256,8 +1275,11 @@ final class AppState: ObservableObject {
         guard allowExecution() else { return }
         guard !cells.isEmpty, runningChainDocumentID == nil else { return }
         runningChainDocumentID = document.id
+        runningChainGeneration += 1
         runningChainCellIDs = cells.map(\.id)
         runningChainIndex = 0
+        pausedRunDocumentID = nil
+        pausedRunCellIDs = []
         let queued = Set(runningChainCellIDs)
         document.notebook?.cells.forEach { $0.isQueued = queued.contains($0.id) }
         runNextQueuedCell(in: document)
@@ -1274,6 +1296,8 @@ final class AppState: ObservableObject {
             notebook.cells.append(next)
             document.isDirty = true
         }
+        document.lastSelectedCellID = next.id
+        guard activeDocumentID == document.id else { return }
         selectedCellID = next.id
         if !isCommandMode {
             if next.cellType == .markdown && !next.isEditingMarkdown {
@@ -1971,6 +1995,7 @@ final class AppState: ObservableObject {
 
     private var pendingRunAllDocumentID: UUID?
     private var runningChainDocumentID: UUID?
+    private var runningChainGeneration = 0
     private var runningChainCellIDs: [UUID] = []
     private var runningChainIndex = 0
     @Published private(set) var pausedRunDocumentID: UUID?
