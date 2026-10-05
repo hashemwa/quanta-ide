@@ -62,13 +62,19 @@ final class EditorRenderingTests: XCTestCase {
         func seconds(lines: Int) -> Double {
             let line = "value = compute(12, 3.5, name='x')  # note\nmatch = 1\n"
             let storage = NSTextStorage(string: String(repeating: line, count: lines))
-            let start = CFAbsoluteTimeGetCurrent()
+            let start = ProcessInfo.processInfo.systemUptime
             PythonHighlighter.highlight(storage)
-            return CFAbsoluteTimeGetCurrent() - start
+            return ProcessInfo.processInfo.systemUptime - start
         }
         _ = seconds(lines: 50)
-        let small = seconds(lines: 400)
-        let large = seconds(lines: 1600)
-        XCTAssertLessThan(large / max(small, 0.0001), 8)
+        var small: [Double] = []
+        var large: [Double] = []
+        for _ in 0..<5 {
+            small.append(seconds(lines: 400))
+            large.append(seconds(lines: 1600))
+        }
+        let medianSmall = small.sorted()[small.count / 2]
+        let medianLarge = large.sorted()[large.count / 2]
+        XCTAssertLessThan(medianLarge / max(medianSmall, 0.0001), 8)
     }
 }

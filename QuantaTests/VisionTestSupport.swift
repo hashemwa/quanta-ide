@@ -5,7 +5,7 @@ import XCTest
 enum VisionTestSupport {
     static func textRecognitionRequest() throws -> VNRecognizeTextRequest {
         let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
+        request.recognitionLevel = .fast
         let cpu = try XCTUnwrap(MLComputeDevice.allComputeDevices.first {
             if case .cpu = $0 { return true }
             return false
