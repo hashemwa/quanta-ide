@@ -1,4 +1,238 @@
-# Quality audit — September 25, 2026
+# Quality audit — October 5, 2026
+
+This pass reviewed execution, output transport, native notebook rendering, Markdown
+and LaTeX, existing editor and data tooling, and readiness for daily data science work.
+It started from a clean worktree with all 221 native tests passing. The changes below
+are implemented; the roadmap lists remaining work.
+
+## Findings fixed
+
+- **Local imports failed.** The Python bridge started with its resource folder on
+  the import path. A notebook could not import a helper module from its workspace.
+  Imports now follow the working directory, including after `os.chdir()`. Script
+  runs temporarily add their containing directory and restore it after success or
+  failure, so sibling imports also work.
+- **Compiler settings disappeared between cells.** A `__future__` import now
+  persists in subsequent compilations through Python's standard-library compiler
+  state, matching the interactive behavior described by
+  [Python's codeop documentation](https://docs.python.org/3/library/codeop.html).
+- **Semicolons did not suppress results.** A trailing semicolon now suppresses
+  the implicit result while preserving execution, prints, and figures. Tokenization
+  distinguishes a real terminator from semicolons in strings and comments.
+- **Print-heavy cells flooded the app with messages.** Streams now batch small
+  writes, flush pending text during a running cell, honor explicit flushes, and
+  preserve stdout/stderr order. One shared lock protects the output budget and
+  buffered writers. The background flusher waits for actual output while idle.
+- **Markdown consumed code as math.** Inline code now protects dollar signs,
+  images, and HTML literally. Matching backtick-run lengths and tilde fences keep
+  embedded fences inside code. Preview and export share inline parsing. These
+  fence and code-span rules follow the
+  [CommonMark specification](https://spec.commonmark.org/spec).
+- **Math damaged nearby prose and tables.** Ordinary currency remains literal,
+  escaped dollars within TeX retain their escape, and backslash equation delimiters
+  work. Pipes inside math, code, and escaped table values no longer create extra
+  columns. A math block after a table ends that table's rows. Spaces and emphasis
+  survive across inline equations and code in the native preview.
+- **Equations went stale.** Changes to source or appearance now issue a new render
+  request. Late callbacks cannot replace the newer image, including after a renderer
+  timeout. Headings and table cells now use the equation renderer. The image cache
+  has a 400-entry limit and a 32 MiB estimated-cost limit; transient failures are
+  no longer cached permanently.
+
+## Measured output improvement
+
+The same `for i in range(20000): print(i)` cell was run five times before and after
+the changes with `/usr/bin/python3 -S`. Every run retained identical output text.
+Timing includes Python startup and collecting the protocol output.
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Stream messages | 20,000 | 14 |
+| Protocol bytes | 1,429,292 | 130,202 |
+| Median elapsed time | 0.121 s | 0.057 s |
+
+This measures bridge transport overhead, not live scrolling or end-to-end IDE speed.
+An Instruments trace and a long-session memory measurement were not captured.
+
+## Native IDE additions
+
+The implementation follow-up adds these everyday workflows without replacing the
+SwiftUI/AppKit interface:
+
+- Background syntax checks in a separate selected-Python process, native diagnostic
+  underlines, and a clickable Problems panel. Checks are debounced, bounded, and
+  discard stale results after edits or interpreter changes.
+- Optional Ruff lint checks and undoable formatting for the active script or code
+  cell. Notebook cells are checked together with cell-relative locations; syntax
+  checks still validate each cell independently. Formatting cannot overwrite edits
+  made while its subprocess is running. Ruff is installed only on explicit request.
+- Source-name and Python built-in completion before execution, alongside existing
+  live-kernel completion. This is lexical completion, not project-wide type inference.
+- A native Python Environment window for package inspection, named package installs,
+  and workspace `.venv` creation. It uses the selected interpreter, refuses to
+  overwrite an existing `.venv`, shows failures and output, and supports cancellation.
+  Code execution and session changes pause during package/environment mutations.
+- Top-level async execution, built-in `display()` and `clear_output()`, cooperative
+  async interrupt recovery, and correct explicit versus implicit saved output types.
+  Deferred clears keep the old output visible until replacement output arrives.
+  Console clears retain other commands' history.
+
+## Copilot and crash resilience
+
+The completion follow-up adds GitHub Copilot through its official native Apple Silicon
+language server, with a SwiftUI popover on a floating editor button and AppKit ghost text. It starts disabled.
+Sign-in uses GitHub's browser device flow, validates account access, and enables suggestions
+afterward. Global and per-project controls stop the helper and pending work immediately;
+sign-out uses a separate Quanta helper profile. The first connection installs a pinned,
+SHA-256-verified helper. No Node runtime or Python environment change is required.
+
+Completions use bounded code context, UTF-16 positions, and versioned document updates.
+Notebook replies are restricted to the active code cell. Edits, selection changes, hidden
+editors, input-method composition, disable actions, and account changes invalidate old
+replies. Ghost text is separate from source storage; accepting it is one undoable action.
+The initial renderer only shows suggestions it can display completely without obscuring
+existing code, including up to eight lines at the end of a cell or script.
+
+The broader crash review covered notebook parsing and serialization, data/table bounds,
+virtualized editor lifecycle, Markdown/math/PDF rendering, SQLite and DuckDB requests,
+kernel and terminal processes, and startup preferences. Concrete repairs include:
+
+- Malformed saved dataframe dimensions and offsets can no longer overflow integer
+  arithmetic; invalid rich payloads fall back to saved text while retaining original data.
+- Stale or negative table and clipboard coordinates are rejected before indexing.
+- Sparse, ragged array previews cannot expand into enormous bitmap allocations;
+  heatmaps are bounded to 512 × 512 pixels and handle nonfinite values.
+- Kernel stdout without line breaks cannot grow the app's framing buffer indefinitely.
+  Oversized lines are dropped at 64 MiB and the next message can still be read.
+- Stop/restart escalates stubborn kernel and terminal processes, including foreground
+  terminal jobs. App termination immediately stops its owned processes.
+- Nonfinite or corrupt saved window, font, console, and split dimensions cannot reach
+  native view geometry. Invalid or stale notebook-find ranges and editor snippet ranges
+  are checked before arithmetic, selection, or replacement.
+- Copilot pipes handle fragmented messages, invalid framing, broken stdin, timeout,
+  cancellation, and helper exit without terminating Quanta or accepting stale results.
+
+No Quanta crash reports were present in the accessible local DiagnosticReports folders.
+The official 1.551.2 helper was downloaded and its digest checked; an isolated, signed-out
+smoke check passed version, initialization, account status, and clean shutdown. That check
+used a temporary account profile and did not send user source or attempt GitHub sign-in.
+
+### Toolbar and syntax-color follow-up
+
+Copilot now floats at the bottom-right of the editor as a native Liquid Glass circle,
+using the shared glass icon control style and arrow-cursor handling. It sits above the
+bottom panel, with an inset from the editor edges, and opens the existing account and
+suggestion controls. It remains available when there are no open documents. The title
+toolbar keeps the Python environment, Run/Stop, and layout controls; the tab row keeps
+the document tabs.
+
+The existing syntax palette is retained with three readability adjustments. Measured
+against the native notebook code well, dark comments improve from 3.29:1 to 4.91:1,
+dark built-ins from 3.90:1 to 4.92:1, and light decorators from 4.10:1 to 5.07:1.
+All syntax colors are checked against native script and notebook backgrounds using
+[4.5:1 text contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)
+as a benchmark. The palette also strengthens its colors when AppKit requests increased
+contrast. This is a text-readability check, not a claim of complete accessibility conformance.
+
+The lexer now keeps `!=` expressions inside f-strings as code and treats annotated
+variables named `match` or `case` as ordinary identifiers. Regressions cover these cases,
+typical pandas/NumPy code, and palette contrast. No user appearance settings were changed.
+
+## What to add next
+
+These priorities are product recommendations based on the current implementation.
+Notebook virtualization, paged pandas tables, variable inspection, native local SQL,
+Git review, recovery drafts, and plot export already exist and should be retained.
+
+| Priority | Addition | Current gap and acceptance criteria |
+| --- | --- | --- |
+| P0 | Optional Jupyter/IPython kernel backend | The bridge still rejects most magics, shell escapes, and `input()`, and has no widget communication. Add genuine IPython display updates, input prompts, and the kernel protocol needed by existing notebooks. Build widget support on a separate reviewed renderer. |
+| P0 | Notebook session isolation | `AppState` owns one shared kernel. Two notebooks can overwrite each other's variables and interpreter context. Give each notebook an explicit session association, retain an opt-in shared session, and persist its interpreter and working directory. |
+| P0 | Project-wide language tools | Syntax/Ruff diagnostics, formatting, and lexical completion now exist. Add semantic completion, go to definition, references, rename, and quick fixes across notebook cells and project files. |
+| P1 | Reproducible dependencies | Environment creation and package installation now have a native UI. Add dependency/lockfile workflows, reproducible restore, private package-index configuration, and package removal. |
+| P1 | Debugger | Add breakpoints in scripts and cells, stepping, stack/local inspection, and pause-on-exception. Keep debugging scoped to the selected notebook session. |
+| P1 | Broader data workflows | Extend the live inspector beyond pandas to Polars/Arrow and add export of a complete filtered result. Existing data export operates on the current page. Keep pagination and cancellation for large results. |
+| P1 | Complete Markdown behavior | The custom parser still needs ordered/nested lists, block quotes, and broader CommonMark coverage. Maintain preview/export agreement and native selection/focus behavior. |
+| P1 | Performance and reliability gates | Measure typing and scrolling in 1,000-cell notebooks, repeated plot/equation edits, long output, kernel crashes and restarts, and multi-hour memory use. Include main-thread latency, resident memory, idle CPU, and output-order assertions. |
+| P2 | Remote compute and durable execution history | Add reconnectable remote sessions after session identity and kernel lifecycle are reliable. Persist run provenance and environment details so results can be reproduced. |
+
+The [Jupyter messaging specification](https://jupyter-client.readthedocs.io/en/stable/messaging.html)
+provides execution, stream/display, input, control, and communication channels. A new
+backend would need to implement their routing and lifecycle; switching kernels alone
+does not implement widgets or debugging UI. The native SwiftUI/AppKit interface can
+remain the frontend.
+
+The current [language tools](language-intelligence.md) include native editor controls,
+Python/Ruff checks, and optional Copilot suggestions. Semantic navigation and refactoring
+still need a separate analysis backend. For example,
+[Ruff's native server](https://docs.astral.sh/ruff/editors/) provides diagnostics,
+formatting, and fixes, while a Python analysis server supplies semantic navigation
+and completion through the
+[Language Server Protocol](https://microsoft.github.io/language-server-protocol/).
+Project-wide semantic analysis was not added in this audit.
+
+## Verification and limits
+
+- Native build passed with no compiler warnings or errors. Actor-isolation errors
+  found during implementation were corrected before the final build and tests.
+- Native suite: **369 passed**, zero failures or skips. The initial audit added
+  12 regressions; the IDE follow-up added 61 more, including real cell execution,
+  saved output types, formatting undo, asynchronous edit protection, background
+  diagnostics, environment operations, and narrow panel layouts. The Copilot/crash
+  pass added another 67 covering process transport and installation, authentication
+  state and privacy controls, Unicode and notebook context, editor preview and undo,
+  constrained popover layout, malformed output, process shutdown, and saved geometry.
+  The toolbar/color follow-up added five lexical and contrast checks; all 366 tests
+  passed after the updated native build. The final publication review added an export
+  regression for paragraphs with many inline code spans and two first-use device
+  authentication checks; the final integrated suite passed all 369 tests.
+- Python bridge with the local scientific environment: **52 passed** across the
+  workflow suite (32) and interactive-kernel suite (20). Matplotlib used temporary
+  caches because the sandbox prevents writes to its usual home-directory cache.
+- Python bridge with `/usr/bin/python3 -S`: **37 passed, 15 expected optional-package
+  skips** across both suites.
+- Real **Ruff 0.16.10** in a disposable environment: script/notebook diagnostics,
+  cross-cell names, Unicode positions, future flags, configuration, formatting,
+  and magic-line preservation passed, including a Swift-to-helper round trip.
+- Real environment-manager smoke check with Python 3.9.6: temporary `.venv`
+  creation, pip listing, an already-satisfied package install, refresh, and
+  existing-environment protection passed. User Python environments were unchanged.
+- `git diff --check`: passed.
+
+The first follow-up run found narrow-tab overflow, a completion cursor-boundary
+error, and test-fixture issues involving macOS path aliases and access to a helper
+under the Desktop source tree. The tab strip now adapts to named icons, completion
+rejects positions inside composed characters, and tests use filesystem identity and
+the production bundled helper. The final full run passed without increasing timeouts.
+
+The Copilot runs also caught a zero-width AppKit caret rectangle being mistaken for
+invalid geometry, a UTF-16 boundary check that accepted half of a surrogate pair, and
+an installer path calculation that mixed `/var` with `/private/var`. Those defects
+were repaired. A multiline layout test now checks actual cell growth, preview
+containment, unchanged inter-cell spacing, and restoration instead of assuming the
+gutter has no existing free space. All 361 tests passed together after these fixes.
+Xcode recorded zero build warnings/errors and zero failed/skipped native tests.
+The previously noted runtime priority-inversion warning remains a profiling follow-up;
+the test run did not establish a live responsiveness regression.
+
+Authenticated Copilot suggestions were tested with deterministic protocol fixtures;
+the actual GitHub sign-in, account entitlement, and cloud suggestion round trip still
+need a signed-in user session. No existing credentials or user code were used in the
+real helper smoke test. The app was not relaunched or installed over the user's running
+copy. Code inspection and tests cannot establish that an app will never crash;
+third-party native Python packages, memory exhaustion, and OS renderer failures remain
+outside that guarantee.
+
+The native suite covers rendering/export, editor focus and layout, virtualization,
+execution queues, recovery, data tools, and Git behavior. The new math-state tests
+exercise delayed callbacks with deterministic results; existing tests exercise the
+actual WebKit equation renderer and PDF export. No manual screenshot pass, live UI
+automation, VoiceOver session, or Instruments trace was performed. A passing suite
+does not establish complete Jupyter or CommonMark compatibility.
+
+---
+
+# Previous audit — September 25, 2026
 
 This pass combined three parallel audits with an integration review. It covered
 notebook and editor interaction, execution state, workspace and Git behavior,
