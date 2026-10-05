@@ -116,13 +116,23 @@ final class TerminalSession: NSObject, ObservableObject {
         stop()
     }
 
-    func stop() {
+    func stop(force: Bool = false) {
         guard pid > 0 else { return }
-        if let master {
-            let foreground = tcgetpgrp(master.fileDescriptor)
-            if foreground > 0 { kill(-foreground, SIGHUP) }
+        let child = pid
+        let stoppedGeneration = generation
+        let stopSignal = force ? SIGKILL : SIGHUP
+        let foreground = master.map { tcgetpgrp($0.fileDescriptor) } ?? 0
+        if foreground > 0 { kill(-foreground, stopSignal) }
+        kill(-child, stopSignal)
+        if !force {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                if foreground > 0, foreground != child, getsid(foreground) == child {
+                    kill(-foreground, SIGKILL)
+                }
+                guard let self, self.generation == stoppedGeneration, self.pid == child else { return }
+                kill(-child, SIGKILL)
+            }
         }
-        kill(-pid, SIGHUP)
         master?.readabilityHandler = nil
         master = nil
         outputEnded = true

@@ -125,6 +125,13 @@ struct DataFramePayload {
     init?(dict: [String: Any]) {
         guard let columns = dict["columns"] as? [String],
               let rawRows = dict["rows"] as? [[Any]] else { return nil }
+        let offset = dict["offset"] as? Int ?? 0
+        let totalRows = dict["total_rows"] as? Int ?? rawRows.count
+        let totalCols = dict["total_cols"] as? Int ?? columns.count
+        let headCount = dict["head_count"] as? Int ?? 0
+        guard offset >= 0, offset <= Int.max - rawRows.count,
+              totalRows >= rawRows.count, totalCols >= columns.count,
+              headCount >= 0, headCount <= rawRows.count else { return nil }
         self.columns = columns
         self.rows = rawRows.map { row in row.map { value in "\(value)" } }
         self.originalRows = (dict["original_rows"] as? [[Any]])?.map { $0.map { $0 as? String } }
@@ -132,12 +139,12 @@ struct DataFramePayload {
         self.dtypes = dict["dtypes"] as? [String] ?? Array(repeating: "", count: columns.count)
         self.index = dict["index"] as? [String] ?? []
         self.name = dict["name"] as? String
-        self.offset = dict["offset"] as? Int ?? 0
-        self.totalRows = dict["total_rows"] as? Int ?? rawRows.count
-        self.totalCols = dict["total_cols"] as? Int ?? columns.count
+        self.offset = offset
+        self.totalRows = totalRows
+        self.totalCols = totalCols
         self.colsTruncated = dict["cols_truncated"] as? Bool ?? false
         self.rowsTruncated = dict["rows_truncated"] as? Bool ?? false
-        self.headCount = dict["head_count"] as? Int ?? 0
+        self.headCount = headCount
         self.text = dict["text"] as? String ?? ""
     }
 
@@ -173,6 +180,7 @@ struct DataFramePayload {
     }
 
     func originalValue(row: Int, column: Int) -> String? {
+        guard row >= 0, column >= 0 else { return nil }
         if column == 0, let originalIndex, originalIndex.indices.contains(row) { return originalIndex[row] }
         guard let originalRows, originalRows.indices.contains(row),
               originalRows[row].indices.contains(column - 1) else { return nil }

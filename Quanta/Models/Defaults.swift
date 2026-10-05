@@ -1,6 +1,12 @@
 import Foundation
 
 enum QuantaDefaults {
+    static func finiteCGFloat(forKey key: String, fallback: CGFloat, range: ClosedRange<CGFloat>,
+                              defaults: UserDefaults = store) -> CGFloat {
+        guard let value = defaults.object(forKey: key) as? NSNumber, value.doubleValue.isFinite else { return fallback }
+        return min(max(CGFloat(value.doubleValue), range.lowerBound), range.upperBound)
+    }
+
     static var previewDirectory: URL? {
         #if DEBUG
         return ProcessInfo.processInfo.environment["QUANTA_UI_PREVIEW_DIRECTORY"].map {

@@ -319,8 +319,10 @@ struct NDArrayView: View {
     }
 
     static func heatmapImage(_ grid: [[Double?]]) -> NSImage? {
-        let height = grid.count
-        let width = grid.map(\.count).max() ?? 0
+        let sourceHeight = grid.count
+        let sourceWidth = grid.lazy.map(\.count).max() ?? 0
+        let height = min(sourceHeight, 512)
+        let width = min(sourceWidth, 512)
         guard height > 0, width > 0 else { return nil }
         let stops: [(Double, (Double, Double, Double))] = [
             (0.0, (0.267, 0.005, 0.329)), (0.25, (0.229, 0.322, 0.546)),
@@ -340,10 +342,12 @@ struct NDArrayView: View {
             return (253, 231, 37)
         }
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        for (y, row) in grid.enumerated() {
+        for y in 0..<height {
+            let row = grid[y * sourceHeight / height]
             for x in 0..<width {
                 let offset = (y * width + x) * 4
-                if x < row.count, let v = row[x] {
+                let column = x * sourceWidth / width
+                if column < row.count, let v = row[column], v.isFinite {
                     let (r, g, b) = colormap(v)
                     pixels[offset] = r
                     pixels[offset + 1] = g
@@ -353,10 +357,11 @@ struct NDArrayView: View {
             }
         }
         guard let provider = CGDataProvider(data: Data(pixels) as CFData),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
               let cgImage = CGImage(width: width, height: height,
                                     bitsPerComponent: 8, bitsPerPixel: 32,
                                     bytesPerRow: width * 4,
-                                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                    space: colorSpace,
                                     bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
                                     provider: provider, decode: nil,
                                     shouldInterpolate: false, intent: .defaultIntent)

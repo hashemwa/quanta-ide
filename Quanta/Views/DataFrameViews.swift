@@ -508,15 +508,16 @@ struct DataFrameNSTable: NSViewRepresentable {
         }
 
         func dataRow(forTableRow row: Int) -> Int? {
-            guard let payload else { return nil }
+            guard let payload, row >= 0, row < payload.displayRowCount else { return nil }
             let index = row
             let ellipsisIndex = payload.rowsTruncated ? payload.headCount : -1
             if index == ellipsisIndex { return nil }
             let dataRow = (ellipsisIndex >= 0 && index > ellipsisIndex) ? index - 1 : index
-            return dataRow < payload.rows.count ? dataRow : nil
+            return payload.rows.indices.contains(dataRow) ? dataRow : nil
         }
 
         func rowValues(_ payload: DataFramePayload, dataRow: Int) -> [String] {
+            guard payload.rows.indices.contains(dataRow) else { return [] }
             var values = [dataRow < payload.index.count ? payload.index[dataRow] : "\(dataRow)"]
             values.append(contentsOf: payload.rows[dataRow])
             return values
@@ -527,7 +528,7 @@ struct DataFrameNSTable: NSViewRepresentable {
         }
 
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-            guard let payload else { return nil }
+            guard let payload, row >= 0, row < payload.displayRowCount else { return nil }
             let rowView: DataFrameRowView
             if let reused = tableView.makeView(withIdentifier: DataFrameRowView.reuseID,
                                                owner: nil) as? DataFrameRowView {

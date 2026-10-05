@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum KernelStatus: Equatable {
@@ -119,11 +120,18 @@ final class KernelSession {
         }
     }
 
-    func stop() {
+    func stop(force: Bool = false) {
         generation += 1
         if let proc = process, proc.isRunning {
             proc.terminationHandler = nil
-            proc.terminate()
+            if force {
+                Darwin.kill(proc.processIdentifier, SIGKILL)
+            } else {
+                proc.terminate()
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
+                    if proc.isRunning { Darwin.kill(proc.processIdentifier, SIGKILL) }
+                }
+            }
         }
         process = nil
         stdinHandle = nil
@@ -190,16 +198,46 @@ final class KernelSession {
         }
         private var buffer = Data()
         private var scannedBytes = 0
+        private var skippingOversizedLine = false
+        private let maximumLineBytes: Int
+
+        init(maximumLineBytes: Int = 64 * 1024 * 1024) {
+            self.maximumLineBytes = max(1, maximumLineBytes)
+        }
+
+        private var oversizedLine: Item {
+            .stray("Kernel output line exceeded the \(maximumLineBytes)-byte limit and was skipped.")
+        }
 
         func consume(_ data: Data) -> [Item] {
             buffer.append(data)
             var items: [Item] = []
             while true {
+                if skippingOversizedLine {
+                    guard let newline = buffer.firstIndex(of: 0x0A) else {
+                        buffer.removeAll()
+                        return items
+                    }
+                    buffer.removeSubrange(buffer.startIndex...newline)
+                    skippingOversizedLine = false
+                }
                 let searchStart = buffer.startIndex + scannedBytes
                 guard searchStart < buffer.endIndex,
                       let newlineIndex = buffer[searchStart...].firstIndex(of: 0x0A) else {
                     scannedBytes = buffer.count
+                    if buffer.count > maximumLineBytes {
+                        buffer.removeAll()
+                        scannedBytes = 0
+                        skippingOversizedLine = true
+                        items.append(oversizedLine)
+                    }
                     return items
+                }
+                if buffer.distance(from: buffer.startIndex, to: newlineIndex) > maximumLineBytes {
+                    buffer.removeSubrange(buffer.startIndex...newlineIndex)
+                    scannedBytes = 0
+                    items.append(oversizedLine)
+                    continue
                 }
                 let lineData = buffer.subdata(in: buffer.startIndex..<newlineIndex)
                 buffer.removeSubrange(buffer.startIndex...newlineIndex)
