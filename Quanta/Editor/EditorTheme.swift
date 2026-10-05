@@ -24,28 +24,33 @@ enum EditorTheme {
     }
 
     private static func syntax(_ kind: PythonHighlighter.Kind) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let match = appearance.bestMatch(from: [.accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua,
+                                                    .aqua, .darkAqua])
+            let dark = match == .darkAqua || match == .accessibilityHighContrastDarkAqua
+            let increasedContrast = match == .accessibilityHighContrastAqua || match == .accessibilityHighContrastDarkAqua
+            return syntaxColor(kind, dark: dark, increasedContrast: increasedContrast)
+        }
+    }
+
+    static func syntaxColor(_ kind: PythonHighlighter.Kind, dark: Bool, increasedContrast: Bool) -> NSColor {
         let pair = syntaxRGB(kind)
-        return dyn(pair.0, pair.1)
+        let color = NSColor(hex: dark ? pair.1 : pair.0)
+        return increasedContrast ? color.blended(withFraction: 0.2, of: dark ? .white : .black) ?? color : color
     }
 
     private static func syntaxRGB(_ kind: PythonHighlighter.Kind) -> (Int, Int) {
         switch kind {
         case .keyword: (0x9B2393, 0xFC5FA3)
         case .string: (0xC41A16, 0xFC6A5D)
-        case .comment: (0x5D6C79, 0x6C7986)
+        case .comment: (0x5D6C79, 0x8A97A4)
         case .number: (0x1C00CF, 0xD0BF69)
-        case .builtin: (0x6C36A9, 0xA167E6)
+        case .builtin: (0x6C36A9, 0xB17DF0)
         case .definition: (0x0F68A0, 0x41A1C0)
-        case .decorator: (0x947100, 0xFD8F3F)
+        case .decorator: (0x826300, 0xFD8F3F)
         }
     }
 
-    private static func dyn(_ light: Int, _ dark: Int) -> NSColor {
-        NSColor(name: nil) { appearance in
-            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            return NSColor(hex: isDark ? dark : light)
-        }
-    }
 }
 
 extension NSColor {

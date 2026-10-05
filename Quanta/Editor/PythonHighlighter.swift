@@ -132,7 +132,7 @@ enum PythonHighlighter {
             if value == "type" {
                 return trimmed.first.map { $0.isLetter || $0 == "_" } == true && trimmed.contains("=")
             }
-            return (value == "match" || value == "case") && !trimmed.hasPrefix("=") && trimmed.contains(":")
+            return !trimmed.hasPrefix("=") && !trimmed.hasPrefix(":") && trimmed.contains(":")
         }
         func scan() -> [Token] { code(); return result }
 
@@ -142,7 +142,8 @@ enum PythonHighlighter {
             var previousDot = false
             while i < count {
                 let c = chars[i]
-                if interpolation, nesting == 0, c == 125 || c == 58 || c == 33 { return }
+                if interpolation, nesting == 0,
+                   c == 125 || c == 58 || (c == 33 && (i + 1 == count || chars[i + 1] != 61)) { return }
                 if c == 10 || c == 13 { pendingName = false; previousDot = false; i += 1; continue }
                 if c == 32 || c == 9 { i += 1; continue }
                 if c == 35 {
