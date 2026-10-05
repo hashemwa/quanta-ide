@@ -119,6 +119,7 @@ final class SourceControlPanelTests: XCTestCase {
         let frame = NSRect(x: 0, y: 0, width: width, height: panelHeight)
         let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
         window.contentView = hosting
         hosting.frame = NSRect(origin: .zero, size: frame.size)
         addTeardownBlock { window.close() }
@@ -139,8 +140,7 @@ final class SourceControlPanelTests: XCTestCase {
 
     private func assertControlsFit(_ hosting: NSView, in window: NSWindow, message: String,
                                    file: StaticString = #filePath, line: UInt = #line) throws {
-        let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
-        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let bitmap = try VisionTestSupport.snapshot(of: hosting)
         let image = try XCTUnwrap(bitmap.cgImage)
         let recognition = try VisionTestSupport.textRecognitionRequest()
         recognition.recognitionLanguages = ["en-US"]
@@ -186,8 +186,7 @@ final class SourceControlPanelTests: XCTestCase {
     }
 
     private func capture(_ view: NSView, name: String) throws {
-        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let bitmap = try VisionTestSupport.snapshot(of: view)
         guard let data = bitmap.representation(using: .png, properties: [:]) else { return }
         let directory = URL(fileURLWithPath: "/tmp/quanta-source-control-review", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
