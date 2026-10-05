@@ -2,18 +2,20 @@ import base64
 import hashlib
 import json
 import pathlib
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 KERNEL = pathlib.Path(__file__).resolve().parents[1] / "Quanta/Resources/quanta_kernel.py"
 
 
-def exchange(messages):
+def exchange(messages, cwd=None):
     wire = "".join(json.dumps(message) + "\n" for message in messages + [{"op": "shutdown"}])
     command = [sys.executable] + (["-S"] if sys.flags.no_site else []) + [str(KERNEL)]
-    result = subprocess.run(command, input=wire, capture_output=True, text=True, timeout=30)
+    result = subprocess.run(command, input=wire, capture_output=True, text=True, timeout=30, cwd=cwd)
     if result.returncode:
         raise AssertionError(result.stderr)
     decoded = []
@@ -182,6 +184,96 @@ class RichOutputTests(unittest.TestCase):
 
 
 class NotebookCompatTests(unittest.TestCase):
+    def test_imports_follow_the_workspace_and_changed_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "quanta_local_helper.py").write_text("value = 42\n")
+            child = root / "child"
+            child.mkdir()
+            (child / "quanta_child_helper.py").write_text("value = 99\n")
+            messages = exchange([
+                {"id": "local", "op": "execute", "code": "import quanta_local_helper\nquanta_local_helper.value"},
+                {"id": "child", "op": "execute", "code": "import os\nos.chdir('child')\nimport quanta_child_helper\nquanta_child_helper.value"},
+            ], cwd=root)
+        self.assertFalse(any(m.get("type") == "error" for m in messages))
+        self.assertEqual([m["text"] for m in messages if m.get("type") == "result"], ["42", "99"])
+
+    def test_scripts_can_import_siblings_without_leaking_their_search_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            child = root / "scripts"
+            child.mkdir()
+            (child / "quanta_script_helper.py").write_text("value = 17\n")
+            messages = exchange([
+                {"id": "before", "op": "execute", "code": "import sys\nbefore = list(sys.path)"},
+                {"id": "script", "op": "execute", "filename": str(child / "analysis.py"),
+                 "code": "import quanta_script_helper\nprint(quanta_script_helper.value)\nraise ValueError('expected')"},
+                {"id": "after", "op": "execute", "code": "sys.path == before"},
+            ], cwd=root)
+        self.assertEqual("".join(m["text"] for m in messages if m.get("type") == "stream"), "17\n")
+        self.assertEqual([m["ename"] for m in messages if m.get("type") == "error"], ["ValueError"])
+        self.assertEqual([m["text"] for m in messages if m.get("type") == "result"], ["True"])
+
+    def test_future_imports_persist_between_cells(self):
+        messages = exchange([
+            {"id": "future", "op": "execute", "code": "from __future__ import annotations"},
+            {"id": "definition", "op": "execute", "code": "def f(x: NotYetDefined): return x\nf.__annotations__"},
+        ])
+        self.assertFalse(any(m.get("type") == "error" for m in messages))
+        result = next(m for m in messages if m.get("id") == "definition" and m.get("type") == "result")
+        self.assertEqual(result["text"], "{'x': 'NotYetDefined'}")
+
+    def test_semicolon_suppresses_only_implicit_results(self):
+        messages = exchange([
+            {"id": "setup", "op": "execute", "code": "values = []"},
+            {"id": "quiet", "op": "execute", "code": "values.append(7) or print('kept') or 123; # quiet\n"},
+            {"id": "visible", "op": "execute", "code": "values"},
+            {"id": "literal", "op": "execute", "code": "'a;b' # ;"},
+        ])
+        self.assertFalse(any(m.get("id") == "quiet" and m.get("type") == "result" for m in messages))
+        self.assertEqual("".join(m["text"] for m in messages if m.get("id") == "quiet" and m.get("type") == "stream"), "kept\n")
+        self.assertEqual([m["text"] for m in messages if m.get("type") == "result"], ["[7]", "'a;b'"])
+
+    def test_print_flood_is_batched_without_losing_output(self):
+        messages = exchange([{"id": "flood", "op": "execute", "code": "for i in range(20000): print(i)"}])
+        streams = [m for m in messages if m.get("type") == "stream"]
+        self.assertEqual("".join(m["text"] for m in streams), "".join(str(i) + "\n" for i in range(20000)))
+        self.assertLess(len(streams), 100)
+
+    def test_buffering_preserves_stdout_stderr_order_and_explicit_flush(self):
+        messages = exchange([{"id": "order", "op": "execute", "code": "import sys\nprint('first', end='')\nsys.stderr.write('second')\nprint('third', end='', flush=True)\n42"}])
+        outputs = [m for m in messages if m.get("id") == "order"]
+        self.assertEqual([(m["name"], m["text"]) for m in outputs if m["type"] == "stream"],
+                         [("stdout", "first"), ("stderr", "second"), ("stdout", "third")])
+        self.assertEqual(outputs[-2]["type"], "result")
+
+    def test_buffered_output_arrives_while_a_cell_is_still_running(self):
+        command = [sys.executable] + (["-S"] if sys.flags.no_site else []) + [str(KERNEL)]
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        messages = queue.Queue()
+        def read():
+            for line in process.stdout:
+                try:
+                    messages.put(json.loads(line))
+                except ValueError:
+                    pass
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        try:
+            self.assertEqual(messages.get(timeout=10)["type"], "ready")
+            process.stdin.write(json.dumps({"id": "live", "op": "execute", "code": "import time\nprint('progress', end='')\ntime.sleep(10)"}) + "\n")
+            process.stdin.flush()
+            output = messages.get(timeout=2)
+            self.assertEqual((output["type"], output["text"]), ("stream", "progress"))
+            self.assertIsNone(process.poll())
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+            reader.join(timeout=5)
+            process.stdin.close()
+            process.stdout.close()
+            process.stderr.close()
+
     def test_buffered_streams_precede_results_and_errors(self):
         messages = exchange([
             {"id": "result", "op": "execute", "code": "print('before result', end=''); 42"},

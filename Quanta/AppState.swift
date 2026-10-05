@@ -925,25 +925,39 @@ final class AppState: ObservableObject {
     }
 
     private func handleConsoleExecution(_ message: [String: Any], plotOrigin: PlotOrigin) -> Bool {
-        switch message["type"] as? String {
+        let type = message["type"] as? String ?? ""
+        if Self.executionOutputTypes.contains(type),
+           type != "stream" || !(message["text"] as? String ?? "").isEmpty,
+           pendingConsoleClears.contains(plotOrigin.runID) {
+            clearConsoleExecutionOutput(runID: plotOrigin.runID)
+        }
+        switch type {
+        case "clear_output":
+            if message["wait"] as? Bool == true {
+                pendingConsoleClears.insert(plotOrigin.runID)
+            } else {
+                clearConsoleExecutionOutput(runID: plotOrigin.runID)
+            }
         case "stream":
             let name = message["name"] as? String ?? "stdout"
-            appendConsole(name == "stderr" ? .stderr : .stdout, message["text"] as? String ?? "")
+            appendConsoleExecutionOutput(name == "stderr" ? .stderr : .stdout,
+                                         message["text"] as? String ?? "", runID: plotOrigin.runID)
         case "result":
-            appendConsole(.result, message["text"] as? String ?? "")
+            appendConsoleExecutionOutput(.result, message["text"] as? String ?? "", runID: plotOrigin.runID)
         case "dataframe":
             if let dict = message["payload"] as? [String: Any],
                let payload = DataFramePayload(dict: dict) {
-                appendConsole(.result, payload.text)
+                appendConsoleExecutionOutput(.result, payload.text, runID: plotOrigin.runID)
             }
         case "ndarray", "jsontree", "objectcard":
             let text = (message["text"] as? String)
                 ?? ((message["payload"] as? [String: Any])?["text"] as? String)
                 ?? ""
-            appendConsole(.result, text)
+            appendConsoleExecutionOutput(.result, text, runID: plotOrigin.runID)
         case "rich":
             if let bundle = message["mime_bundle"] as? [String: Any] {
-                appendConsole(.result, RichOutput.text(bundle["text/plain"]))
+                appendConsoleExecutionOutput(.result, RichOutput.text(bundle["text/plain"]),
+                                             runID: plotOrigin.runID)
                 plots.consume(message, origin: plotOrigin)
             }
         case "plotlyhtml", "display":
@@ -952,19 +966,48 @@ final class AppState: ObservableObject {
             let ename = message["ename"] as? String ?? "Error"
             let evalue = message["evalue"] as? String ?? ""
             let traceback = message["traceback"] as? String ?? ""
-            appendConsole(.stderr, traceback.isEmpty ? "\(ename): \(evalue)\n" : traceback)
+            appendConsoleExecutionOutput(.stderr, traceback.isEmpty ? "\(ename): \(evalue)\n" : traceback,
+                                         runID: plotOrigin.runID)
         case "done":
+            pendingConsoleClears.remove(plotOrigin.runID)
+            consoleExecutionOutputIDs.removeValue(forKey: plotOrigin.runID)
             let ok = (message["status"] as? String) == "ok"
             appendConsole(.system, ok ? "✓ done" : "✗ finished with errors")
             refreshVariables()
             return true
         case "dead":
+            pendingConsoleClears.remove(plotOrigin.runID)
+            consoleExecutionOutputIDs.removeValue(forKey: plotOrigin.runID)
             appendConsole(.system, "Kernel died during execution.")
             return true
         default:
             break
         }
         return false
+    }
+
+    private static let executionOutputTypes: Set<String> = [
+        "stream", "result", "display", "rich", "plotlyhtml", "dataframe",
+        "ndarray", "jsontree", "objectcard", "error",
+    ]
+    private var consoleExecutionOutputIDs: [UUID: Set<UUID>] = [:]
+    private var pendingConsoleClears: Set<UUID> = []
+
+    private func appendConsoleExecutionOutput(_ kind: ConsoleLine.Kind, _ text: String, runID: UUID) {
+        guard !text.isEmpty else { return }
+        var owned = consoleExecutionOutputIDs[runID] ?? []
+        let merge = console.lines.last.map { owned.contains($0.id) } ?? false
+        console.append(kind, text, mergeWithPrevious: merge)
+        if let id = console.lines.last?.id { owned.insert(id) }
+        if owned.count > console.lines.count { owned.formIntersection(console.lines.map(\.id)) }
+        consoleExecutionOutputIDs[runID] = owned
+    }
+
+    private func clearConsoleExecutionOutput(runID: UUID) {
+        pendingConsoleClears.remove(runID)
+        if let ids = consoleExecutionOutputIDs.removeValue(forKey: runID) {
+            console.removeLines(withIDs: ids)
+        }
     }
 
     func runCell(_ cell: NotebookCell, in document: Document, advance: Bool,
@@ -991,24 +1034,31 @@ final class AppState: ObservableObject {
             return
         }
         if document.id == activeDocumentID { selectedCellID = cell.id }
+        pendingStreams.removeValue(forKey: cell.id)
+        pendingOutputClears.remove(cell.id)
         cell.lastExecutedSource = cell.source
         cell.outputs = []
+        cell.executionCount = nil
         cell.isRunning = true
         cell.isQueued = false
         cell.runStartedAt = Date()
         document.isDirty = true
         let plotOrigin = plots.beginRun(document: document, cell: cell)
+        let executingCellID = cell.id
         kernel.execute(code: cell.source) { [weak self, weak cell, weak document] message in
             guard let self else { return true }
             guard let cell else {
                 let type = message["type"] as? String
-                return type == "done" || type == "dead"
+                let finished = type == "done" || type == "dead"
+                if finished {
+                    self.pendingStreams.removeValue(forKey: executingCellID)
+                    self.pendingOutputClears.remove(executingCellID)
+                    self.streamFlushScheduled.remove(executingCellID)
+                }
+                return finished
             }
             let finished = self.handleCellExecution(message, cell: cell, document: document,
                                                     advance: advance, completion: completion)
-            if let bundle = message["mime_bundle"] as? [String: Any], !cell.outputs.isEmpty {
-                cell.outputs[cell.outputs.count - 1].raw = RichOutput.raw(bundle, metadata: message["metadata"] as? [String: Any] ?? [:])
-            }
             if ["display", "plotlyhtml", "rich"].contains(message["type"] as? String ?? ""),
                let output = cell.outputs.last {
                 self.plots.record(output, origin: plotOrigin)
@@ -1021,92 +1071,104 @@ final class AppState: ObservableObject {
                                      document: Document?, advance: Bool,
                                      completion: ((Bool) -> Void)?) -> Bool {
         switch message["type"] as? String {
+        case "clear_output":
+            if message["wait"] as? Bool == true {
+                flushStreams(into: cell)
+                pendingOutputClears.insert(cell.id)
+            } else {
+                pendingStreams.removeValue(forKey: cell.id)
+                pendingOutputClears.remove(cell.id)
+                cell.outputs = []
+            }
         case "stream":
             let name = message["name"] as? String ?? "stdout"
             let text = message["text"] as? String ?? ""
+            guard !text.isEmpty else { return false }
+            prepareCellOutput(cell)
             bufferStream(name: name, text: text, into: cell)
         case "result":
-            flushStreams(into: cell)
-            cell.outputs.append(CellOutput(kind: .executeResult(text: message["text"] as? String ?? "")))
+            appendCellOutput(.executeResult(text: message["text"] as? String ?? ""), message: message, cell: cell)
         case "display":
-            flushStreams(into: cell)
             if message["mime"] as? String == "image/png",
                let b64 = message["data"] as? String,
                let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) {
-                cell.outputs.append(CellOutput(kind: .image(data: data, image: NSImage(data: data))))
+                appendCellOutput(.image(data: data, image: NSImage(data: data)), message: message, cell: cell)
             }
         case "rich":
-            flushStreams(into: cell)
             if let bundle = message["mime_bundle"] as? [String: Any] {
-                cell.outputs.append(CellOutput(kind: RichOutput.kind(bundle), raw: RichOutput.raw(bundle, metadata: message["metadata"] as? [String: Any] ?? [:])))
+                appendCellOutput(RichOutput.kind(bundle), message: message, cell: cell)
             }
         case "plotlyhtml":
-            flushStreams(into: cell)
             if let html = message["html"] as? String,
                let jsPath = message["js_path"] as? String {
+                prepareCellOutput(cell)
+                flushStreams(into: cell)
                 let height = (message["height"] as? NSNumber)?.doubleValue ?? 450
                 let hasPNG = (message["has_png"] as? Bool) ?? true
                 if hasPNG, let last = cell.outputs.last,
                    case .image(let data, let image) = last.kind {
                     cell.outputs[cell.outputs.count - 1].kind = .plotlyFigure(
                         html: html, jsPath: jsPath, data: data, image: image, height: height)
+                    if let raw = cellOutputRaw(message) { cell.outputs[cell.outputs.count - 1].raw = raw }
                 } else {
                     cell.outputs.append(CellOutput(kind: .plotlyFigure(
-                        html: html, jsPath: jsPath, data: Data(), image: nil, height: height)))
+                        html: html, jsPath: jsPath, data: Data(), image: nil, height: height),
+                                                   raw: cellOutputRaw(message)))
                 }
             }
         case "dataframe":
-            flushStreams(into: cell)
             if let dict = message["payload"] as? [String: Any],
                let payload = DataFramePayload(dict: dict) {
-                cell.outputs.append(CellOutput(kind: .dataFrame(payload)))
+                appendCellOutput(.dataFrame(payload), message: message, cell: cell)
             }
         case "ndarray":
-            flushStreams(into: cell)
             if let dict = message["payload"] as? [String: Any],
                let payload = NDArrayPayload(dict: dict) {
-                cell.outputs.append(CellOutput(kind: .ndarray(payload)))
+                appendCellOutput(.ndarray(payload), message: message, cell: cell)
             }
         case "jsontree":
-            flushStreams(into: cell)
             if let data = message["data"] {
-                cell.outputs.append(CellOutput(kind: .jsonTree(JSONTreePayload(
+                appendCellOutput(.jsonTree(JSONTreePayload(
                     value: data,
                     summary: message["summary"] as? String ?? "",
-                    text: message["text"] as? String ?? ""))))
+                    text: message["text"] as? String ?? "")), message: message, cell: cell)
             }
         case "objectcard":
-            flushStreams(into: cell)
             if let payload = ObjectCardPayload(dict: message) {
-                cell.outputs.append(CellOutput(kind: .objectCard(payload)))
+                appendCellOutput(.objectCard(payload), message: message, cell: cell)
             }
         case "error":
             let frames = (message["frames"] as? [[String: Any]] ?? [])
                 .compactMap(TraceFrame.init)
-            flushStreams(into: cell)
-            cell.outputs.append(CellOutput(kind: .error(
+            appendCellOutput(.error(
                 ename: message["ename"] as? String ?? "Error",
                 evalue: message["evalue"] as? String ?? "",
                 traceback: (message["traceback"] as? String ?? "").strippingANSI,
-                frames: frames)))
+                frames: frames), message: message, cell: cell)
         case "done":
             flushStreams(into: cell)
+            pendingOutputClears.remove(cell.id)
             cell.isRunning = false
             document?.isDirty = true
             if let started = cell.runStartedAt {
                 cell.lastDuration = -started.timeIntervalSinceNow
             }
             cell.executionCount = message["execution_count"] as? Int
+            for index in cell.outputs.indices {
+                if cell.outputs[index].raw?["output_type"] as? String == "execute_result" {
+                    cell.outputs[index].raw?["execution_count"] = cell.executionCount ?? NSNull()
+                }
+            }
             refreshVariables()
             if advance, let document { advanceSelection(after: cell, in: document) }
             completion?((message["status"] as? String) == "ok")
             return true
         case "dead":
-            flushStreams(into: cell)
             cell.isRunning = false
-            cell.outputs.append(CellOutput(kind: .error(
+            appendCellOutput(.error(
                 ename: "KernelError", evalue: "Kernel died during execution",
-                traceback: "", frames: [])))
+                traceback: "", frames: []), message: message, cell: cell)
+            pendingOutputClears.remove(cell.id)
             completion?(false)
             return true
         default:
@@ -1115,8 +1177,38 @@ final class AppState: ObservableObject {
         return false
     }
 
+    private func prepareCellOutput(_ cell: NotebookCell) {
+        if pendingOutputClears.remove(cell.id) != nil {
+            pendingStreams.removeValue(forKey: cell.id)
+            cell.outputs = []
+        }
+    }
+
+    private func appendCellOutput(_ kind: CellOutput.Kind, message: [String: Any], cell: NotebookCell) {
+        prepareCellOutput(cell)
+        flushStreams(into: cell)
+        cell.outputs.append(CellOutput(kind: kind, raw: cellOutputRaw(message)))
+    }
+
+    private func cellOutputRaw(_ message: [String: Any]) -> [String: Any]? {
+        let type = message["type"] as? String ?? ""
+        guard Self.executionOutputTypes.contains(type), type != "stream", type != "error" else { return nil }
+        let outputType = message["output_type"] as? String
+        let explicitDisplay = outputType == "display_data"
+        let fallback: [String: Any]? = explicitDisplay && type == "result"
+            ? ["text/plain": message["text"] as? String ?? ""] : nil
+        guard let bundle = message["mime_bundle"] as? [String: Any] ?? fallback else { return nil }
+        var raw = RichOutput.raw(bundle, metadata: message["metadata"] as? [String: Any] ?? [:])
+        if outputType == "execute_result" || (!explicitDisplay && type != "display") {
+            raw["output_type"] = "execute_result"
+            raw["execution_count"] = NSNull()
+        }
+        return raw
+    }
+
     private var pendingStreams: [UUID: (name: String, text: String)] = [:]
     private var streamFlushScheduled: Set<UUID> = []
+    private var pendingOutputClears: Set<UUID> = []
 
     private func bufferStream(name: String, text: String, into cell: NotebookCell) {
         if let pending = pendingStreams[cell.id], pending.name != name {
@@ -1127,9 +1219,15 @@ final class AppState: ObservableObject {
         pendingStreams[cell.id] = pending
         guard !streamFlushScheduled.contains(cell.id) else { return }
         streamFlushScheduled.insert(cell.id)
+        let cellID = cell.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.033) { [weak self, weak cell] in
-            guard let self, let cell else { return }
-            self.streamFlushScheduled.remove(cell.id)
+            guard let self else { return }
+            self.streamFlushScheduled.remove(cellID)
+            guard let cell else {
+                self.pendingStreams.removeValue(forKey: cellID)
+                self.pendingOutputClears.remove(cellID)
+                return
+            }
             self.flushStreams(into: cell)
         }
     }

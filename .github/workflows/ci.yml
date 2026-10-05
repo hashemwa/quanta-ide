@@ -72,8 +72,12 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Standard-library-only bridge
-        run: python -S scripts/test-ui-workflows.py
+        run: |
+          python -S scripts/test-ui-workflows.py
+          python -S scripts/test-kernel-interactive.py
       - name: Install optional scientific packages
         run: python -m pip install numpy pandas matplotlib plotly
       - name: Scientific bridge
-        run: python scripts/test-ui-workflows.py
+        run: |
+          python scripts/test-ui-workflows.py
+          python scripts/test-kernel-interactive.py

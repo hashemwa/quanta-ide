@@ -267,9 +267,9 @@ final class ConsoleModel: ObservableObject {
     let input = ConsoleInputState()
     var handledFocusRequest = 0
 
-    func append(_ kind: ConsoleLine.Kind, _ text: String) {
+    func append(_ kind: ConsoleLine.Kind, _ text: String, mergeWithPrevious: Bool = true) {
         guard !text.isEmpty else { return }
-        if kind == .stdout || kind == .stderr,
+        if mergeWithPrevious, kind == .stdout || kind == .stderr,
            let last = lines.last, last.kind == kind, last.text.count < 20_000 {
             lines[lines.count - 1].text = last.text.appendingTerminalOutput(text)
         } else {
@@ -283,6 +283,12 @@ final class ConsoleModel: ObservableObject {
 
     func clear() {
         lines.removeAll()
+        revision += 1
+    }
+
+    func removeLines(withIDs ids: Set<UUID>) {
+        guard !ids.isEmpty, lines.contains(where: { ids.contains($0.id) }) else { return }
+        lines.removeAll { ids.contains($0.id) }
         revision += 1
     }
 

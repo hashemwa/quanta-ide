@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 import ast
+import asyncio
 import base64
 import builtins
+import codeop
 import datetime
 import functools
 import importlib.machinery
+import inspect
 import io
 import html as html_escape
 import json
@@ -36,10 +39,22 @@ MAX_STREAM_BYTES = 2_000_000
 MAX_REPR_CHARS = 20_000
 
 _lock = threading.Lock()
+_stream_lock = threading.RLock()
+_stream_flush_stop = threading.Event()
+_stream_flush_requested = threading.Event()
+_active_writer = None
 _current_id = None
 _stream_budget = MAX_STREAM_BYTES
 _exec_count = 0
 _interruptible = False
+_compiler = codeop.Compile()
+_compiler.flags |= ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+_async_loop = None
+_display_depth = 0
+_result_depth = 0
+
+_DISPLAY_TYPES = frozenset(("result", "display", "dataframe", "plotlyhtml", "rich",
+                            "ndarray", "objectcard", "jsontree"))
 
 user_ns = {"__name__": "__main__", "__builtins__": __builtins__}
 
@@ -73,6 +88,15 @@ def emit(obj):
         bundle = _portable_output(obj)
         if bundle:
             obj["mime_bundle"] = bundle
+    if obj.get("type") in _DISPLAY_TYPES:
+        if _display_depth:
+            obj.setdefault("output_type", "display_data")
+        elif _result_depth:
+            obj.setdefault("output_type", "execute_result")
+        elif obj.get("type") == "display":
+            obj.setdefault("output_type", "display_data")
+        if obj.get("type") == "result":
+            obj.setdefault("mime_bundle", {"text/plain": obj["text"]})
     with _lock:
         sys.__stdout__.write("\n" + json.dumps(obj) + "\n")
         sys.__stdout__.flush()
@@ -86,7 +110,6 @@ class StreamWriter(io.TextIOBase):
     def __init__(self, name):
         self.name = name
         self.buf = ""
-        self._wlock = threading.RLock()
         self._last_flush = time.monotonic()
 
     def writable(self):
@@ -96,27 +119,33 @@ class StreamWriter(io.TextIOBase):
         return False
 
     def write(self, s):
-        global _stream_budget
+        global _active_writer
         s = str(s)
         if not s:
             return 0
         length = len(s)
-        with self._wlock:
+        with _stream_lock:
+            if _active_writer is not None and _active_writer is not self:
+                _active_writer.flush()
+            _active_writer = self
             if _stream_budget <= 0:
                 return length
             if len(s) > _stream_budget:
                 s = s[:_stream_budget]
             if not self.buf:
                 self._last_flush = time.monotonic()
+                _stream_flush_requested.set()
             self.buf += s
-            if ("\n" in self.buf or len(self.buf) >= 8192
-                    or time.monotonic() - self._last_flush > 0.2):
+            if len(self.buf) >= 8192 or time.monotonic() - self._last_flush >= 1 / 30:
                 self.flush()
         return length
 
     def flush(self):
         global _stream_budget
-        with self._wlock:
+        stream_lock = _stream_lock
+        if stream_lock is None:
+            return
+        with stream_lock:
             if not self.buf:
                 return
 
@@ -136,6 +165,15 @@ stdout_writer = StreamWriter("stdout")
 stderr_writer = StreamWriter("stderr")
 sys.stdout = stdout_writer
 sys.stderr = stderr_writer
+
+def _flush_streams_periodically():
+    while True:
+        _stream_flush_requested.wait()
+        _stream_flush_requested.clear()
+        if _stream_flush_stop.wait(1 / 30):
+            return
+        stdout_writer.flush()
+        stderr_writer.flush()
 
 def _no_input(prompt=""):
     raise RuntimeError("input() is not supported in Quanta yet")
@@ -391,6 +429,31 @@ def _style_figure(fig):
             recolor(text, _readable_on(backdrop) if backdrop is not None else fg)
     return restores
 
+def _emit_figure(fig):
+    try:
+        restores = _style_figure(fig)
+    except Exception:
+        restores = None
+    buf = io.BytesIO()
+    try:
+        if not _adapt_plot_theme:
+            fig.savefig(buf, format="png", dpi=144, bbox_inches="tight")
+        elif restores is not None:
+            fig.savefig(buf, format="png", dpi=144, bbox_inches="tight",
+                        transparent=True)
+        else:
+            fig.savefig(buf, format="png", dpi=144, bbox_inches="tight",
+                        facecolor=fig.get_facecolor())
+    finally:
+        _restore_figure(restores)
+    emit({
+        "id": _current_id,
+        "type": "display",
+        "output_type": "display_data",
+        "mime": "image/png",
+        "data": base64.b64encode(buf.getvalue()).decode(),
+    })
+
 def emit_figures():
     if "matplotlib" not in sys.modules:
         return
@@ -407,28 +470,7 @@ def emit_figures():
             fig = plt.figure(num)
             if not fig.get_axes():
                 continue
-            try:
-                restores = _style_figure(fig)
-            except Exception:
-                restores = None
-            buf = io.BytesIO()
-            try:
-                if not _adapt_plot_theme:
-                    fig.savefig(buf, format="png", dpi=144, bbox_inches="tight")
-                elif restores is not None:
-                    fig.savefig(buf, format="png", dpi=144, bbox_inches="tight",
-                                transparent=True)
-                else:
-                    fig.savefig(buf, format="png", dpi=144, bbox_inches="tight",
-                                facecolor=fig.get_facecolor())
-            finally:
-                _restore_figure(restores)
-            emit({
-                "id": _current_id,
-                "type": "display",
-                "mime": "image/png",
-                "data": base64.b64encode(buf.getvalue()).decode(),
-            })
+            _emit_figure(fig)
         except Exception:
             continue
     try:
@@ -482,6 +524,19 @@ def _is_matplotlib_result(obj):
     if isinstance(obj, (list, tuple)) and obj and all(isinstance(o, Artist) for o in obj):
         return True
     return False
+
+def _display_matplotlib(obj):
+    from matplotlib.figure import Figure
+    import matplotlib.pyplot as plt
+
+    figures = []
+    for artist in obj if isinstance(obj, (list, tuple)) else (obj,):
+        figure = artist if isinstance(artist, Figure) else artist.get_figure()
+        if figure is not None and not any(figure is other for other in figures):
+            figures.append(figure)
+    for figure in figures:
+        _emit_figure(figure)
+        plt.close(figure)
 
 def _try_plotly(obj):
     module = getattr(type(obj), "__module__", "") or ""
@@ -738,12 +793,14 @@ def _portable_output(message):
         return {"text/plain": message["text"], "application/json": message["data"]}
     return None
 
-def emit_result(obj, name_hint):
+def _emit_result(obj, name_hint, explicit=False):
     payload = dataframe_payload(obj, name=name_hint, max_cols=40, head_tail=True)
     if payload is not None:
         emit({"id": _current_id, "type": "dataframe", "payload": payload})
         return
     if _is_matplotlib_result(obj):
+        if explicit:
+            _display_matplotlib(obj)
         return
     if _try_plotly(obj):
         return
@@ -762,6 +819,31 @@ def emit_result(obj, name_hint):
     r = _clean(r)
     r = _capped(r, MAX_REPR_CHARS)
     emit({"id": _current_id, "type": "result", "text": r})
+
+def emit_result(obj, name_hint, explicit=False):
+    global _result_depth
+    _result_depth += 1
+    try:
+        _emit_result(obj, name_hint, explicit=explicit)
+    finally:
+        _result_depth -= 1
+
+def display(*objects):
+    global _display_depth
+    _display_depth += 1
+    try:
+        for obj in objects:
+            name = next((name for name, value in list(user_ns.items())
+                         if isinstance(name, str) and not name.startswith("_")
+                         and value is obj), None)
+            emit_result(obj, name, explicit=True)
+    finally:
+        _display_depth -= 1
+
+def clear_output(wait=False):
+    emit({"id": _current_id, "type": "clear_output", "wait": bool(wait)})
+
+user_ns.update({"display": display, "clear_output": clear_output})
 
 def _error_report(e):
     try:
@@ -845,7 +927,8 @@ def _parse_notebook_code(code, filename):
         if i + 1 not in protected and _INLINE_MATPLOTLIB.fullmatch(line):
             lines[i] = "\n" if line.endswith("\n") else ""
     try:
-        return ast.parse("".join(lines), filename=filename)
+        return compile("".join(lines), filename, "exec",
+                       flags=ast.PyCF_ONLY_AST | _compiler.flags, dont_inherit=True)
     except SyntaxError as error:
         for i, line in enumerate(lines):
             command = _NOTEBOOK_COMMAND.match(line)
@@ -867,6 +950,98 @@ def _parse_notebook_code(code, filename):
         raise
 
 
+def _suppresses_result(code):
+    ignored = {tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT,
+               tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
+    last = None
+    for token in tokenize.generate_tokens(io.StringIO(code).readline):
+        if token.type not in ignored:
+            last = token
+    return last is not None and last.type == tokenize.OP and last.string == ";"
+
+
+def _cancel_async_tasks(loop):
+    tasks = asyncio.all_tasks(loop)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        try:
+            loop.run_until_complete(asyncio.wait(tasks, timeout=0.5))
+        except BaseException:
+            pass
+    for task in tasks:
+        if task.done() and not task.cancelled():
+            try:
+                task.exception()
+            except BaseException:
+                pass
+    pending = {task for task in tasks if not task.done()}
+    if pending:
+        stderr_writer.write("Some asynchronous tasks did not stop after cancellation. Restart the kernel to stop them.\n")
+    return pending
+
+
+async def _evaluate_async_cell(compiled, compiled_expr):
+    if compiled is not None:
+        value = eval(compiled, user_ns)
+        if compiled.co_flags & inspect.CO_COROUTINE:
+            await value
+    if compiled_expr is not None:
+        value = eval(compiled_expr, user_ns)
+        if compiled_expr.co_flags & inspect.CO_COROUTINE:
+            return await value
+        return value
+    return None
+
+
+def _evaluate_cell(compiled, compiled_expr):
+    global _async_loop, _interruptible
+    asynchronous = any(code is not None and code.co_flags & inspect.CO_COROUTINE
+                       for code in (compiled, compiled_expr))
+    if not asynchronous:
+        if compiled is not None:
+            exec(compiled, user_ns)
+        return eval(compiled_expr, user_ns) if compiled_expr is not None else None
+    if _async_loop is None or _async_loop.is_closed():
+        _async_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_async_loop)
+    coroutine = _evaluate_async_cell(compiled, compiled_expr)
+    try:
+        task = _async_loop.create_task(coroutine)
+    except BaseException:
+        coroutine.close()
+        raise
+    try:
+        return _async_loop.run_until_complete(task)
+    except BaseException:
+        _interruptible = False
+        _cancel_async_tasks(_async_loop)
+        if task.done() and not task.cancelled():
+            task.exception()
+        raise
+
+
+def _shutdown_async_loop():
+    global _async_loop
+    loop = _async_loop
+    _async_loop = None
+    if loop is None or loop.is_closed():
+        return
+    try:
+        _cancel_async_tasks(loop)
+        cleanup = loop.create_task(loop.shutdown_asyncgens())
+        loop.run_until_complete(asyncio.wait({cleanup}, timeout=0.5))
+        if not cleanup.done():
+            _cancel_async_tasks(loop)
+        elif not cleanup.cancelled():
+            cleanup.exception()
+    except BaseException:
+        pass
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
 def run_code(msg):
     global _current_id, _exec_count, _stream_budget, _interruptible
     _current_id = msg.get("id")
@@ -878,8 +1053,13 @@ def run_code(msg):
     status = "ok"
     had_file = "__file__" in user_ns
     old_file = user_ns.get("__file__")
+    script_directory = None
     if msg.get("filename"):
         user_ns["__file__"] = msg["filename"]
+        directory = os.path.dirname(os.path.abspath(msg["filename"]))
+        if directory not in sys.path:
+            script_directory = directory
+            sys.path.insert(0, directory)
 
     linecache.cache[filename] = (len(code), None, code.splitlines(True), filename)
     compiling = True
@@ -887,7 +1067,7 @@ def run_code(msg):
         tree = _parse_notebook_code(code, filename)
         result_name = None
         last_expr = None
-        if tree.body and isinstance(tree.body[-1], ast.Expr):
+        if tree.body and isinstance(tree.body[-1], ast.Expr) and not _suppresses_result(code):
             expr_node = tree.body.pop()
             if isinstance(expr_node.value, ast.Name):
                 result_name = expr_node.value.id
@@ -895,16 +1075,13 @@ def run_code(msg):
             ast.fix_missing_locations(last_expr)
         result = None
         has_result = False
-        compiled = compile(tree, filename, "exec") if tree.body else None
-        compiled_expr = compile(last_expr, filename, "eval") if last_expr is not None else None
+        compiled = _compiler(tree, filename, "exec") if tree.body else None
+        compiled_expr = _compiler(last_expr, filename, "eval") if last_expr is not None else None
         compiling = False
         _interruptible = True
         try:
-            if compiled is not None:
-                exec(compiled, user_ns)
-            if compiled_expr is not None:
-                result = eval(compiled_expr, user_ns)
-                has_result = result is not None
+            result = _evaluate_cell(compiled, compiled_expr)
+            has_result = compiled_expr is not None and result is not None
         finally:
             _interruptible = False
         if has_result:
@@ -953,6 +1130,8 @@ def run_code(msg):
                 user_ns["__file__"] = old_file
             else:
                 user_ns.pop("__file__", None)
+        if script_directory is not None and script_directory in sys.path:
+            sys.path.remove(script_directory)
         try:
             emit_figures()
         except Exception:
@@ -1283,7 +1462,7 @@ def handle_latex(msg):
 
 def _features():
     import importlib.util as u
-    result = {}
+    result = {"top_level_await": True, "display": True, "clear_output": True}
     for mod in ("pandas", "numpy", "matplotlib"):
         try:
             result[mod] = u.find_spec(mod) is not None
@@ -1336,6 +1515,8 @@ def execution_directory():
 
 def main():
     signal.signal(signal.SIGINT, _sigint_handler)
+    if "" not in sys.path:
+        sys.path.insert(0, "")
     emit({
         "type": "ready",
         "python_version": sys.version.split()[0],
@@ -1344,6 +1525,8 @@ def main():
         "features": _features(),
         "plotly_js": _plotly_js_path(),
     })
+    stream_flusher = threading.Thread(target=_flush_streams_periodically, daemon=True)
+    stream_flusher.start()
     while True:
         line = _protocol_in.readline()
         if not line:
@@ -1385,6 +1568,12 @@ def main():
                 break
         except Exception:
             _handle_internal_error(op, msg)
+    _shutdown_async_loop()
+    _stream_flush_stop.set()
+    _stream_flush_requested.set()
+    stream_flusher.join(timeout=1)
+    stdout_writer.flush()
+    stderr_writer.flush()
 
 if __name__ == "__main__":
     main()
