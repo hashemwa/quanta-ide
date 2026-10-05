@@ -29,10 +29,15 @@ enum CodeEditorFactory {
         tv.isAutomaticTextCompletionEnabled = false
         tv.textContainerInset = NSSize(width: DS.Space.xs, height: DS.Space.s)
         tv.inlinePredictionType = .no
-        tv.completionProvider = { code, cursor, reply in
+        tv.completionProvider = { [weak tv] code, cursor, reply in
             let app = AppState.shared
+            let local = LocalPythonCompletion.suggestions(source: code, cursor: cursor,
+                                                          context: tv?.completionSources?() ?? [])
             app.requestCompletions(code: code, cursor: cursor) { matches, start, end in
-                reply(matches.map { CodeCompletion(label: $0, range: NSRange(location: start, length: max(0, end - start))) })
+                let range = NSRange(location: start, length: max(0, end - start))
+                let live = matches.map { CodeCompletion(label: $0, range: range) }
+                let names = Set(matches)
+                reply(live + local.filter { !names.contains($0.label) && (live.isEmpty || $0.edit.range == range) })
             }
         }
         tv.inspectionProvider = { code, cursor, reply in
@@ -63,6 +68,7 @@ final class ScriptCanvas: NSObject, DocumentCanvas, NSTextViewDelegate {
         textView.isIncrementalSearchingEnabled = true
         textView.delegate = self
         textView.string = document.text
+        textView.bindCodeTools(document: document, sourceID: document.id)
         textView.setAccessibilityLabel(document.displayName)
         if let storage = textView.textStorage { PythonHighlighter.highlight(storage) }
         EditorRegistry.shared.register(textView, for: document.id)

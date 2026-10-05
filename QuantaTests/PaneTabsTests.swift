@@ -24,21 +24,34 @@ final class PaneTabsTests: XCTestCase {
         if #available(macOS 26.0, *) { XCTAssertEqual(control.frame.width, width, accuracy: 1) }
     }
 
-    func testBottomPanesStayCompactTextTabs() throws {
-        let segments = BottomPane.allCases.map {
-            IconSegmentedControl<BottomPane>.Segment(value: $0, title: $0.rawValue, help: $0.rawValue)
-        }
+    func testBottomPanesUseCompactTextTabsWhenSpaceAllows() throws {
+        let wide = DS.Layout.editorColumnIdeal
         let control = try host(HStack {
-            IconSegmentedControl(segments: segments, selection: .constant(.terminal), fillsWidth: false)
+            BottomPanePicker(selection: .constant(.terminal))
             Spacer()
-        })
+        }, width: wide)
         XCTAssertEqual((0..<control.segmentCount).map { control.label(forSegment: $0) },
                        BottomPane.allCases.map(\.rawValue))
         XCTAssertEqual(control.selectedSegment, 1)
+        XCTAssertLessThan(control.frame.width, wide)
+    }
+
+    func testBottomPanesUseNamedIconTabsWhenNarrow() throws {
+        let control = try host(HStack {
+            BottomPanePicker(selection: .constant(.problems))
+            Spacer()
+        })
+        XCTAssertEqual(control.segmentCount, BottomPane.allCases.count)
+        XCTAssertEqual(control.selectedSegment, 3)
+        for (index, pane) in BottomPane.allCases.enumerated() {
+            XCTAssertEqual(control.toolTip(forSegment: index), pane.rawValue)
+            XCTAssertEqual(control.image(forSegment: index)?.accessibilityDescription, pane.rawValue)
+        }
         XCTAssertLessThan(control.frame.width, width)
     }
 
-    private func host(_ view: some View) throws -> NSSegmentedControl {
+    private func host(_ view: some View, width requestedWidth: CGFloat? = nil) throws -> NSSegmentedControl {
+        let width = requestedWidth ?? self.width
         let hosting = NSHostingView(rootView: view.frame(width: width, height: DS.Bar.primary))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: DS.Bar.primary),
                               styleMask: [.borderless], backing: .buffered, defer: false)

@@ -12,6 +12,7 @@ enum BottomPane: String, CaseIterable {
     case console = "Console"
     case terminal = "Terminal"
     case plots = "Plots"
+    case problems = "Problems"
 }
 
 final class TerminalSession: NSObject, ObservableObject {

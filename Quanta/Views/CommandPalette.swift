@@ -143,7 +143,7 @@ extension AppState {
         return String(path.dropFirst(root.count + 1))
     }
 
-    var ideCommands: [IDECommand] {
+    @MainActor var ideCommands: [IDECommand] {
         [
             IDECommand(id: "open", title: "Open File…", shortcut: "⌘O", action: openFilePanel),
             IDECommand(id: "folder", title: "Open Folder…", shortcut: "⇧⌘O", action: openFolderPanel),
@@ -160,6 +160,12 @@ extension AppState {
             IDECommand(id: "continue-run", title: "Continue Remaining Cells", shortcut: "", enabled: pausedRunDocumentID != nil, action: continueRemainingCells),
             IDECommand(id: "variables", title: "Toggle Variables", shortcut: "⌥⌘0", action: toggleVariables),
             IDECommand(id: "console", title: "Show Console", shortcut: "", action: { self.showPythonConsole() }),
+            IDECommand(id: "problems", title: "Show Problems", shortcut: "", action: showProblems),
+            IDECommand(id: "python-check", title: "Check Python Code", shortcut: "", enabled: activeDocument?.isFileBacked == true, action: checkActivePython),
+            IDECommand(id: "python-format", title: "Format Code", shortcut: "⇧⌥F", enabled: activeDocument?.isFileBacked == true, action: formatActivePython),
+            IDECommand(id: "python-environment", title: "Python Environment…", shortcut: "", action: showPythonEnvironment),
+            IDECommand(id: "copilot", title: "GitHub Copilot…", shortcut: "", action: { CopilotService.shared.showsPopover = true }),
+            IDECommand(id: "copilot-toggle", title: CopilotService.shared.isEnabled ? "Turn Off Copilot Suggestions" : "Turn On Copilot Suggestions", shortcut: "", enabled: CopilotService.shared.hasAccount, action: { CopilotService.shared.setEnabled(!CopilotService.shared.isEnabled) }),
             IDECommand(id: "insert-code-above", title: "Insert Code Cell Above", shortcut: "A (command mode)", enabled: hasSelectedCell, action: { self.commandInsert(offset: 0) }),
             IDECommand(id: "show-documentation", title: "Show Documentation", shortcut: "⇧Tab", action: showEditorDocumentation),
             IDECommand(id: "open-data", title: "Open Data Source…", shortcut: "", action: openDataPanel),

@@ -11,17 +11,10 @@ struct BottomPanel: View {
     @State private var consoleScope = "All"
     @State private var showingSearch = false
 
-    private static let paneSegments: [IconSegmentedControl<BottomPane>.Segment] = [
-        .init(value: .console, title: BottomPane.console.rawValue, help: "Console"),
-        .init(value: .terminal, title: BottomPane.terminal.rawValue, help: "Terminal"),
-        .init(value: .plots, title: BottomPane.plots.rawValue, help: "Plots"),
-    ]
-
     var body: some View {
         VStack(spacing: 0) {
             PanelBar(height: DS.Bar.primary) {
-                IconSegmentedControl(segments: Self.paneSegments, selection: $app.bottomPane, fillsWidth: false)
-                    .accessibilityLabel("Panel")
+                BottomPanePicker(selection: $app.bottomPane)
                 Spacer(minLength: DS.Space.s)
                 if app.bottomPane == .terminal {
                     if let status = terminal.exitStatus, !terminal.running {
@@ -37,6 +30,8 @@ struct BottomPanel: View {
                     IconButton("trash", help: "Clear Terminal Scrollback") { terminal.clear() }
                 } else if app.bottomPane == .plots {
                     PlotsToolbar(history: app.plots, selection: $plotSelection, allFiles: $plotAllFiles)
+                } else if app.bottomPane == .problems, let document = app.activeDocument {
+                    ProblemsToolbar(state: document.codeTools) { app.checkActivePython() }
                 } else if app.bottomPane == .console {
                     if consoleScope != "All" {
                         Text(consoleScope).font(.caption).foregroundStyle(.secondary)
@@ -63,6 +58,16 @@ struct BottomPanel: View {
             }
             ZStack {
                 if app.bottomPane == .plots { PlotsPanel(history: app.plots, selection: $plotSelection, allFiles: $plotAllFiles) }
+                if app.bottomPane == .problems {
+                    if let document = app.activeDocument, document.isFileBacked {
+                        ProblemsPanel(document: document, state: document.codeTools) {
+                            app.revealDiagnostic($0, in: document)
+                        }.id(document.id)
+                    } else {
+                        NavigatorEmptyState("Open Python Code", systemImage: "doc.text.magnifyingglass",
+                                            detail: "Open a Python file or notebook to check its code.")
+                    }
+                }
                 ConsoleView(query: consoleQuery, scope: consoleScope, isActive: app.bottomPane == .console)
                     .opacity(app.bottomPane == .console ? 1 : 0)
                     .allowsHitTesting(app.bottomPane == .console)
@@ -106,6 +111,28 @@ struct BottomPanel: View {
                 }
             }
         }
+    }
+}
+
+struct BottomPanePicker: View {
+    @Binding var selection: BottomPane
+
+    private static let titles = BottomPane.allCases.map {
+        IconSegmentedControl<BottomPane>.Segment(value: $0, title: $0.rawValue, help: $0.rawValue)
+    }
+    private static let icons: [IconSegmentedControl<BottomPane>.Segment] = [
+        .init(value: .console, icon: "text.alignleft", title: "Console", help: "Console"),
+        .init(value: .terminal, icon: "terminal", title: "Terminal", help: "Terminal"),
+        .init(value: .plots, icon: "chart.xyaxis.line", title: "Plots", help: "Plots"),
+        .init(value: .problems, icon: "exclamationmark.bubble", title: "Problems", help: "Problems"),
+    ]
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            IconSegmentedControl(segments: Self.titles, selection: $selection, fillsWidth: false)
+            IconSegmentedControl(segments: Self.icons, selection: $selection, fillsWidth: false)
+        }
+        .accessibilityLabel("Panel")
     }
 }
 

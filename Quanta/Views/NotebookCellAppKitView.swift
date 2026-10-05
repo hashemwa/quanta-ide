@@ -417,6 +417,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         editor.translatesAutoresizingMaskIntoConstraints = false
         editor.isVerticallyResizable = true
         editor.isHorizontallyResizable = false
+        editor.expandsForInlineCompletion = true
         editor.autoresizingMask = []
         editor.drawsBackground = false
         editor.delegate = self
@@ -426,6 +427,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         }
         if let storage = editor.textStorage { PythonHighlighter.highlight(storage) }
         EditorRegistry.shared.register(editor, for: cell.id)
+        if let document { editor.bindCodeTools(document: document, sourceID: cell.id, isPython: cell.cellType == .code) }
         editor.onCommand = { [weak self] command in
             guard let self, let cell = self.cell, let document = self.document else { return false }
             AppState.shared.handleCellCommand(command, cell: cell, document: document)
@@ -633,10 +635,11 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         layoutManager.ensureLayout(for: container)
         let used = layoutManager.usedRect(for: container)
         let textHeight = max(used.maxY, layoutManager.extraLineFragmentRect.maxY)
-        let height = max(textHeight + editor.textContainerInset.height * 2 + 2, 30)
+        let sourceHeight = max(textHeight + editor.textContainerInset.height * 2 + 2, 30)
+        let height = max(sourceHeight, editor.inlineCompletionMinimumHeight)
         guard force || abs(height - (editorHeightConstraint?.constant ?? 0)) > 0.5 else { return }
         editorHeightConstraint?.constant = height
-        if abs(cell.editorHeight - height) > 0.5 { cell.editorHeight = height }
+        if abs(cell.editorHeight - sourceHeight) > 0.5 { cell.editorHeight = sourceHeight }
         onSizeChange?()
     }
 

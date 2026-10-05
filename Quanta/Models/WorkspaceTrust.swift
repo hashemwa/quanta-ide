@@ -62,7 +62,15 @@ extension AppState {
             requestWorkspaceTrust()
             return false
         }
-        return kernelTransition == nil
+        return kernelTransition == nil && allowPythonEnvironmentUse()
+    }
+
+    func allowPythonEnvironmentUse() -> Bool {
+        guard !pythonEnvironmentMutationInProgress else {
+            userNotice = "Wait for the Python environment operation to finish, or cancel it in Python Environment…, before running code or changing sessions."
+            return false
+        }
+        return true
     }
 
     func synchronizeWorkspaceKernel() {
@@ -85,7 +93,7 @@ extension AppState {
     }
 
     func applyKernelTransition(_ transition: KernelTransition) {
-        guard transition.workspace == workspace?.rootURL, isWorkspaceTrusted else { return }
+        guard transition.workspace == workspace?.rootURL, isWorkspaceTrusted, allowPythonEnvironmentUse() else { return }
         kernelTransition = nil
         guard FileManager.default.isExecutableFile(atPath: transition.python) else {
             userNotice = "The selected Python interpreter is no longer executable. The current session was kept."

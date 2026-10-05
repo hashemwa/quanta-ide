@@ -43,6 +43,7 @@ final class Document: ObservableObject, Identifiable {
     var lastSelectedCellID: UUID?
 
     let find = FindState()
+    let codeTools = DocumentCodeTools()
 
     private let untitledName: String
     let draftKey: String

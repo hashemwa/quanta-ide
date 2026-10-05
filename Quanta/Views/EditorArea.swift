@@ -6,13 +6,18 @@ struct EditorAreaView: View {
     @EnvironmentObject var app: AppState
 
     var body: some View {
-        if app.openDocuments.isEmpty {
-            WelcomeView()
-        } else {
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
+            if app.openDocuments.isEmpty {
+                WelcomeView()
+            } else {
                 TabBarView()
                 documents
             }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            CopilotFloatingButton()
+                .fixedSize()
+                .padding(DS.Space.xl)
         }
     }
 
@@ -162,6 +167,7 @@ struct DocumentContentView: View {
             }
         }
         .environment(\.monoFontSize, presentation.fontSize - 1)
+        .modifier(CodeToolsMonitor(document: document))
     }
 
     @ViewBuilder
@@ -197,6 +203,20 @@ struct TabBarView: View {
     }
 
     var body: some View {
+        documentTabs
+            .frame(height: DS.Bar.primary)
+            .modifier(TabBarBackground())
+            .background {
+                if insertion != nil {
+                    TabDragEndMonitor {
+                        trackingDrop = false
+                        insertion = nil
+                    }
+                }
+            }
+    }
+
+    private var documentTabs: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
@@ -221,16 +241,7 @@ struct TabBarView: View {
                 }
             }
         }
-        .frame(height: DS.Bar.primary)
-        .modifier(TabBarBackground())
-        .background {
-            if insertion != nil {
-                TabDragEndMonitor {
-                    trackingDrop = false
-                    insertion = nil
-                }
-            }
-        }
+        .frame(minWidth: 0, maxWidth: .infinity)
     }
 }
 

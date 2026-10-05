@@ -39,7 +39,34 @@ struct MainWindowView: View {
         .sheet(item: $app.paletteMode) { mode in
             CommandPalette(mode: mode).environmentObject(app)
         }
-        .onAppear { app.bootstrap() }
+        .sheet(isPresented: $app.showsPythonEnvironment) {
+            PythonEnvironmentPanel(
+                manager: app.pythonEnvironmentManager,
+                python: app.codeToolsPython,
+                version: app.codeToolsPython.flatMap { app.environmentVersions[$0] },
+                workspace: app.workspace?.rootURL,
+                trusted: app.isWorkspaceTrusted && app.kernelTransition == nil,
+                kernelBusy: app.kernelStatus == .busy || app.kernelStatus == .starting,
+                onEnvironmentCreated: { path in
+                    app.showsPythonEnvironment = false
+                    DispatchQueue.main.async {
+                        app.refreshEnvironments()
+                        app.selectPython(path)
+                    }
+                },
+                onPackagesChanged: {
+                    app.refreshEnvironments()
+                    app.activeDocument?.codeTools.schedule()
+                })
+                .environment(\.monoFontSize, app.editorFontSize - 1)
+        }
+        .onAppear {
+            app.bootstrap()
+            CopilotService.shared.bind(to: app)
+        }
+        .onChange(of: app.isWorkspaceTrusted) { _, trusted in
+            CopilotService.shared.updateWorkspace(app.workspace?.rootURL, trusted: trusted)
+        }
         .alert("Trust this workspace?", isPresented: Binding(
             get: { app.workspaceTrustRequest != nil },
             set: { if !$0 { app.workspaceTrustRequest = nil } }
@@ -408,6 +435,7 @@ struct KernelStatusMenu: View {
             }
             Button("Rescan Environments") { app.refreshEnvironments() }
             Button("Choose Interpreter…") { app.choosePythonManually() }
+            Button("Python Environment…") { app.showPythonEnvironment() }
             Divider()
             Button("Restart Kernel") { app.restartKernel() }
             Button("Interrupt Execution") { app.interruptKernel() }

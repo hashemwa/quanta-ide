@@ -43,6 +43,8 @@ enum DS {
         static let editorPaneMin: CGFloat = 280
         static let paletteWidth: CGFloat = 580
         static let paletteHeight: CGFloat = 390
+        static let copilotPopoverWidth: CGFloat = 340
+        static let copilotPopoverMaxHeight: CGFloat = 560
         static let inspectionWidth: CGFloat = 440
         static let inspectionHeight: CGFloat = 360
         static let findFieldMinWidth: CGFloat = 80
@@ -848,7 +850,7 @@ struct FilterBarButton: View {
             }
             .frame(width: DS.Layout.barControlGlyph, height: DS.Layout.barControlGlyph)
         }
-        .modifier(FilterBarControlStyle())
+        .modifier(GlassIconControlStyle())
         .disabled(busy)
         .help(help)
         .accessibilityLabel(IconButton.accessibilityName(help))
@@ -897,7 +899,7 @@ private struct MenuAnchorView: NSViewRepresentable {
     }
 }
 
-private struct FilterBarControlStyle: ViewModifier {
+struct GlassIconControlStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .buttonStyle(.glass)

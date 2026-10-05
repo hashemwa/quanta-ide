@@ -81,11 +81,13 @@ final class AppState: ObservableObject {
         }
     }
     @Published var consoleHeight: CGFloat =
-        QuantaDefaults.store.object(forKey: "QuantaConsoleHeight") as? CGFloat ?? DS.Layout.consoleDefaultHeight {
+        QuantaDefaults.finiteCGFloat(forKey: "QuantaConsoleHeight", fallback: DS.Layout.consoleDefaultHeight,
+                                    range: DS.Layout.consoleMinHeight...480) {
         didSet { QuantaDefaults.store.set(consoleHeight, forKey: "QuantaConsoleHeight") }
     }
     @Published var editorSplitFraction: CGFloat =
-        QuantaDefaults.store.object(forKey: "QuantaEditorSplitFraction") as? CGFloat ?? 0.5 {
+        QuantaDefaults.finiteCGFloat(forKey: "QuantaEditorSplitFraction", fallback: 0.5,
+                                    range: DS.Layout.splitFractionRange) {
         didSet { QuantaDefaults.store.set(editorSplitFraction, forKey: "QuantaEditorSplitFraction") }
     }
     private lazy var consoleUserHidden = !showConsole
@@ -97,6 +99,11 @@ final class AppState: ObservableObject {
     @Published var kernelBanner = "No kernel"
     @Published var environments: [PythonEnvironment] = []
     @Published var environmentVersions: [String: String] = [:]
+    @Published var showsPythonEnvironment = false
+    private(set) var pythonEnvironmentMutationInProgress = false
+    @MainActor lazy var pythonEnvironmentManager = PythonEnvironmentManager(onMutationChanged: { [weak self] mutating in
+        self?.pythonEnvironmentMutationInProgress = mutating
+    })
     let editorPresentation = EditorPresentationState(
         fontSize: AppState.storedFontSize)
     let git = SourceControlState()
@@ -212,7 +219,7 @@ final class AppState: ObservableObject {
     }
 
     func startKernel() {
-        guard isWorkspaceTrusted, kernelTransition == nil else { return }
+        guard isWorkspaceTrusted, kernelTransition == nil, allowPythonEnvironmentUse() else { return }
         guard let script = kernelScriptURL() else {
             appendConsole(.system, "Internal error: quanta_kernel.py missing from the app bundle.")
             return
@@ -319,6 +326,7 @@ final class AppState: ObservableObject {
     }
 
     private func performKernelRestart() {
+        guard allowExecution() else { return }
         clearRunningFlags()
         kernel.stop()
         variables = []
@@ -2223,17 +2231,22 @@ final class AppState: ObservableObject {
 
     func highlightCurrentMatch(in document: Document) {
         let find = document.find
-        guard find.currentIndex < find.matches.count, let notebook = document.notebook else { return }
+        guard find.matches.indices.contains(find.currentIndex), let notebook = document.notebook else { return }
         let match = find.matches[find.currentIndex]
         guard let cell = notebook.cells.first(where: { $0.id == match.cellID }) else { return }
+        let source = cell.source
+        guard EditorTextRange.isValid(match.range, length: (source as NSString).length) else { return }
         if cell.cellType == .markdown, !cell.isEditingMarkdown { cell.isEditingMarkdown = true }
         if cell.isSourceCollapsed { cell.isSourceCollapsed = false }
         if selectedCellID != cell.id { selectedCellID = cell.id }
         scrollRequest = cell.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            guard let tv = EditorRegistry.shared.view(for: cell.id) else { return }
+            guard cell.source == source, find.matches.indices.contains(find.currentIndex),
+                  find.matches[find.currentIndex].cellID == match.cellID,
+                  find.matches[find.currentIndex].range == match.range,
+                  let tv = EditorRegistry.shared.view(for: cell.id), tv.string == source else { return }
             let length = (tv.string as NSString).length
-            guard match.range.location + match.range.length <= length else { return }
+            guard EditorTextRange.isValid(match.range, length: length) else { return }
             tv.setSelectedRange(match.range)
             tv.scrollRangeToVisible(match.range)
             tv.showFindIndicator(for: match.range)
@@ -2242,11 +2255,11 @@ final class AppState: ObservableObject {
 
     func replaceCurrentMatch(in document: Document) {
         let find = document.find
-        guard find.currentIndex < find.matches.count, let notebook = document.notebook else { return }
+        guard find.matches.indices.contains(find.currentIndex), let notebook = document.notebook else { return }
         let match = find.matches[find.currentIndex]
         guard let cell = notebook.cells.first(where: { $0.id == match.cellID }) else { return }
         let ns = cell.source as NSString
-        guard match.range.location + match.range.length <= ns.length,
+        guard EditorTextRange.isValid(match.range, length: ns.length),
               ns.substring(with: match.range).caseInsensitiveCompare(find.query) == .orderedSame else {
             recomputeFind(in: document, resetIndex: false)
             return
@@ -2465,8 +2478,7 @@ final class AppState: ObservableObject {
 
     static let fontSizeRange: ClosedRange<CGFloat> = 11...28
     static var storedFontSize: CGFloat {
-        let stored = QuantaDefaults.store.object(forKey: "QuantaFontSize") as? CGFloat ?? 13
-        return min(max(stored, fontSizeRange.lowerBound), fontSizeRange.upperBound)
+        QuantaDefaults.finiteCGFloat(forKey: "QuantaFontSize", fallback: 13, range: fontSizeRange)
     }
 
     @Published var editorFontSize: CGFloat = AppState.storedFontSize
@@ -2480,6 +2492,7 @@ final class AppState: ObservableObject {
     }
 
     func setFontSize(_ size: CGFloat) {
+        guard size.isFinite else { return }
         let clamped = min(max(size, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
         editorFontSize = clamped
         editorPresentation.fontSize = clamped

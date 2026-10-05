@@ -25,8 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard AppState.shared.confirmDiscardingUnsavedChanges() else { return .terminateCancel }
-        AppState.shared.terminal.stop()
-        AppState.shared.kernel.stop()
+        AppState.shared.terminal.stop(force: true)
+        AppState.shared.kernel.stop(force: true)
+        CopilotService.shared.shutdown()
         return .terminateNow
     }
 }
@@ -49,6 +50,7 @@ struct QuantaApp: App {
         .defaultSize(width: MainWindowFrame.size.width, height: MainWindowFrame.size.height)
         .commands {
             QuantaCommands(app: appState, git: appState.git, selection: appState.selection)
+            CopilotCommands()
         }
 
         Settings {
@@ -64,20 +66,26 @@ struct QuantaApp: App {
     }
 }
 
-private enum MainWindowFrame {
+enum MainWindowFrame {
     static let fallback = CGSize(width: 1440, height: 900)
 
     static var size: CGSize {
+        size(from: QuantaDefaults.store.string(forKey: "NSWindow Frame main"))
+    }
+
+    static func size(from raw: String?) -> CGSize {
         let minWidth = DS.Layout.windowMinWidth
         let minHeight = DS.Layout.windowMinHeight
-        guard let raw = QuantaDefaults.store.string(forKey: "NSWindow Frame main") else {
+        guard let raw else {
             return CGSize(width: max(fallback.width, minWidth), height: max(fallback.height, minHeight))
         }
-        let parts = raw.split(whereSeparator: \.isWhitespace).compactMap { Double($0) }.map { CGFloat($0) }
-        guard parts.count >= 4 else {
+        let parts = raw.split(whereSeparator: \.isWhitespace).map { Double($0) }
+        guard parts.count >= 4, let width = parts[2], let height = parts[3],
+              width.isFinite, height.isFinite, width > 0, height > 0,
+              width <= 16_384, height <= 16_384 else {
             return CGSize(width: max(fallback.width, minWidth), height: max(fallback.height, minHeight))
         }
-        return CGSize(width: max(parts[2], minWidth), height: max(parts[3], minHeight))
+        return CGSize(width: max(CGFloat(width), minWidth), height: max(CGFloat(height), minHeight))
     }
 }
 
@@ -91,7 +99,8 @@ private final class WindowHookView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window, QuantaDefaults.previewDirectory != nil else { return }
-        let width = Double(ProcessInfo.processInfo.environment["QUANTA_UI_PREVIEW_WIDTH"] ?? "1280") ?? 1280
+        let requested = Double(ProcessInfo.processInfo.environment["QUANTA_UI_PREVIEW_WIDTH"] ?? "1280") ?? 1280
+        let width = requested.isFinite && requested > 0 && requested <= 16_384 ? requested : 1280
         window.setContentSize(NSSize(width: width, height: width < 1280 ? 700 : 800))
     }
 }
@@ -136,6 +145,7 @@ struct QuantaCommands: Commands {
                 .keyboardShortcut("`", modifiers: .control)
             Button("New Terminal Session…") { app.newTerminalSession() }
             Button("Show Console") { app.showPythonConsole() }
+            Button("Show Problems") { app.showProblems() }
             Button("Show Plots") { app.showPlots() }
         }
         CommandGroup(replacing: .newItem) {
@@ -278,6 +288,13 @@ struct QuantaCommands: Commands {
         CommandMenu("Run") {
             Button("Trust Workspace…") { app.requestWorkspaceTrust() }
                 .disabled(app.workspace == nil || app.isWorkspaceTrusted)
+            Button("Python Environment…") { app.showPythonEnvironment() }
+            Divider()
+            Button("Check Python Code") { app.checkActivePython() }
+                .disabled(app.activeDocument?.isFileBacked != true)
+            Button("Format Code") { app.formatActivePython() }
+                .keyboardShortcut("f", modifiers: [.option, .shift])
+                .disabled(app.activeDocument?.isFileBacked != true)
             Divider()
             Button(isScript ? "Run Selection or Line" : "Run Cell") { app.runSelectedCell() }
                 .keyboardShortcut(.return, modifiers: .command)
