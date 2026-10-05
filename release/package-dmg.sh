@@ -6,10 +6,18 @@ IDENTITY="${QUANTA_SIGN_IDENTITY:-}"
 APP="${1:-}"
 
 if [[ -z "$IDENTITY" ]]; then
-  echo "Set QUANTA_SIGN_IDENTITY to the Developer ID to sign with, for example:"
-  echo "  export QUANTA_SIGN_IDENTITY=\"Developer ID Application: Your Name (TEAMID)\""
-  echo "List the identities in your keychain with:  security find-identity -v -p codesigning"
-  exit 1
+  IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk -F '"' '/"Developer ID Application: /{print $2}' || true)"
+  if [[ -n "$IDENTITIES" && "$IDENTITIES" != *$'\n'* ]]; then
+    IDENTITY="$IDENTITIES"
+    echo "==> Using the Developer ID from your keychain: $IDENTITY"
+  else
+    echo "Could not select a single Developer ID Application identity automatically."
+    echo "Set QUANTA_SIGN_IDENTITY to the Developer ID to sign with, for example:"
+    echo "  export QUANTA_SIGN_IDENTITY=\"Developer ID Application: Your Name (TEAMID)\""
+    echo "List the identities in your keychain with:  security find-identity -v -p codesigning"
+    exit 1
+  fi
 fi
 
 if [[ -z "$APP" ]]; then

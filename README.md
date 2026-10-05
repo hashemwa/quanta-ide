@@ -14,7 +14,7 @@ A native Python and Jupyter notebook editor for macOS, built with SwiftUI and Ap
 
 ## Download
 
-[Download Quanta for Apple Silicon](https://github.com/hashemwa/quanta-ide/releases/download/v1.1/Quanta-1.1.dmg).
+[Download Quanta for Apple Silicon](https://github.com/hashemwa/quanta-ide/releases/download/v1.2/Quanta-1.2.dmg).
 Requires **macOS 27+** and a local **Python 3** installation.
 
 Open the DMG and drag Quanta to Applications. Select a Python environment in the

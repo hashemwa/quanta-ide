@@ -72,12 +72,18 @@ See [local Data browser architecture](data-browser.md) for provider and query co
 
 ## Release packaging
 
-Build Release first. Set your own Developer ID identity and install `create-dmg` before packaging:
+Install `create-dmg` before packaging. The Zed `Package DMG` task packages
+`~/Desktop/Quanta.app`; place your exported app there first. The script automatically
+selects your Developer ID Application identity when exactly one is available in your
+keychain. If you have multiple identities, choose one with `QUANTA_SIGN_IDENTITY`:
 
 ```sh
 export QUANTA_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
-./release/package-dmg.sh
+./release/package-dmg.sh "$HOME/Desktop/Quanta.app"
 ```
+
+Running `./release/package-dmg.sh` without an app path uses the Xcode Release build;
+build Release first in that case. The resulting signed DMG is saved to your Desktop.
 
 Notarization uses a keychain profile named `quanta`, or the value of
 `QUANTA_NOTARY_PROFILE`. Run `./release/notarize-dmg.sh` without an existing DMG to
