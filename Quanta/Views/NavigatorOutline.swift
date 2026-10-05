@@ -369,8 +369,7 @@ final class NavigatorCellView: NSTableCellView {
     func configure(_ node: FileNode, status change: GitChange.Status?, containsChanges: Bool) {
         nodeName = node.name
         deleted = change == .deleted
-        icon.image = NSImage(systemSymbolName: node.isDirectory ? "folder.fill" : node.iconName,
-                             accessibilityDescription: nil)
+        icon.image = FileTypeIcon.nsImage(for: node.isDirectory ? "folder.fill" : node.iconName)
         iconColor = node.isDirectory ? .controlAccentColor : .secondaryLabelColor
         if let change {
             status.stringValue = change.letter

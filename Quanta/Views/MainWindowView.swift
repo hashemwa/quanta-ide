@@ -387,7 +387,6 @@ struct PanelDragHeight: PreferenceKey {
 
 struct KernelStatusMenu: View {
     @EnvironmentObject var app: AppState
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let sections: [(PythonEnvironment.Kind, String)] = [
         (.workspace, "This Workspace"),
@@ -442,8 +441,8 @@ struct KernelStatusMenu: View {
         } label: {
             HStack(spacing: DS.Space.s) {
                 indicator
-                    .font(.system(size: DS.Layout.kernelGlyph, weight: .semibold))
-                    .frame(width: DS.Layout.statusSlot, height: DS.Layout.statusSlot)
+                    .font(.system(size: DS.Layout.iconSlot, weight: .regular))
+                    .frame(width: DS.Layout.iconSlot, height: DS.Layout.iconSlot)
                 Text(displayTitle)
                     .font(.callout)
                     .lineLimit(1)
@@ -467,21 +466,19 @@ struct KernelStatusMenu: View {
     private var indicator: some View {
         switch app.kernelStatus {
         case .idle:
-            Image(systemName: "memorychip")
+            FileTypeIcon("curlybraces")
                 .foregroundStyle(.secondary)
         case .busy:
-            Image(systemName: "memorychip")
-                .foregroundStyle(.yellow)
-                .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+            ProgressView()
+                .controlSize(.small)
         case .starting:
-            Image(systemName: "memorychip")
-                .foregroundStyle(.orange)
-                .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+            ProgressView()
+                .controlSize(.small)
         case .dead:
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
         case .stopped:
-            Image(systemName: "memorychip")
+            FileTypeIcon("curlybraces")
                 .foregroundStyle(.tertiary)
         }
     }

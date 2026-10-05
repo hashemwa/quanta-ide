@@ -82,7 +82,7 @@ struct CommandPalette: View {
             ScrollViewReader { proxy in
                 List(entries, selection: $selected) { entry in
                     HStack(spacing: DS.Space.m) {
-                        Image(systemName: entry.icon).foregroundStyle(.secondary)
+                        FileTypeIcon(entry.icon).foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: DS.Space.xxs) {
                             Text(entry.title).lineLimit(1)
                             if mode == .files {

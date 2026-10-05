@@ -136,6 +136,47 @@ enum DS {
     }
 }
 
+struct FileTypeIcon: View {
+    let symbol: String
+    let size: CGFloat
+
+    init(_ symbol: String, size: CGFloat = DS.Layout.iconSlot) {
+        self.symbol = symbol
+        self.size = size
+    }
+
+    var body: some View {
+        Group {
+            if let asset = Self.assetName(for: symbol) {
+                Image(asset)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size, height: size)
+            } else {
+                Image(systemName: symbol)
+                    .font(.system(size: size, weight: .regular))
+                    .frame(width: size, height: size)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    static func nsImage(for symbol: String) -> NSImage? {
+        if let asset = assetName(for: symbol), let image = NSImage(named: NSImage.Name(asset)) {
+            return image
+        }
+        return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+    }
+
+    private static func assetName(for symbol: String) -> String? {
+        switch symbol {
+        case "curlybraces": return "PythonFile"
+        default: return nil
+        }
+    }
+}
+
 struct FloatingToolbar<Content: View>: View {
     var visible: Bool = true
     @ViewBuilder var content: Content

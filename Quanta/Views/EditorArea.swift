@@ -133,7 +133,7 @@ private struct EditorPaneView: View {
                         }
                     } label: {
                         HStack(spacing: DS.Space.s) {
-                            Image(systemName: document.iconName).foregroundStyle(.secondary)
+                            FileTypeIcon(document.iconName).foregroundStyle(.secondary)
                             Text(document.url.map { app.relativePath($0) } ?? document.displayName)
                                 .lineLimit(1).truncationMode(.middle)
                             Image(systemName: "chevron.down").foregroundStyle(.secondary)
@@ -264,8 +264,7 @@ struct TabItemView: View {
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
-            Image(systemName: document.iconName)
-                .font(.system(size: 10))
+            FileTypeIcon(document.iconName)
                 .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
             Text(app.tabTitle(document))
                 .font(.callout)

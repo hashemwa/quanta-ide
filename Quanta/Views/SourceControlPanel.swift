@@ -492,7 +492,7 @@ struct GitChangeRow: View {
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
-            Image(systemName: FileNode.iconName(forExtension: change.url.pathExtension))
+            FileTypeIcon(FileNode.iconName(forExtension: change.url.pathExtension))
                 .foregroundStyle(.secondary)
                 .frame(width: DS.Layout.iconSlot)
             VStack(alignment: .leading, spacing: DS.Space.xxs) {
