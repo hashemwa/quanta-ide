@@ -1,6 +1,36 @@
 import AppKit
+import Combine
 import JavaScriptCore
 import WebKit
+
+struct NotebookMathRequest: Hashable {
+    let expressions: [String]
+    let display: Bool
+    let fontSize: CGFloat
+    let color: String
+}
+
+@MainActor
+final class NotebookMathRenderState: ObservableObject {
+    @Published private(set) var results: [String: AppState.LatexResult] = [:]
+    private var generation = UUID()
+
+    func load(_ request: NotebookMathRequest,
+              render: @MainActor (String, Bool, CGFloat, String, @escaping (AppState.LatexResult) -> Void) -> Void = {
+                  AppState.shared.renderLatex($0, display: $1, fontSize: $2, colorHex: $3, completion: $4)
+              }) {
+        let generation = UUID()
+        self.generation = generation
+        results = [:]
+        var requested = Set<String>()
+        for tex in request.expressions where requested.insert(tex).inserted {
+            render(tex, request.display, request.fontSize, request.color) { [weak self] result in
+                guard let self, self.generation == generation else { return }
+                self.results[tex] = result
+            }
+        }
+    }
+}
 
 enum NotebookMath {
     private static let context: JSContext? = {
@@ -27,6 +57,7 @@ final class NotebookMathRenderer: NSObject, WKNavigationDelegate {
     static let shared = NotebookMathRenderer()
 
     private struct Request {
+        let id = UUID()
         let tex: String
         let display: Bool
         let fontSize: CGFloat
@@ -95,7 +126,8 @@ final class NotebookMathRenderer: NSObject, WKNavigationDelegate {
         let request = requests.removeFirst()
         current = request
         let work = DispatchWorkItem { [weak self] in
-            self?.finish(nil, depth: 0, error: "Math rendering timed out")
+            guard let self, self.current?.id == request.id else { return }
+            self.finish(nil, depth: 0, error: "Math rendering timed out")
         }
         timeout = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
@@ -105,7 +137,7 @@ final class NotebookMathRenderer: NSObject, WKNavigationDelegate {
                                                 "fontSize": Double(request.fontSize),
                                                 "color": request.color],
                                     in: nil, in: .page) { [weak self] result in
-            guard let self, self.current != nil else { return }
+            guard let self, self.current?.id == request.id else { return }
             guard case .success(let value) = result,
                   let layout = value as? [String: Any],
                   let x = layout["x"] as? Double,
@@ -121,7 +153,7 @@ final class NotebookMathRenderer: NSObject, WKNavigationDelegate {
             let configuration = WKSnapshotConfiguration()
             configuration.rect = CGRect(x: x, y: y, width: width, height: height)
             self.webView.takeSnapshot(with: configuration) { [weak self] image, error in
-                guard let self, self.current != nil else { return }
+                guard let self, self.current?.id == request.id else { return }
                 if let image {
                     image.size = NSSize(width: width, height: height)
                     self.finish(image, depth: CGFloat(depth), error: nil)

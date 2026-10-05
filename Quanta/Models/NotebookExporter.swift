@@ -209,16 +209,7 @@ enum NotebookExporter {
     private static func inline(_ text: String,
                                attachments: [String: Data] = [:],
                                baseDirectory: URL? = nil) -> String {
-        var out = ""
-        var rest = Substring(text)
-        while let open = rest.firstIndex(of: "`"),
-              let close = rest[rest.index(after: open)...].firstIndex(of: "`") {
-            out += decorated(String(rest[..<open]), attachments: attachments, baseDirectory: baseDirectory)
-            out += "<code>" + escape(String(rest[rest.index(after: open)..<close])) + "</code>"
-            rest = rest[rest.index(after: close)...]
-        }
-        out += decorated(String(rest), attachments: attachments, baseDirectory: baseDirectory)
-        return out
+        decorated(text, attachments: attachments, baseDirectory: baseDirectory)
     }
 
     private static func decorated(_ text: String,
@@ -227,17 +218,32 @@ enum NotebookExporter {
         var textWithPlaceholders = ""
         var replacements: [(String, String)] = []
         let prefix = UUID().uuidString
+        let punctuation = Set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+        func protect(_ html: String) -> String {
+            let token = "QUANTA" + prefix + String(replacements.count) + "TOKEN"
+            replacements.append((token, html))
+            return token
+        }
         for segment in MarkdownView.splitInlineMath(text) {
             switch segment {
-            case .text(let s): textWithPlaceholders += s
+            case .text(let text):
+                let chars = Array(text)
+                var i = 0
+                while i < chars.count {
+                    if chars[i] == "\\", i + 1 < chars.count, punctuation.contains(chars[i + 1]) {
+                        textWithPlaceholders += protect(escape(String(chars[i + 1])))
+                        i += 2
+                    } else {
+                        textWithPlaceholders.append(chars[i])
+                        i += 1
+                    }
+                }
+            case .code(let code):
+                textWithPlaceholders += protect("<code>" + escape(code) + "</code>")
             case .math(let tex):
-                let token = "QUANTA" + prefix + String(replacements.count)
-                replacements.append((token, NotebookMath.html(tex, display: false)))
-                textWithPlaceholders += token
+                textWithPlaceholders += protect(NotebookMath.html(tex, display: false))
             case .image(let alt, let url):
-                let token = "QUANTA" + prefix + String(replacements.count)
-                replacements.append((token, imageTag(alt: alt, url: url, attachments: attachments, baseDirectory: baseDirectory)))
-                textWithPlaceholders += token
+                textWithPlaceholders += protect(imageTag(alt: alt, url: url, attachments: attachments, baseDirectory: baseDirectory))
             }
         }
         var out = linkedText(textWithPlaceholders)

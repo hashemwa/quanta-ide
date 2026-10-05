@@ -130,7 +130,12 @@ final class AppState: ObservableObject {
     let kernel = KernelSession()
     private var bootstrapped = false
     private var versionProbesInFlight = Set<String>()
-    private var latexCache: [String: LatexResult] = [:]
+    private let latexCache: NSCache<NSString, CachedLatexResult> = {
+        let cache = NSCache<NSString, CachedLatexResult>()
+        cache.countLimit = 400
+        cache.totalCostLimit = 32 * 1024 * 1024
+        return cache
+    }()
     private var latexPending: [String: [(LatexResult) -> Void]] = [:]
 
     var activeDocument: Document? {
@@ -1494,12 +1499,17 @@ final class AppState: ObservableObject {
         case failure(String)
     }
 
+    private final class CachedLatexResult {
+        let result: LatexResult
+        init(_ result: LatexResult) { self.result = result }
+    }
+
     @MainActor
     func renderLatex(_ tex: String, display: Bool, fontSize: CGFloat, colorHex: String,
                      completion: @escaping (LatexResult) -> Void) {
-        let key = "\(display)|\(colorHex)|\(Int(fontSize))|\(tex)"
-        if let cached = latexCache[key] {
-            completion(cached)
+        let key = "\(display)|\(colorHex)|\(fontSize)|\(tex)"
+        if let cached = latexCache.object(forKey: key as NSString) {
+            completion(cached.result)
             return
         }
         if latexPending[key] != nil {
@@ -1512,12 +1522,15 @@ final class AppState: ObservableObject {
             guard let self else { return }
             let result = image.map { LatexResult.image($0, depth: depth) }
                 ?? .failure(error ?? "Math rendering failed")
-            self.finishLatex(key, with: result, cache: true)
+            self.finishLatex(key, with: result)
         }
     }
 
-    private func finishLatex(_ key: String, with result: LatexResult, cache: Bool) {
-        if cache { latexCache[key] = result }
+    private func finishLatex(_ key: String, with result: LatexResult) {
+        if case .image(let image, _) = result {
+            let cost = Int(ceil(image.size.width * image.size.height * 16))
+            latexCache.setObject(CachedLatexResult(result), forKey: key as NSString, cost: cost)
+        }
         latexPending.removeValue(forKey: key)?.forEach { $0(result) }
     }
 
