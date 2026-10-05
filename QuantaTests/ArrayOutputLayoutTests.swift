@@ -41,6 +41,9 @@ final class ArrayOutputLayoutTests: XCTestCase {
             let bitmap = try VisionTestSupport.snapshot(of: hosting)
             let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
             try png.write(to: directory.appendingPathComponent("array-fixed-\(Int(width)).png"))
+            let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+            attachment.name = "array-\(Int(width))"
+            add(attachment)
             let recognition = try VisionTestSupport.textRecognitionRequest()
             recognition.usesLanguageCorrection = false
             try VNImageRequestHandler(cgImage: try XCTUnwrap(bitmap.cgImage), options: [:]).perform([recognition])

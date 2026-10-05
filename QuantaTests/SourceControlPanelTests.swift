@@ -191,5 +191,8 @@ final class SourceControlPanelTests: XCTestCase {
         let directory = URL(fileURLWithPath: "/tmp/quanta-source-control-review", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: directory.appendingPathComponent(name + ".png"))
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+        attachment.name = name
+        add(attachment)
     }
 }

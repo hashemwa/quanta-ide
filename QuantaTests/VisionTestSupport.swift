@@ -24,7 +24,9 @@ enum VisionTestSupport {
 
     static func textRecognitionRequest() throws -> VNRecognizeTextRequest {
         let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .fast
+        request.revision = VNRecognizeTextRequestRevision2
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["en-US"]
         let cpu = try XCTUnwrap(MLComputeDevice.allComputeDevices.first {
             if case .cpu = $0 { return true }
             return false
