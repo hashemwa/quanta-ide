@@ -737,6 +737,7 @@ struct Pill: View {
             .padding(.horizontal, DS.Space.s)
             .padding(.vertical, DS.Space.xxs)
             .background(Capsule().fill(background))
+            .reportLayout("pill.\(text)")
     }
 
     private var foreground: AnyShapeStyle {

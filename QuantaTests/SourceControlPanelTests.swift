@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import Vision
 import XCTest
 @testable import Quanta
 
@@ -32,9 +31,9 @@ final class SourceControlPanelTests: XCTestCase {
         _ = try run(["remote", "add", "origin", root.appendingPathComponent("remote.git").path])
         let app = try loadApp()
         app.git.draft.message = "Initial change"
-        let (window, hosting) = host(app, width: 260)
+        let (_, hosting, layout) = host(app, width: 260)
         try capture(hosting, name: "staged-260")
-        try assertControlsFit(hosting, in: window, message: app.git.draft.message)
+        try assertControlsFit(hosting, layout: layout, message: app.git.draft.message)
         XCTAssertFalse(try XCTUnwrap(app.git.snapshot).staged.isEmpty)
         XCTAssertFalse(app.git.isBusy)
         try capture(hosting, name: "staged-260")
@@ -51,7 +50,7 @@ final class SourceControlPanelTests: XCTestCase {
         wait(for: [finished], timeout: 15)
         app.git.onSnapshot = nil
         settle(hosting)
-        try assertControlsFit(hosting, in: window, message: app.git.draft.message)
+        try assertControlsFit(hosting, layout: layout, message: app.git.draft.message)
         XCTAssertTrue(try XCTUnwrap(app.git.snapshot).staged.isEmpty)
         XCTAssertFalse(app.git.canPull)
         XCTAssertTrue(app.git.canPush)
@@ -81,9 +80,9 @@ final class SourceControlPanelTests: XCTestCase {
         app.git.draft.message = Array(repeating: "A longer commit message with detail that wraps across narrow panels.", count: 12).joined(separator: "\n")
 
         for width in [240.0, 260.0, 400.0] {
-            let (window, hosting) = host(app, width: width)
+            let (_, hosting, layout) = host(app, width: width)
             try capture(hosting, name: "long-draft-\(Int(width))")
-            try assertControlsFit(hosting, in: window, message: app.git.draft.message)
+            try assertControlsFit(hosting, layout: layout, message: app.git.draft.message)
             XCTAssertTrue(app.git.canPull)
             XCTAssertTrue(app.git.canPush)
             XCTAssertTrue(try XCTUnwrap(app.git.snapshot).staged.isEmpty)
@@ -112,8 +111,10 @@ final class SourceControlPanelTests: XCTestCase {
         return app
     }
 
-    private func host(_ app: AppState, width: CGFloat) -> (NSWindow, NSView) {
+    private func host(_ app: AppState, width: CGFloat) -> (NSWindow, NSView, LayoutTestSupport) {
+        let layout = LayoutTestSupport()
         let hosting = NSHostingView(rootView: SourceControlPanel(app: app)
+            .environment(\.viewLayoutObserver) { layout.frames[$0] = $1 }
             .frame(width: width, height: panelHeight)
             .background(Color(nsColor: .windowBackgroundColor)))
         let frame = NSRect(x: 0, y: 0, width: width, height: panelHeight)
@@ -124,7 +125,7 @@ final class SourceControlPanelTests: XCTestCase {
         hosting.frame = NSRect(origin: .zero, size: frame.size)
         addTeardownBlock { window.close() }
         settle(hosting)
-        return (window, hosting)
+        return (window, hosting, layout)
     }
 
     private func settle(_ view: NSView) {
@@ -138,39 +139,22 @@ final class SourceControlPanelTests: XCTestCase {
         [view] + view.subviews.flatMap(descendants)
     }
 
-    private func assertControlsFit(_ hosting: NSView, in window: NSWindow, message: String,
+    private func assertControlsFit(_ hosting: NSView, layout: LayoutTestSupport, message: String,
                                    file: StaticString = #filePath, line: UInt = #line) throws {
-        let bitmap = try VisionTestSupport.snapshot(of: hosting)
-        let image = try XCTUnwrap(bitmap.cgImage)
-        let recognition = try VisionTestSupport.textRecognitionRequest()
-        recognition.recognitionLanguages = ["en-US"]
-        recognition.customWords = ["Pull", "Push", "Commit"]
-        recognition.usesLanguageCorrection = true
-        try VNImageRequestHandler(cgImage: image, options: [:]).perform([recognition])
-        let observations = recognition.results ?? []
-        let recognized = observations.flatMap { $0.topCandidates(5).map(\.string) }
         var buttonFrames: [CGRect] = []
-        for title in ["Pull", "Push", "Commit"] {
-            let frames = observations.flatMap { observation -> [CGRect] in
-                observation.topCandidates(5).flatMap { candidate -> [CGRect] in
-                    var search = candidate.string.startIndex..<candidate.string.endIndex
-                    var matches: [CGRect] = []
-                    while let range = candidate.string.range(of: title, options: .caseInsensitive, range: search) {
-                        if let rectangle = try? candidate.boundingBox(for: range) { matches.append(rectangle.boundingBox) }
-                        search = range.upperBound..<candidate.string.endIndex
-                    }
-                    return matches
-                }
-            }
-            let frame = try XCTUnwrap(frames.min { $0.midY < $1.midY },
-                                     "Missing visible \(title) button. Recognized: \(recognized)", file: file, line: line)
+        for identifier in ["git.pull", "git.push", "git.commit"] {
+            let frame = try XCTUnwrap(layout.frames[identifier],
+                                     "Missing visible \(identifier) button", file: file, line: line)
             buttonFrames.append(frame)
-            XCTAssertGreaterThan(frame.minX, 0, title, file: file, line: line)
-            XCTAssertLessThan(frame.maxX, 1, title, file: file, line: line)
+            XCTAssertGreaterThan(frame.width, 0, identifier, file: file, line: line)
+            XCTAssertGreaterThan(frame.height, 0, identifier, file: file, line: line)
+            XCTAssertGreaterThan(frame.minX, 0, identifier, file: file, line: line)
+            XCTAssertLessThan(frame.maxX, hosting.bounds.maxX, identifier, file: file, line: line)
+            XCTAssertGreaterThanOrEqual(frame.minY, 0, identifier, file: file, line: line)
+            XCTAssertLessThanOrEqual(frame.maxY, hosting.bounds.maxY, identifier, file: file, line: line)
         }
-        XCTAssertEqual(buttonFrames[0].midY, buttonFrames[1].midY, accuracy: 0.01, file: file, line: line)
-        XCTAssertEqual(buttonFrames[1].midY, buttonFrames[2].midY, accuracy: 0.01,
-                       "Recognized footer: \(recognized)", file: file, line: line)
+        XCTAssertEqual(buttonFrames[0].midY, buttonFrames[1].midY, accuracy: 1, file: file, line: line)
+        XCTAssertEqual(buttonFrames[1].midY, buttonFrames[2].midY, accuracy: 1, file: file, line: line)
         XCTAssertLessThan(buttonFrames[0].maxX, buttonFrames[1].minX, file: file, line: line)
         XCTAssertLessThan(buttonFrames[1].maxX, buttonFrames[2].minX, file: file, line: line)
         let field = try XCTUnwrap(descendants(hosting).compactMap { $0 as? NSTextField }.first {
@@ -186,7 +170,7 @@ final class SourceControlPanelTests: XCTestCase {
     }
 
     private func capture(_ view: NSView, name: String) throws {
-        let bitmap = try VisionTestSupport.snapshot(of: view)
+        let bitmap = try LayoutTestSupport.snapshot(of: view)
         guard let data = bitmap.representation(using: .png, properties: [:]) else { return }
         let directory = URL(fileURLWithPath: "/tmp/quanta-source-control-review", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

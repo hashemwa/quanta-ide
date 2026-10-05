@@ -225,11 +225,13 @@ struct SourceControlPanel: View {
                     .disabled(!git.canPull)
                     .help(pullHelp(snapshot))
                     .fixedSize()
+                    .reportLayout("git.pull")
                 Button("Push", systemImage: "arrow.up") { app.push() }
                     .accessibilityIdentifier("git.push")
                     .disabled(!git.canPush)
                     .help(pushHelp(snapshot))
                     .fixedSize()
+                    .reportLayout("git.push")
                 Spacer(minLength: 0)
                 commitButton(snapshot)
             }
@@ -267,6 +269,7 @@ struct SourceControlPanel: View {
             .disabled(!canCommit(snapshot))
             .help(commitHelp(snapshot))
             .fixedSize()
+            .reportLayout("git.commit")
     }
 
     private var hasCommitMessage: Bool {

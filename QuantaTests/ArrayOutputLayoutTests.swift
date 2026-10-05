@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import Vision
 import XCTest
 @testable import Quanta
 
@@ -16,8 +15,11 @@ final class ArrayOutputLayoutTests: XCTestCase {
             + ["min", "max", "mean", "std"].map { "\($0) \(NDArrayView.compact(array.stats[$0]!))" }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("quanta-output-layout")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for width in [180.0, 280.0, 440.0] {
+        var singleLineSizes: [String: CGSize] = [:]
+        for width in [1000.0, 180.0, 280.0, 440.0] {
+            let layout = LayoutTestSupport()
             let hosting = NSHostingView(rootView: NDArrayView(payload: array)
+                .environment(\.viewLayoutObserver) { layout.frames[$0] = $1 }
                 .environment(\.monoFontSize, 12)
                 .frame(width: width, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -37,27 +39,37 @@ final class ArrayOutputLayoutTests: XCTestCase {
             XCTAssertEqual(size.width, width + 16, accuracy: 1)
             XCTAssertGreaterThan(size.height, 20)
             hosting.setFrameSize(size)
-            hosting.layoutSubtreeIfNeeded()
-            let bitmap = try VisionTestSupport.snapshot(of: hosting)
+            for _ in 0..<3 {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                hosting.layoutSubtreeIfNeeded()
+            }
+            let bitmap = try LayoutTestSupport.snapshot(of: hosting)
             let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
             try png.write(to: directory.appendingPathComponent("array-fixed-\(Int(width)).png"))
             let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
             attachment.name = "array-\(Int(width))"
             add(attachment)
-            let recognition = try VisionTestSupport.textRecognitionRequest()
-            recognition.usesLanguageCorrection = false
-            try VNImageRequestHandler(cgImage: try XCTUnwrap(bitmap.cgImage), options: [:]).perform([recognition])
-            let lines = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            var frames: [CGRect] = []
             for label in labels {
-                XCTAssertTrue(lines.contains { normalized($0).contains(normalized(label)) },
-                              "Array statistic is not readable on one line: \(label); rendered lines: \(lines)")
+                let frame = try XCTUnwrap(layout.frames["pill.\(label)"], "Missing statistic: \(label)")
+                XCTAssertGreaterThan(frame.width, 0, label)
+                XCTAssertGreaterThan(frame.height, 0, label)
+                XCTAssertGreaterThanOrEqual(frame.minX, 0, label)
+                XCTAssertLessThanOrEqual(frame.maxX, hosting.bounds.maxX, label)
+                XCTAssertGreaterThanOrEqual(frame.minY, 0, label)
+                XCTAssertLessThanOrEqual(frame.maxY, hosting.bounds.maxY, label)
+                if width == 1000 {
+                    singleLineSizes[label] = frame.size
+                } else {
+                    let ideal = try XCTUnwrap(singleLineSizes[label])
+                    XCTAssertEqual(frame.width, ideal.width, accuracy: 1, "Truncated statistic: \(label)")
+                    XCTAssertEqual(frame.height, ideal.height, accuracy: 1, "Wrapped statistic: \(label)")
+                }
+                for previous in frames {
+                    XCTAssertFalse(frame.intersects(previous), "Overlapping statistic: \(label)")
+                }
+                frames.append(frame)
             }
         }
-    }
-
-    private func normalized(_ text: String) -> String {
-        text.lowercased().filter { !$0.isWhitespace }
-            .replacingOccurrences(of: "×", with: "x")
-            .replacingOccurrences(of: "−", with: "-")
     }
 }
