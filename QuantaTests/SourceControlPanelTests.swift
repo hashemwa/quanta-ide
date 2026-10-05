@@ -142,8 +142,7 @@ final class SourceControlPanelTests: XCTestCase {
         let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
         let image = try XCTUnwrap(bitmap.cgImage)
-        let recognition = VNRecognizeTextRequest()
-        recognition.recognitionLevel = .accurate
+        let recognition = try VisionTestSupport.textRecognitionRequest()
         recognition.recognitionLanguages = ["en-US"]
         recognition.customWords = ["Pull", "Push", "Commit"]
         recognition.usesLanguageCorrection = true

@@ -42,8 +42,7 @@ final class ArrayOutputLayoutTests: XCTestCase {
             hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
             let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
             try png.write(to: directory.appendingPathComponent("array-fixed-\(Int(width)).png"))
-            let recognition = VNRecognizeTextRequest()
-            recognition.recognitionLevel = .accurate
+            let recognition = try VisionTestSupport.textRecognitionRequest()
             recognition.usesLanguageCorrection = false
             try VNImageRequestHandler(cgImage: try XCTUnwrap(bitmap.cgImage), options: [:]).perform([recognition])
             let lines = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
