@@ -7,71 +7,23 @@ import XCTest
 
 @MainActor
 final class InteractionPolishTests: XCTestCase {
-    func testEnhancedOutputPreferenceDefaultsOnPersistsAndIgnoresRepeatedChoices() {
-        let defaults = UserDefaults(suiteName: "quanta.output-tests.\(UUID().uuidString)")!
-        let state = OutputPresentation(defaults: defaults)
-        XCTAssertTrue(state.usesEnhancedDataOutputs)
-        var changes = 0
-        let subscription = state.objectWillChange.sink { changes += 1 }
-        state.setEnhancedDataOutputs(false)
-        state.setEnhancedDataOutputs(false)
-        XCTAssertEqual(changes, 1)
-        XCTAssertFalse(OutputPresentation(defaults: defaults).usesEnhancedDataOutputs)
-        state.setEnhancedDataOutputs(true)
-        XCTAssertTrue(OutputPresentation(defaults: defaults).usesEnhancedDataOutputs)
-        withExtendedLifetime(subscription) {}
-    }
-
-    func testOutputModeSwitchesNativePresentationAndExportsWithoutChangingSavedData() throws {
-        let presentation = AppState.shared.outputPresentation
-        let previous = presentation.usesEnhancedDataOutputs
-        defer { presentation.setEnhancedDataOutputs(previous) }
-        presentation.setEnhancedDataOutputs(true)
-        let array = try XCTUnwrap(NDArrayPayload(dict: ["shape": [4], "dtype": "float64", "stats": ["mean": 2.5],
-                                                       "series": [1, 4, 2, 3], "text": "array([1., 4., 2., 3.])"]))
-        let cell = NotebookCell(type: .code, source: "values", outputs: [CellOutput(kind: .ndarray(array))])
-        let notebook = Notebook(cells: [cell], metadata: [:])
-        let saved = try notebook.serializedData()
-        let layout = LayoutTestSupport()
-        let hosting = host(AnyView(OutputListView(cell: cell)
-            .environment(\.viewLayoutObserver) { layout.frames[$0] = $1 }
-            .frame(width: 760, height: 260, alignment: .topLeading)
-            .background(Color(nsColor: .textBackgroundColor))), width: 760, height: 260)
-        let enhanced = try imageData(hosting)
-        let initialFrames = layout.frames
-        presentation.setEnhancedDataOutputs(false)
-        settle(hosting)
-        let plain = try imageData(hosting)
-        XCTAssertNotEqual(plain, enhanced)
-        XCTAssertEqual(try notebook.serializedData(), saved)
-        let html = NotebookExporter.html(from: notebook, title: "Mode audit", enhancedDataOutputs: false)
-        XCTAssertTrue(html.contains("array([1., 4., 2., 3.])"))
-        XCTAssertFalse(html.contains("<div class=\"rich-output output-card\">"))
-        XCTAssertFalse(html.contains("alt=\"Array sparkline\""))
-        presentation.setEnhancedDataOutputs(true)
-        layout.frames.removeAll()
-        settle(hosting)
-        let restored = try imageData(hosting)
-        XCTAssertNotEqual(restored, plain)
-        XCTAssertEqual(layout.frames, initialFrames)
-        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/interaction-polish", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try enhanced.write(to: directory.appendingPathComponent("enhanced.png"))
-        try plain.write(to: directory.appendingPathComponent("plain.png"))
-        try restored.write(to: directory.appendingPathComponent("restored.png"))
-    }
-
-    func testPlainDataFallbackRetainsOtherRichOutputKinds() throws {
-        let json = CellOutput(kind: .jsonTree(JSONTreePayload(value: ["<name>": [1, 2]], summary: "dict", text: "")))
-        XCTAssertTrue(try XCTUnwrap(json.enhancedDataText).contains("<name>"))
-        let bundle = ["text/latex": "$x^2$", "text/plain": "x^2"]
-        let math = CellOutput(kind: RichOutput.kind(bundle), raw: RichOutput.raw(bundle))
-        XCTAssertNil(math.enhancedDataText)
-        let cell = NotebookCell(type: .code, outputs: [json, math])
-        let html = NotebookExporter.html(from: Notebook(cells: [cell], metadata: [:]), title: "Fallback", enhancedDataOutputs: false)
-        XCTAssertTrue(html.contains("&lt;name&gt;"))
-        XCTAssertTrue(html.contains("<math"))
+    func testJSONAndRetiredPreviewOutputsRenderAsText() throws {
+        let json: [String: Any] = ["application/json": ["b": [1, 2], "a": "<name>"] as [String: Any], "text/plain": "<Payload>"]
+        guard case .executeResult(let formatted) = RichOutput.kind(json) else { return XCTFail("JSON did not render as text") }
+        XCTAssertTrue(formatted.contains("\"a\" : \"<name>\""))
+        XCTAssertLessThan(try XCTUnwrap(formatted.range(of: "\"a\"")).lowerBound,
+                          try XCTUnwrap(formatted.range(of: "\"b\"")).lowerBound)
+        let array: [String: Any] = ["text/plain": "array([1., 2.])", "application/json": ["shape": [2]],
+                                    "application/vnd.quanta.ndarray+json": ["shape": [2]]]
+        guard case .executeResult(let arrayText) = RichOutput.kind(array) else { return XCTFail("Saved array preview is not text") }
+        XCTAssertEqual(arrayText, "array([1., 2.])")
+        let card: [String: Any] = ["text/plain": "Ridge(alpha=0.5)", "application/json": ["title": "Ridge"],
+                                   "application/vnd.quanta.objectcard+json": ["title": "Ridge"]]
+        guard case .executeResult(let cardText) = RichOutput.kind(card) else { return XCTFail("Saved model card is not text") }
+        XCTAssertEqual(cardText, "Ridge(alpha=0.5)")
+        let output = CellOutput(kind: RichOutput.kind(array), raw: RichOutput.raw(array))
+        let saved = try Notebook(cells: [NotebookCell(type: .code, outputs: [output])], metadata: [:]).serializedData()
+        XCTAssertTrue(String(decoding: saved, as: UTF8.self).contains("application/vnd.quanta.ndarray+json"))
     }
 
     func testMarkdownRichOutputsResolveNotebookRelativeImagesInPreviewAndExport() throws {
@@ -302,31 +254,6 @@ final class InteractionPolishTests: XCTestCase {
         completions[1](.image(NSImage(size: NSSize(width: 20, height: 12)), depth: 0))
         guard case .image(let updated, _) = state.results["x"] else { return XCTFail("Equation did not update") }
         XCTAssertEqual(updated.size.width, 20)
-    }
-
-    func testRepeatedHeatmapReadsReuseItsImageAndSeparateNewPayloads() throws {
-        let payload = try XCTUnwrap(NDArrayPayload(dict: ["shape": [2, 2], "dtype": "float64", "grid": [[0.0, 0.5], [1.0, 0.2]]]))
-        let image = try XCTUnwrap(NDArrayView.cachedHeatmapImage(payload))
-        for _ in 0..<30 { XCTAssertTrue(NDArrayView.cachedHeatmapImage(payload) === image) }
-        let other = try XCTUnwrap(NDArrayPayload(dict: ["shape": [2, 2], "dtype": "float64", "grid": [[1.0, 0.5], [0.0, 0.2]]]))
-        XCTAssertFalse(NDArrayView.cachedHeatmapImage(other) === image)
-    }
-
-    func testLargeModelCardsStayCompactWhileExportsRetainSavedParameters() throws {
-        let fields = Dictionary(uniqueKeysWithValues: (0..<2000).map { (String(format: "parameter_%04d", $0), "value_\($0)") })
-        let payload = try XCTUnwrap(ObjectCardPayload(dict: ["title": "Pipeline", "subtitle": "sklearn.pipeline", "fields": fields,
-                                                           "badges": ["classes_"], "text": "Pipeline(steps=[...])"]))
-        for width in [280.0, 760.0] {
-            let hosting = host(AnyView(ObjectCardView(payload: payload)
-                .frame(width: width).fixedSize(horizontal: false, vertical: true)
-                .background(Color(nsColor: .textBackgroundColor))), width: width, height: 600)
-            XCTAssertLessThan(hosting.fittingSize.height, 450)
-            XCTAssertEqual(hosting.fittingSize.width, width, accuracy: 0.5)
-        }
-        let cell = NotebookCell(type: .code, outputs: [CellOutput(kind: .objectCard(payload))])
-        let html = NotebookExporter.html(from: Notebook(cells: [cell], metadata: [:]), title: "Model parameters")
-        XCTAssertTrue(html.contains("parameter_1999"))
-        XCTAssertTrue(html.contains("value_1999"))
     }
 
     private func host(_ content: AnyView, width: CGFloat, height: CGFloat) -> NSHostingView<AnyView> {

@@ -55,7 +55,6 @@ final class NotebookCanvas: DocumentCanvas {
     private var toolbar: CellToolbarHostingView?
     private var selectionCancellable: AnyCancellable?
     private var boundsObserver: NSObjectProtocol?
-    private var outputPresentationCancellable: AnyCancellable?
     private var toolbarPositionPending = false
     private var lastViewportChange: TimeInterval = 0
     private var addCellHeightCache: (key: AddCellHeightKey, height: CGFloat)?
@@ -76,16 +75,6 @@ final class NotebookCanvas: DocumentCanvas {
                 self.schedulePrefetch()
             }
         observeCells(of: notebook)
-        outputPresentationCancellable = AppState.shared.outputPresentation.$usesEnhancedDataOutputs
-            .dropFirst()
-            .sink { [weak self] _ in
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.heights.removeAll()
-                    self.dirtyCellIDs.formUnion(self.views.keys)
-                    self.scheduleLayout()
-                }
-            }
     }
 
     private func observeCells(of notebook: Notebook) {
@@ -635,10 +624,6 @@ final class NotebookCanvas: DocumentCanvas {
         let monoLine = ceil(monoFontSize * 1.3)
         for output in cell.outputs {
             height += DS.Space.s
-            if !AppState.shared.outputPresentation.usesEnhancedDataOutputs, let text = output.enhancedDataText {
-                height += CGFloat(StreamOutputView.clipped(text).reduce(into: 1) { if $1 == "\n" { $0 += 1 } }) * monoLine
-                continue
-            }
             switch output.kind {
             case .stream(_, let text), .executeResult(let text):
                 height += CGFloat(StreamOutputView.clipped(text).reduce(into: 1) { if $1 == "\n" { $0 += 1 } }) * monoLine

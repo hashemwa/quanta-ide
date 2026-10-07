@@ -680,79 +680,22 @@ struct LabelMenu<Content: View, Label: View>: View {
     }
 }
 
-struct WrappingHStack: Layout {
-    var spacing = DS.Space.s
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let frames = frames(width: proposal.width, subviews: subviews)
-        return CGSize(width: frames.map(\.maxX).max() ?? 0, height: frames.map(\.maxY).max() ?? 0)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        for (view, frame) in zip(subviews, frames(width: bounds.width, subviews: subviews)) {
-            view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
-                       anchor: .topLeading, proposal: ProposedViewSize(frame.size))
-        }
-    }
-
-    private func frames(width: CGFloat?, subviews: Subviews) -> [CGRect] {
-        let limit = width.map { max(0, $0) } ?? .infinity
-        var frames: [CGRect] = []
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        for view in subviews {
-            let ideal = view.sizeThatFits(.unspecified)
-            let size = view.sizeThatFits(ProposedViewSize(width: min(ideal.width, limit), height: nil))
-            if x > 0, x + size.width > limit {
-                x = 0
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-        return frames
-    }
-}
-
 struct Pill: View {
-    enum Tone {
-        case neutral, strong, success
-    }
-
     let text: String
-    var tone: Tone
-    var monospaced: Bool
 
-    init(_ text: String, tone: Tone = .neutral, monospaced: Bool = false) {
+    init(_ text: String) {
         self.text = text
-        self.tone = tone
-        self.monospaced = monospaced
     }
 
     var body: some View {
         Text(text)
-            .font(monospaced ? .caption.monospaced() : .caption.monospacedDigit())
-            .fontWeight(tone == .strong ? .semibold : .regular)
-            .foregroundStyle(foreground)
+            .font(.caption.monospacedDigit())
+            .fontWeight(.semibold)
+            .foregroundStyle(.primary)
             .padding(.horizontal, DS.Space.s)
             .padding(.vertical, DS.Space.xxs)
-            .background(Capsule().fill(background))
+            .background(Capsule().fill(.quaternary))
             .reportLayout("pill.\(text)")
-    }
-
-    private var foreground: AnyShapeStyle {
-        switch tone {
-        case .neutral: AnyShapeStyle(.secondary)
-        case .strong: AnyShapeStyle(.primary)
-        case .success: AnyShapeStyle(DS.StatusColors.success)
-        }
-    }
-
-    private var background: AnyShapeStyle {
-        tone == .success ? AnyShapeStyle(DS.StatusColors.success.opacity(0.15)) : AnyShapeStyle(.quaternary)
     }
 }
 

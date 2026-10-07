@@ -32,11 +32,10 @@ standard-library bridge. It does not run an IPython or Jupyter kernel.
 | LaTeX and Markdown rich outputs | `text/latex` and `text/markdown` render natively and survive save/reopen. Markdown output images resolve relative to the notebook folder and are embedded in HTML/PDF exports. `_repr_latex_()` and `_repr_markdown_()` work without matplotlib. A `text/latex` value that is one math expression renders as display math; LaTeX prose with inline `$…$` renders as Markdown text with inline math, as in Jupyter. Higher-priority HTML, images, SVG, and Plotly representations retain precedence. |
 | DataFrames | Save an HTML table preview, text fallback, and a native snapshot. Reopened snapshots do not query a variable in the current kernel. |
 | Plotly | Save structured Plotly JSON plus an available PNG fallback. Reopen interactively using a bundled offline renderer. |
-| Arrays, JSON trees and model cards | Save structured snapshots and text fallbacks; array/card snapshots retain their native views. HTML/PDF exports include array statistics and sparklines/heatmaps, and model-card badges and fields. Expanded JSON containers preview at most 300 children; saved data and exports retain the full saved representation. |
-| Enhanced/text data output choice | Settings → General → Notebook Outputs defaults to enhanced views. Turning it off immediately shows saved data outputs as text and makes new Python data results skip custom previews. HTML/PDF use this choice. Switching back restores saved previews; text-only results need rerunning to create previews. Images, plots, HTML and equations retain their formatting. |
+| Arrays, dicts, lists and other results | Show their `repr` as text, as in Jupyter. Dicts, lists, tuples and sets longer than one line are pretty-printed with `pprint` in insertion order (skipped when the `repr` exceeds 20,000 characters). scikit-learn estimators show their own HTML diagram. `application/json` outputs show as formatted JSON text. Array and model-card outputs saved by earlier Quanta versions show their saved text. |
 | Markdown previews | Native text wraps to the cell width. Basic HTML formatting, character entities and text alignment are supported; arbitrary HTML attributes and scripts are not. `$...$`, `$$...$$`, `\(...\)` and `\[...\]` equations use the bundled offline MathML renderer without a Python kernel. Inline equations also render in headings and tables. Code spans and fenced code keep math literal; table parsing preserves escaped pipes and pipes inside code or equations. Tables require a Markdown separator row. |
-| HTML export | Markdown tables, offline MathML equations, syntax-colored Python cells/fences, ANSI-colored streams, full saved text outputs, structured array/model cards, and sanitized rich HTML. SVG/JPEG images are embedded. Plotly embeds an offline renderer in an isolated frame and can substantially increase file size. |
-| PDF export | Paginated US Letter pages with margins, wrapped code/text, syntax colors, tables, equations, embedded images, and rendered Plotly figures. Table headings repeat on continuation pages. Wide display equations scale to the page. Output cards stay together when they fit on a page. Figures finish rendering before capture; exports are limited to 500 pages and 35 seconds. |
+| HTML export | Markdown tables, offline MathML equations, syntax-colored Python cells/fences, ANSI-colored streams, full saved text outputs, and sanitized rich HTML. SVG/JPEG images are embedded. Plotly embeds an offline renderer in an isolated frame and can substantially increase file size. |
+| PDF export | Paginated US Letter pages with margins, wrapped code/text, syntax colors, tables, equations, embedded images, and rendered Plotly figures. Table headings repeat on continuation pages. Wide display equations scale to the page. Figures finish rendering before capture; exports are limited to 500 pages and 35 seconds. |
 
 IPython syntax is only rewritten when a cell is not valid Python, and only at the
 start of a statement, so text inside strings, bracketed continuations and ordinary
@@ -90,14 +89,8 @@ between separate equations remain unsupported. Very large native equations
 exceeding the renderer's bounds fall back to visible source.
 
 Rich output is a saved presentation, not a full dataset backup. DataFrames retain the
-bounded rows/columns shown in their preview; array and JSON-tree snapshots retain the
-bridge's existing size/depth limits. Unknown imported MIME types remain intact. Generic
+bounded rows/columns shown in their preview. Unknown imported MIME types remain intact. Generic
 HTML scripts and Jupyter widget communication are not enabled by workspace trust.
-
-Array previews identify sampled/relative values and expose saved text. Large JSON
-roots start collapsed. Model cards show 12 parameters initially; expanding shows
-up to 300, while saved fields remain intact for export. Model badges identify learned
-attribute names rather than certifying that fitting completed successfully.
 
 New DataFrame snapshots also retain original string representations for copying,
 separately from shortened display previews. These are bounded to 1 MB per value and

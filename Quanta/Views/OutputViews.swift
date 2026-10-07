@@ -27,20 +27,10 @@ struct OutputListView: View {
 struct OutputItemView: View {
     let output: CellOutput
     var baseDirectory: URL? = nil
-    @ObservedObject private var presentation = AppState.shared.outputPresentation
     @Environment(\.monoFontSize) private var monoSize
 
     @ViewBuilder
     var body: some View {
-        if !presentation.usesEnhancedDataOutputs, let text = output.enhancedDataText {
-            plainResult(text)
-        } else {
-            formattedOutput
-        }
-    }
-
-    @ViewBuilder
-    private var formattedOutput: some View {
         switch output.kind {
         case .stream(let name, let text):
             StreamOutputView(name: name, text: text)
@@ -70,15 +60,6 @@ struct OutputItemView: View {
 
         case .dataFrame(let payload):
             DataFrameOutputView(payload: payload, cacheKey: output.id)
-
-        case .ndarray(let payload):
-            NDArrayView(payload: payload)
-
-        case .jsonTree(let payload):
-            JSONTreeView(payload: payload)
-
-        case .objectCard(let payload):
-            ObjectCardView(payload: payload)
 
         case .rich(let bundle):
             if RichOutput.renderedTextMIME(bundle) != nil {

@@ -18,6 +18,7 @@ import linecache
 import math
 import numbers
 import os
+import pprint
 import re
 import reprlib
 import selectors
@@ -40,11 +41,11 @@ warnings.filterwarnings("ignore", message=".*which is a non-GUI backend.*")
 
 _dark_appearance = False
 _adapt_plot_theme = True
-_enhanced_data_outputs = True
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 MAX_STREAM_BYTES = 2_000_000
 MAX_REPR_CHARS = 20_000
+PRETTY_WIDTH = 79
 
 _lock = threading.Lock()
 _stream_lock = threading.RLock()
@@ -61,8 +62,7 @@ _async_loop = None
 _display_depth = 0
 _result_depth = 0
 
-_DISPLAY_TYPES = frozenset(("result", "display", "dataframe", "plotlyhtml", "rich",
-                            "ndarray", "objectcard", "jsontree"))
+_DISPLAY_TYPES = frozenset(("result", "display", "dataframe", "plotlyhtml", "rich"))
 
 user_ns = {"__name__": "__main__", "__builtins__": __builtins__}
 
@@ -724,103 +724,6 @@ def _try_rich_repr(obj):
             pass
     return False
 
-def _try_ndarray(obj):
-    np = sys.modules.get("numpy")
-    if np is None or not isinstance(obj, np.ndarray) or obj.dtype.kind not in "biuf":
-        return False
-    payload = {"shape": [int(d) for d in obj.shape], "dtype": str(obj.dtype)}
-    try:
-        if obj.size:
-            arr = obj.astype(float, copy=False)
-            payload["stats"] = {k: v for k, v in {
-                "min": _finite(np.nanmin(arr)), "max": _finite(np.nanmax(arr)),
-                "mean": _finite(np.nanmean(arr)), "std": _finite(np.nanstd(arr)),
-            }.items() if v is not None}
-    except Exception:
-        pass
-    try:
-        if obj.ndim == 1 and obj.size > 1:
-            n = min(int(obj.size), 300)
-            idx = np.linspace(0, obj.size - 1, n).astype(int)
-            payload["series"] = [_finite(v) for v in obj[idx]]
-        elif obj.ndim == 2 and obj.size > 0:
-            rows, cols = obj.shape
-            rstep = max(1, -(-rows // 80))
-            cstep = max(1, -(-cols // 120))
-            grid = obj[::rstep, ::cstep].astype(float)
-            lo = np.nanmin(grid)
-            hi = np.nanmax(grid)
-            span = float(hi - lo) or 1.0
-            norm = (grid - lo) / span
-            payload["grid"] = [[_finite(v) for v in row] for row in norm]
-    except Exception:
-        pass
-    payload["text"] = _capped(_clean(repr(obj)), 2000)
-    emit({"id": _current_id, "type": "ndarray", "payload": payload})
-    return True
-
-def _try_model_card(obj):
-    get_params = getattr(obj, "get_params", None)
-    module = getattr(type(obj), "__module__", "") or ""
-    if not callable(get_params) or not module.startswith("sklearn"):
-        return False
-    try:
-        params = get_params()
-    except Exception:
-        return False
-    fields = {str(k): _clean(repr(v))[:80] for k, v in sorted(params.items())}
-    try:
-        fitted = sorted(a for a in vars(obj)
-                        if a.endswith("_") and not a.startswith("_"))[:12]
-    except Exception:
-        fitted = []
-    emit({"id": _current_id, "type": "objectcard",
-          "title": type(obj).__name__, "subtitle": _clean(module),
-          "fields": fields, "badges": fitted,
-          "text": _capped(_clean(repr(obj)), 1000)})
-    return True
-
-def _try_jsonlike(obj):
-    if not isinstance(obj, (dict, list, tuple)):
-        return False
-    try:
-        r = repr(obj)
-    except Exception:
-        r = ""
-    if len(r) <= 120:
-        return False
-
-    def convert(o, depth):
-        if depth > 6:
-            return "…"
-        if isinstance(o, dict):
-            out = {}
-            for i, (k, v) in enumerate(o.items()):
-                if i >= 100:
-                    out["…"] = "+%d more" % (len(o) - 100)
-                    break
-                out[_clean(str(k))[:80]] = convert(v, depth + 1)
-            return out
-        if isinstance(o, (list, tuple)):
-            res = [convert(v, depth + 1) for v in list(o)[:100]]
-            if len(o) > 100:
-                res.append("… +%d more" % (len(o) - 100))
-            return res
-        if o is None or isinstance(o, bool):
-            return o
-        if isinstance(o, int):
-            return o if abs(o) < 2**53 else str(o)
-        if isinstance(o, float):
-            return o if math.isfinite(o) else str(o)
-        if isinstance(o, str):
-            return _clean(o[:300])
-        return _clean(repr(o))[:200]
-
-    emit({"id": _current_id, "type": "jsontree", "data": convert(obj, 0),
-          "summary": "%s · %d items" % (type(obj).__name__, len(obj)),
-          "text": _capped(_clean(r), 2000)})
-    return True
-
 def _portable_output(message):
     kind = message.get("type")
     payload = message.get("payload", {})
@@ -838,21 +741,9 @@ def _portable_output(message):
         html = "<table><caption>" + caption + "</caption><thead><tr>" + headers + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
         return {"text/plain": payload["text"], "text/html": html,
                 "application/vnd.quanta.dataframe+json": payload}
-    if kind == "ndarray":
-        return {"text/plain": payload["text"], "application/json": payload,
-                "application/vnd.quanta.ndarray+json": payload}
-    if kind == "objectcard":
-        card = {k: message[k] for k in ("title", "subtitle", "fields", "badges", "text")}
-        return {"text/plain": card["text"], "application/json": card,
-                "application/vnd.quanta.objectcard+json": card}
-    if kind == "jsontree":
-        return {"text/plain": message["text"], "application/json": message["data"]}
     return None
 
 def _emit_result(obj, name_hint, explicit=False):
-    if not _enhanced_data_outputs and _uses_enhanced_data_output(obj):
-        _emit_plain_result(obj)
-        return
     payload = dataframe_payload(obj, name=name_hint, max_cols=40, head_tail=True)
     if payload is not None:
         emit({"id": _current_id, "type": "dataframe", "payload": payload})
@@ -865,25 +756,22 @@ def _emit_result(obj, name_hint, explicit=False):
         return
     if _try_rich_repr(obj):
         return
-    if _try_ndarray(obj):
-        return
-    if _try_model_card(obj):
-        return
-    if _try_jsonlike(obj):
-        return
     _emit_plain_result(obj)
 
-def _uses_enhanced_data_output(obj):
-    pd = sys.modules.get("pandas")
-    np = sys.modules.get("numpy")
-    return (isinstance(obj, (dict, list, tuple))
-            or (pd is not None and isinstance(obj, (pd.DataFrame, pd.Series)))
-            or (np is not None and isinstance(obj, np.ndarray))
-            or (getattr(type(obj), "__module__", "") or "").startswith("sklearn."))
+def _plain_text(obj):
+    if _float_format is not None and isinstance(obj, float):
+        return _float_format % obj
+    text = repr(obj)
+    if isinstance(obj, (dict, list, tuple, set, frozenset)) and PRETTY_WIDTH < len(text) <= MAX_REPR_CHARS:
+        try:
+            return pprint.pformat(obj, width=PRETTY_WIDTH, sort_dicts=False)
+        except Exception:
+            return text
+    return text
 
 def _emit_plain_result(obj):
     try:
-        r = _float_format % obj if _float_format is not None and isinstance(obj, float) else repr(obj)
+        r = _plain_text(obj)
     except Exception as e:
         r = "<repr failed: %s>" % e
     r = _clean(r)
@@ -2943,8 +2831,6 @@ def main():
                     globals()["_dark_appearance"] = msg["appearance"] == "dark"
                 if isinstance(msg.get("adapt_plot_theme"), bool):
                     globals()["_adapt_plot_theme"] = msg["adapt_plot_theme"]
-                if isinstance(msg.get("enhanced_data_outputs"), bool):
-                    globals()["_enhanced_data_outputs"] = msg["enhanced_data_outputs"]
                 if isinstance(msg.get("input_requests"), bool):
                     globals()["_input_requests"] = msg["input_requests"]
             elif op == "shutdown":

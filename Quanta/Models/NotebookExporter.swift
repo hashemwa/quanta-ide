@@ -25,8 +25,7 @@ enum NotebookExporter {
         return parts.joined(separator: "\n\n") + "\n"
     }
 
-    static func html(from notebook: Notebook, title: String, baseDirectory: URL? = nil,
-                     enhancedDataOutputs: Bool = true) -> String {
+    static func html(from notebook: Notebook, title: String, baseDirectory: URL? = nil) -> String {
         var body = ""
         for cell in notebook.cells {
             switch cell.cellType {
@@ -38,7 +37,7 @@ enum NotebookExporter {
                 body += "<div class=\"cell\"><div class=\"prompt\">[\(count)]</div>"
                 body += "<pre class=\"code\">\(highlightedPython(cell.source))</pre></div>\n"
                 for output in cell.outputs {
-                    body += outputHTML(output, enhancedDataOutputs: enhancedDataOutputs, baseDirectory: baseDirectory)
+                    body += outputHTML(output, baseDirectory: baseDirectory)
                 }
             case .raw:
                 body += "<pre class=\"raw\">\(escape(cell.source))</pre>\n"
@@ -77,12 +76,6 @@ enum NotebookExporter {
         .rich-output { margin: 8px 0 8px 42px; }
         .rich-output img { margin-left: 0; }
         .rich-output pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-        .output-card { border:1px solid #8886; border-radius:6px; padding:10px; }
-        .output-card p { margin:4px 0; }
-        .output-card dt { font-weight:600; }
-        .output-card dd { margin-left:16px; overflow-wrap:anywhere; }
-        .array-preview { display:block; width:100%; max-width:600px; margin-left:0; }
-        .array-preview.heatmap { width:auto; max-height:320px; image-rendering:pixelated; }
         math { font-size: 1.1em; }
         math[display="block"] { width:max-content; margin-left:auto; margin-right:auto; }
         .math { overflow-x:auto; }
@@ -100,7 +93,7 @@ enum NotebookExporter {
           .prompt { float: left; padding-right: 8px; }
           .cell > .code { margin-left: 42px; }
           h1, h2, h3, h4, h5, h6 { break-after: avoid; }
-          tr, img, iframe, math, .output-card { break-inside: avoid; }
+          tr, img, iframe, math { break-inside: avoid; }
           thead { display: table-header-group; }
           img { max-height: 8in; object-fit: contain; }
         }
@@ -141,11 +134,7 @@ enum NotebookExporter {
         """
     }
 
-    private static func outputHTML(_ output: CellOutput, enhancedDataOutputs: Bool, baseDirectory: URL?) -> String {
-        if !enhancedDataOutputs, let text = output.enhancedDataText {
-            return "<pre class=\"out\">\(escape(text))</pre>\n"
-        }
-        if let native = NotebookOutputExport.html(output) { return native + "\n" }
+    private static func outputHTML(_ output: CellOutput, baseDirectory: URL?) -> String {
         if let bundle = RichOutput.bundle(output) {
             if let rendered = RichOutput.renderedTextHTML(bundle, baseDirectory: baseDirectory) {
                 return "<div class=\"rich-output\">\(rendered)</div>\n"
@@ -173,12 +162,6 @@ enum NotebookExporter {
             let text = traceback.isEmpty ? "\(ename): \(evalue)" : traceback
             return "<pre class=\"out err\">\(escape(text))</pre>\n"
         case .dataFrame(let payload):
-            return "<pre class=\"out\">\(escape(payload.text))</pre>\n"
-        case .ndarray(let payload):
-            return "<pre class=\"out\">\(escape(payload.text))</pre>\n"
-        case .jsonTree(let payload):
-            return "<pre class=\"out\">\(escape(payload.text))</pre>\n"
-        case .objectCard(let payload):
             return "<pre class=\"out\">\(escape(payload.text))</pre>\n"
         case .rich(let bundle):
             return "<pre class=\"out\">\(escape(RichOutput.text(bundle["text/plain"])))</pre>\n"

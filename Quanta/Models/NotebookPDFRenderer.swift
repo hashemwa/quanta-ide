@@ -60,7 +60,7 @@ final class NotebookPDFRenderer: NSObject, WKNavigationDelegate {
         await new Promise(resolve => setTimeout(resolve, 0));
         const height = Math.ceil(document.body.getBoundingClientRect().bottom + window.scrollY);
         const ranges = [];
-        for (const element of document.querySelectorAll('tr,img,iframe,math,h1,h2,h3,h4,h5,h6,.output-card')) {
+        for (const element of document.querySelectorAll('tr,img,iframe,math,h1,h2,h3,h4,h5,h6')) {
           const rect = element.getBoundingClientRect();
           ranges.push([rect.top + window.scrollY, rect.bottom + window.scrollY]);
         }

@@ -52,11 +52,6 @@ final class AppState: ObservableObject {
     let console = ConsoleModel()
     let plots = PlotHistory()
     let dataBrowser = DataBrowser()
-    lazy var outputPresentation: OutputPresentation = {
-        let presentation = OutputPresentation()
-        presentation.onChange = { [weak self] in self?.pushAppearance() }
-        return presentation
-    }()
     @Published var kernelStatus: KernelStatus = .stopped
     let selection = CellSelection()
     var selectedCellID: UUID? {
@@ -449,7 +444,6 @@ final class AppState: ObservableObject {
     func pushAppearance() {
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         kernel.notify(["op": "config", "appearance": dark ? "dark" : "light", "adapt_plot_theme": adaptsPlotTheme,
-                       "enhanced_data_outputs": outputPresentation.usesEnhancedDataOutputs,
                        "input_requests": true])
     }
 
@@ -1029,11 +1023,6 @@ final class AppState: ObservableObject {
                let payload = DataFramePayload(dict: dict) {
                 appendConsoleExecutionOutput(.result, payload.text, runID: plotOrigin.runID)
             }
-        case "ndarray", "jsontree", "objectcard":
-            let text = (message["text"] as? String)
-                ?? ((message["payload"] as? [String: Any])?["text"] as? String)
-                ?? ""
-            appendConsoleExecutionOutput(.result, text, runID: plotOrigin.runID)
         case "rich":
             if let bundle = message["mime_bundle"] as? [String: Any] {
                 appendConsoleExecutionOutput(.result, RichOutput.text(bundle["text/plain"]),
@@ -1067,8 +1056,7 @@ final class AppState: ObservableObject {
     }
 
     private static let executionOutputTypes: Set<String> = [
-        "stream", "result", "display", "rich", "plotlyhtml", "dataframe",
-        "ndarray", "jsontree", "objectcard", "error",
+        "stream", "result", "display", "rich", "plotlyhtml", "dataframe", "error",
     ]
     private var consoleExecutionOutputIDs: [UUID: Set<UUID>] = [:]
     private var pendingConsoleClears: Set<UUID> = []
@@ -1271,22 +1259,6 @@ final class AppState: ObservableObject {
             if let dict = message["payload"] as? [String: Any],
                let payload = DataFramePayload(dict: dict) {
                 appendCellOutput(.dataFrame(payload), message: message, cell: cell)
-            }
-        case "ndarray":
-            if let dict = message["payload"] as? [String: Any],
-               let payload = NDArrayPayload(dict: dict) {
-                appendCellOutput(.ndarray(payload), message: message, cell: cell)
-            }
-        case "jsontree":
-            if let data = message["data"] {
-                appendCellOutput(.jsonTree(JSONTreePayload(
-                    value: data,
-                    summary: message["summary"] as? String ?? "",
-                    text: message["text"] as? String ?? "")), message: message, cell: cell)
-            }
-        case "objectcard":
-            if let payload = ObjectCardPayload(dict: message) {
-                appendCellOutput(.objectCard(payload), message: message, cell: cell)
             }
         case "error":
             let frames = (message["frames"] as? [[String: Any]] ?? [])
@@ -2772,8 +2744,7 @@ final class AppState: ObservableObject {
     func exportActiveNotebookAsHTML() {
         guard let document = activeDocument, let notebook = document.notebook else { return }
         let html = NotebookExporter.html(from: notebook, title: document.displayName,
-                                         baseDirectory: document.url?.deletingLastPathComponent(),
-                                         enhancedDataOutputs: outputPresentation.usesEnhancedDataOutputs)
+                                         baseDirectory: document.url?.deletingLastPathComponent())
         savePanelWrite(data: Data(html.utf8),
                        suggested: document.displayName.replacingOccurrences(of: ".ipynb", with: ".html"),
                        type: .html)
@@ -2788,8 +2759,7 @@ final class AppState: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         isExportingPDF = true
         let html = NotebookExporter.html(from: notebook, title: document.displayName,
-                                         baseDirectory: document.url?.deletingLastPathComponent(),
-                                         enhancedDataOutputs: outputPresentation.usesEnhancedDataOutputs)
+                                         baseDirectory: document.url?.deletingLastPathComponent())
         NotebookExporter.renderPDF(html: html) { [weak self] data in
             guard let self else { return }
             self.isExportingPDF = false

@@ -440,7 +440,6 @@ struct QuantaCommands: Commands {
 
 struct SettingsView: View {
     @EnvironmentObject var app: AppState
-    @ObservedObject private var outputs = AppState.shared.outputPresentation
     @AppStorage("QuantaAutoSaveFiles") private var autoSaveFiles = false
     @AppStorage("QuantaReopenSession") private var reopenSession = true
     @AppStorage("QuantaSuppressRestartConfirm") private var suppressRestartConfirm = false
@@ -487,15 +486,6 @@ struct SettingsView: View {
                 }
                 Section("Navigator") {
                     Toggle("Show hidden files", isOn: $app.showsHiddenFiles)
-                }
-                Section {
-                    Toggle("Use enhanced data outputs", isOn: Binding(
-                        get: { outputs.usesEnhancedDataOutputs },
-                        set: { outputs.setEnhancedDataOutputs($0) }))
-                } header: {
-                    Text("Notebook Outputs")
-                } footer: {
-                    Text("Show tables, array previews, expandable collections and model cards. Turn off for Python text. Saved data previews switch immediately; exports follow this choice. Rerun text-only results to create enhanced previews. Plots, images, errors, HTML and equations keep their formatting.")
                 }
                 Section("Window") {
                     LabeledContent("Sidebar, inspector and panel sizes") {
