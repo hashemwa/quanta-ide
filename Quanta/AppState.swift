@@ -166,6 +166,9 @@ final class AppState: ObservableObject {
         kernel.onOrphanMessage = { [weak self] message in
             self?.handleOrphan(message)
         }
+        kernel.onInputRequest = { [weak self] message in
+            self?.presentInputRequest(message)
+        }
         configureSourceControl()
     }
 
@@ -413,6 +416,7 @@ final class AppState: ObservableObject {
         }
         pausedRunDocumentID = nil
         pausedRunCellIDs = []
+        cancelQueuedCellRuns()
         kernel.interrupt()
     }
 
@@ -441,7 +445,40 @@ final class AppState: ObservableObject {
     func pushAppearance() {
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         kernel.notify(["op": "config", "appearance": dark ? "dark" : "light", "adapt_plot_theme": adaptsPlotTheme,
-                       "enhanced_data_outputs": outputPresentation.usesEnhancedDataOutputs])
+                       "enhanced_data_outputs": outputPresentation.usesEnhancedDataOutputs,
+                       "input_requests": true])
+    }
+
+    private func presentInputRequest(_ message: [String: Any]) {
+        dismissInputRequest()
+        let prompt = (message["prompt"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let alert = NSAlert()
+        alert.messageText = prompt.isEmpty ? "Python Is Waiting for Input" : prompt
+        alert.informativeText = "The running code called input(). Submit a value to continue, or interrupt it."
+        alert.addButton(withTitle: "Submit")
+        alert.addButton(withTitle: "Interrupt")
+        let field: NSTextField = message["password"] as? Bool == true
+            ? NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+            : NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        inputAlert = alert
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self, self.inputAlert === alert else { return }
+            self.inputAlert = nil
+            self.kernel.replyToInput(response == .alertFirstButtonReturn ? field.stringValue : nil)
+        }
+        if let window = NSApp.mainWindow ?? NSApp.keyWindow {
+            alert.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(alert.runModal())
+        }
+    }
+
+    private func dismissInputRequest() {
+        guard let alert = inputAlert else { return }
+        inputAlert = nil
+        alert.window.sheetParent?.endSheet(alert.window, returnCode: .abort)
     }
 
     private func clearRunningFlags() {
@@ -451,6 +488,9 @@ final class AppState: ObservableObject {
         runningChainIndex = 0
         pausedRunDocumentID = nil
         pausedRunCellIDs = []
+        cellRunGeneration += 1
+        cellRunInFlight = false
+        cancelQueuedCellRuns()
         for document in openDocuments {
             document.notebook?.cells.forEach {
                 $0.isRunning = false
@@ -461,6 +501,7 @@ final class AppState: ObservableObject {
 
     private func kernelStatusChanged(_ status: KernelStatus) {
         kernelStatus = status
+        if status != .busy { dismissInputRequest() }
         if status == .dead {
             userNotice = "The Python kernel stopped unexpectedly. Restart it from the interpreter menu, then rerun the cells you need."
             clearRunningFlags()
@@ -1034,6 +1075,13 @@ final class AppState: ObservableObject {
         }
     }
 
+    private struct QueuedCellRun {
+        weak var cell: NotebookCell?
+        weak var document: Document?
+        let documentID: UUID
+        let completion: ((Bool) -> Void)?
+    }
+
     func runCell(_ cell: NotebookCell, in document: Document, advance: Bool,
                  completion: ((Bool) -> Void)? = nil) {
         guard cell.cellType == .code else {
@@ -1053,11 +1101,22 @@ final class AppState: ObservableObject {
             completion?(false)
             return
         }
-        guard !cell.isRunning else {
+        guard !cell.isRunning, !queuedCellRuns.contains(where: { $0.cell === cell }) else {
             completion?(false)
             return
         }
         if document.id == activeDocumentID { selectedCellID = cell.id }
+        if cellRunInFlight {
+            cell.isQueued = true
+            queuedCellRuns.append(QueuedCellRun(cell: cell, document: document, documentID: document.id,
+                                                completion: completion))
+        } else {
+            startCellRun(cell, in: document, completion: completion)
+        }
+        if advance { advanceSelection(after: cell, in: document) }
+    }
+
+    private func startCellRun(_ cell: NotebookCell, in document: Document, completion: ((Bool) -> Void)?) {
         pendingStreams.removeValue(forKey: cell.id)
         pendingOutputClears.remove(cell.id)
         cell.lastExecutedSource = cell.source
@@ -1069,7 +1128,21 @@ final class AppState: ObservableObject {
         document.isDirty = true
         let plotOrigin = plots.beginRun(document: document, cell: cell)
         let executingCellID = cell.id
-        kernel.execute(code: cell.source) { [weak self, weak cell, weak document] message in
+        let documentID = document.id
+        let generation = cellRunGeneration
+        cellRunInFlight = true
+        let finish: (Bool) -> Void = { [weak self] ok in
+            guard let self else { return }
+            guard generation == self.cellRunGeneration else {
+                completion?(ok)
+                return
+            }
+            self.cellRunInFlight = false
+            if !ok { self.cancelQueuedCellRuns(in: documentID) }
+            completion?(ok)
+            self.startNextQueuedCellRun()
+        }
+        kernel.execute(code: cell.source, notebook: document.url) { [weak self, weak cell, weak document] message in
             guard let self else { return true }
             guard let cell else {
                 let type = message["type"] as? String
@@ -1078,16 +1151,46 @@ final class AppState: ObservableObject {
                     self.pendingStreams.removeValue(forKey: executingCellID)
                     self.pendingOutputClears.remove(executingCellID)
                     self.streamFlushScheduled.remove(executingCellID)
+                    finish(type == "done" && message["status"] as? String == "ok")
                 }
                 return finished
             }
             let finished = self.handleCellExecution(message, cell: cell, document: document,
-                                                    advance: advance, completion: completion)
+                                                    advance: false, completion: finish)
             if ["display", "plotlyhtml", "rich"].contains(message["type"] as? String ?? ""),
                let output = cell.outputs.last {
                 self.plots.record(output, origin: plotOrigin)
             }
             return finished
+        }
+    }
+
+    private func startNextQueuedCellRun() {
+        while !cellRunInFlight, !queuedCellRuns.isEmpty {
+            let run = queuedCellRuns.removeFirst()
+            guard let cell = run.cell, let document = run.document,
+                  openDocuments.contains(where: { $0.id == document.id }) else {
+                run.cell?.isQueued = false
+                run.completion?(false)
+                continue
+            }
+            guard kernel.isRunning, allowExecution() else {
+                cell.isQueued = false
+                run.completion?(false)
+                cancelQueuedCellRuns()
+                return
+            }
+            startCellRun(cell, in: document, completion: run.completion)
+        }
+    }
+
+    private func cancelQueuedCellRuns(in documentID: UUID? = nil) {
+        let cancelled = queuedCellRuns.filter { documentID == nil || $0.documentID == documentID }
+        guard !cancelled.isEmpty else { return }
+        queuedCellRuns.removeAll { documentID == nil || $0.documentID == documentID }
+        for run in cancelled {
+            run.cell?.isQueued = false
+            run.completion?(false)
         }
     }
 
@@ -1230,6 +1333,10 @@ final class AppState: ObservableObject {
         return raw
     }
 
+    private var inputAlert: NSAlert?
+    private var queuedCellRuns: [QueuedCellRun] = []
+    private var cellRunInFlight = false
+    private var cellRunGeneration = 0
     private var pendingStreams: [UUID: (name: String, text: String)] = [:]
     private var streamFlushScheduled: Set<UUID> = []
     private var pendingOutputClears: Set<UUID> = []

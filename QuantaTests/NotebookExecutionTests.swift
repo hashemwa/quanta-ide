@@ -86,6 +86,30 @@ final class NotebookExecutionTests: XCTestCase {
     }
 
     @MainActor
+    func testRunAndAdvanceQueuesCellsAndStopsQueueAfterAnError() async throws {
+        let app = try await runningApp()
+        defer { app.kernel.stop() }
+        let document = notebook(["import time; time.sleep(0.2); raise ValueError('stop')", "41", "42"])
+        let other = notebook(["7"])
+        app.openDocuments = [document, other]
+        app.activeDocumentID = document.id
+        let cells = try XCTUnwrap(document.notebook?.cells)
+        let otherCell = try XCTUnwrap(other.notebook?.cells.first)
+        app.runCell(cells[0], in: document, advance: true)
+        app.runCell(cells[1], in: document, advance: true)
+        app.runCell(otherCell, in: other, advance: false)
+        XCTAssertTrue(cells[0].isRunning)
+        XCTAssertTrue(cells[1].isQueued)
+        XCTAssertFalse(cells[1].isRunning)
+        XCTAssertTrue(otherCell.isQueued)
+        XCTAssertEqual(app.selectedCellID, cells[2].id)
+        try await waitUntil { otherCell.executionCount != nil && app.kernel.status == .idle }
+        XCTAssertNil(cells[1].executionCount)
+        XCTAssertFalse(cells[1].isQueued)
+        XCTAssertFalse(cells[1].isRunning)
+    }
+
+    @MainActor
     func testBackgroundCellErrorKeepsSelectionInActiveNotebook() async throws {
         let app = try await runningApp()
         defer { app.kernel.stop() }

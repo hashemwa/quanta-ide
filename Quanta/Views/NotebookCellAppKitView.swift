@@ -19,6 +19,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private let progress = NSProgressIndicator()
     private let staleImage = NSImageView()
     private let durationLabel = NSTextField(labelWithString: "")
+    private var elapsedTimer: Timer?
     private let runButton = NotebookIconButton()
     private let markdownButton = NotebookIconButton()
     private let addButton = NotebookIconButton()
@@ -96,6 +97,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     }
 
     func resetForReuse() {
+        stopElapsedTimer()
         cancellables.removeAll()
         hovering = false
         editorFocused = false
@@ -559,12 +561,18 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         statusLabel.setAccessibilityLabel(cell.executionCount.map { "Execution count \($0)" } ?? "Not run yet")
         editor?.setAccessibilityLabel("\(cellDescription) source")
         staleImage.isHidden = !cell.hasStaleOutput || cell.isRunning || !isCode
-        durationLabel.isHidden = cell.lastDuration == nil || cell.isRunning || !isCode
-        if let duration = cell.lastDuration {
+        durationLabel.isHidden = !isCode || (cell.lastDuration == nil && !cell.isRunning)
+        if cell.isRunning, isCode, let started = cell.runStartedAt {
+            durationLabel.stringValue = Self.elapsedLabel(-started.timeIntervalSinceNow)
+            durationLabel.toolTip = "Running time"
+            startElapsedTimer()
+        } else if let duration = cell.lastDuration {
+            stopElapsedTimer()
             let formatted = Self.durationLabel(duration)
             durationLabel.stringValue = formatted
             durationLabel.toolTip = "Last run time: \(formatted)"
         } else {
+            stopElapsedTimer()
             durationLabel.stringValue = ""
             durationLabel.toolTip = nil
         }
@@ -732,6 +740,33 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
 
     private func collapsedPreview(_ cell: NotebookCell) -> String {
         cell.source.components(separatedBy: "\n").first { !$0.isEmpty } ?? "(empty cell)"
+    }
+
+    static func elapsedLabel(_ seconds: Double) -> String {
+        let whole = max(0, Int(seconds))
+        return whole < 60 ? "\(whole)s" : "\(whole / 60)m \(whole % 60)s"
+    }
+
+    private func startElapsedTimer() {
+        guard elapsedTimer == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateElapsedTime() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        elapsedTimer = timer
+    }
+
+    private func stopElapsedTimer() {
+        elapsedTimer?.invalidate()
+        elapsedTimer = nil
+    }
+
+    private func updateElapsedTime() {
+        guard let cell, cell.isRunning, let started = cell.runStartedAt else {
+            stopElapsedTimer()
+            return
+        }
+        durationLabel.stringValue = Self.elapsedLabel(-started.timeIntervalSinceNow)
     }
 
     static func durationLabel(_ seconds: Double) -> String {

@@ -26,6 +26,7 @@ final class KernelSession {
 
     var onStatusChange: ((KernelStatus) -> Void)?
     var onOrphanMessage: (([String: Any]) -> Void)?
+    var onInputRequest: (([String: Any]) -> Void)?
     private(set) var readyInfo: [String: Any]?
     private(set) var executable: String?
     private(set) var workingDirectory: URL?
@@ -140,6 +141,14 @@ final class KernelSession {
         failAllPending()
     }
 
+    func replyToInput(_ value: String?) {
+        if let value {
+            notify(["op": "input_reply", "value": value])
+        } else {
+            notify(["op": "input_reply", "interrupt": true])
+        }
+    }
+
     func interrupt() {
         process?.interrupt()
     }
@@ -184,10 +193,14 @@ final class KernelSession {
         writeQueue.async { try? stdinHandle.write(contentsOf: data) }
     }
 
-    func execute(code: String, filename: String? = nil,
+    func execute(code: String, filename: String? = nil, notebook: URL? = nil,
                  onMessage: @escaping ([String: Any]) -> Bool) {
         var payload: [String: Any] = ["op": "execute", "code": code]
         if let filename { payload["filename"] = filename }
+        if let notebook {
+            payload["notebook"] = notebook.path
+            payload["directory"] = notebook.deletingLastPathComponent().path
+        }
         request(payload, onMessage: onMessage)
     }
 
@@ -262,6 +275,10 @@ final class KernelSession {
     }
 
     private func processMessage(_ msg: [String: Any]) {
+        if msg["type"] as? String == "input_request" {
+            onInputRequest?(msg)
+            return
+        }
         if let type = msg["type"] as? String, type == "ready" || type == "done" {
             if let cwd = msg["cwd"] as? String {
                 workingDirectory = URL(fileURLWithPath: cwd)
