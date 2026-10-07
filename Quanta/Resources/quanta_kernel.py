@@ -1450,6 +1450,8 @@ def _magic_prun(line, frame, cell=None):
     import pstats
     sort = "tottime"
     limit = 30
+    quiet = False
+    returns_stats = False
     tokens = line.split()
     rest = []
     index = 0
@@ -1462,7 +1464,9 @@ def _magic_prun(line, frame, cell=None):
                 limit = int(tokens[index + 1])
             index += 2
             continue
-        if token == "-q":
+        if token in ("-q", "-r"):
+            quiet = quiet or token == "-q"
+            returns_stats = returns_stats or token == "-r"
             index += 1
             continue
         rest = tokens[index:]
@@ -1480,12 +1484,15 @@ def _magic_prun(line, frame, cell=None):
     try:
         if compiled is not None:
             exec(compiled, globals_ns, locals_ns)
-        result = eval(compiled_expr, globals_ns, locals_ns) if compiled_expr is not None else None
+        if compiled_expr is not None:
+            eval(compiled_expr, globals_ns, locals_ns)
     finally:
         profiler.disable()
     stats = pstats.Stats(profiler, stream=sys.stdout)
-    stats.sort_stats({"time": "tottime", "cumulative": "cumtime"}.get(sort, sort)).print_stats(limit)
-    return result
+    stats.sort_stats({"time": "tottime", "cumulative": "cumtime"}.get(sort, sort))
+    if not quiet:
+        stats.print_stats(limit)
+    return stats if returns_stats else None
 
 
 _cell_magics["prun"] = lambda line, cell, frame: _magic_prun(line, frame, cell)
