@@ -561,8 +561,8 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         statusLabel.setAccessibilityLabel(cell.executionCount.map { "Execution count \($0)" } ?? "Not run yet")
         editor?.setAccessibilityLabel("\(cellDescription) source")
         staleImage.isHidden = !cell.hasStaleOutput || cell.isRunning || !isCode
-        durationLabel.isHidden = !isCode || (cell.lastDuration == nil && !cell.isRunning)
-        if cell.isRunning, isCode, let started = cell.runStartedAt {
+        durationLabel.isHidden = !isCode || cell.lastDuration == nil
+        if cell.isRunning, !durationLabel.isHidden, let started = cell.runStartedAt {
             durationLabel.stringValue = Self.elapsedLabel(-started.timeIntervalSinceNow)
             durationLabel.toolTip = "Running time"
             startElapsedTimer()
