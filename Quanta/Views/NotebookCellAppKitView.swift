@@ -602,7 +602,12 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private var cellDescription: String {
         guard let cell else { return "Cell" }
         let index = (notebook?.cells.firstIndex { $0 === cell } ?? 0) + 1
-        return "\(cell.cellType == .code ? "Code" : "Markdown") cell \(index)"
+        let kind = switch cell.cellType {
+        case .code: "Code"
+        case .markdown: "Markdown"
+        case .raw: "Raw"
+        }
+        return "\(kind) cell \(index)"
     }
 
     private var spokenDescription: String {

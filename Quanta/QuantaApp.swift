@@ -195,6 +195,9 @@ struct QuantaCommands: Commands {
         CommandGroup(replacing: .saveItem) {
             Button("Save") { app.saveActiveDocument() }
                 .keyboardShortcut("s", modifiers: .command)
+            Button("Save As…") { app.saveActiveDocumentAs() }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(app.activeDocument?.isFileBacked != true)
             Button("Close Tab") { app.closeActiveTabOrWindow() }
                 .keyboardShortcut("w", modifiers: .command)
             Divider()
@@ -241,6 +244,8 @@ struct QuantaCommands: Commands {
                 .disabled(!app.hasSelectedCell)
             Button("Cut Cell") { app.commandCut() }
                 .disabled(!app.hasSelectedCell)
+            Button("Paste Cell Above") { app.commandPasteAbove() }
+                .disabled(!app.hasSelectedCell)
             Button("Paste Cell Below") { app.commandPaste() }
                 .disabled(!app.hasSelectedCell)
             Button("Duplicate Cell") { app.commandDuplicate() }
@@ -257,6 +262,14 @@ struct QuantaCommands: Commands {
                 .disabled(!app.hasSelectedCell)
             Button("Convert to Code") { app.commandConvert(to: .code) }
                 .disabled(!app.hasSelectedCell)
+            Button("Convert to Raw") { app.commandConvert(to: .raw) }
+                .disabled(!app.hasSelectedCell)
+            Menu("Convert to Heading") {
+                ForEach(1...6, id: \.self) { level in
+                    Button("Heading \(level)") { app.commandHeading(level) }
+                }
+            }
+            .disabled(!app.hasSelectedCell)
             Divider()
             Button("Move Cell Up") { app.commandMove(-1) }
                 .keyboardShortcut("[", modifiers: [.command, .option])
@@ -281,6 +294,8 @@ struct QuantaCommands: Commands {
                 .disabled(!app.hasSelectedCell)
             Button("Merge Cell With Below") { app.mergeSelectedCellWithBelow() }
                 .disabled(!app.canMergeSelectedCellWithBelow)
+            Button("Merge Selected Cells") { app.mergeSelectedCells() }
+                .disabled(!app.canMergeSelectedCells)
             Divider()
             Button("Clear All Outputs") { app.clearAllOutputs(in: app.activeDocument) }
                 .disabled(app.activeDocument?.kind != .notebook)
@@ -304,6 +319,9 @@ struct QuantaCommands: Commands {
             }
             .keyboardShortcut(.return, modifiers: [.command, .shift])
             .disabled(!app.activeDocumentIsRunnable)
+            Button("Run Cell and Insert Below") { app.commandRunAndInsertBelow() }
+                .keyboardShortcut(.return, modifiers: .option)
+                .disabled(!app.hasSelectedCell)
             Button("Run Cells Above") { app.commandRunCells(above: true) }
                 .disabled(!app.hasSelectedCell)
             Button("Run Cells Below") { app.commandRunCells(above: false) }
@@ -312,6 +330,8 @@ struct QuantaCommands: Commands {
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(app.activeDocument == nil)
             Button("Restart Kernel and Run All") { app.restartAndRunAll() }
+                .disabled(app.activeDocument?.kind != .notebook)
+            Button("Restart Kernel and Clear Outputs") { app.restartAndClearOutputs() }
                 .disabled(app.activeDocument?.kind != .notebook)
             Divider()
             ExecutionStopButton(app: app)

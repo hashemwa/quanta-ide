@@ -99,6 +99,38 @@ final class NotebookPolishTests: XCTestCase {
         }
     }
 
+    func testCommandModeNavigationSelectionMergeAndHeadingKeys() throws {
+        let app = AppState()
+        let cells = ["a", "b", "c"].map { NotebookCell(type: .code, source: $0) }
+        let notebook = Notebook(cells: cells, metadata: [:])
+        let document = Document(notebook: notebook, url: nil)
+        app.openDocuments = [document]
+        app.activeDocumentID = document.id
+        app.isCommandMode = true
+        app.selectedCellID = cells[0].id
+        func press(_ key: String, shift: Bool = false) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? [.shift] : [],
+                                                       timestamp: 0, windowNumber: 0, context: nil,
+                                                       characters: key, charactersIgnoringModifiers: key,
+                                                       isARepeat: false, keyCode: 0))
+            XCTAssertTrue(app.handleCommandModeKey(event))
+        }
+        try press("j")
+        XCTAssertEqual(app.selectedCellID, cells[1].id)
+        try press("k")
+        XCTAssertEqual(app.selectedCellID, cells[0].id)
+        try press("J", shift: true)
+        try press("J", shift: true)
+        XCTAssertEqual(app.selection.selectedCellIDs, Set(cells.map(\.id)))
+        try press("M", shift: true)
+        XCTAssertEqual(notebook.cells.map(\.source), ["a\nb\nc"])
+        try press("2")
+        XCTAssertEqual(notebook.cells[0].cellType, .markdown)
+        XCTAssertEqual(notebook.cells[0].source, "## a\nb\nc")
+        try press("r")
+        XCTAssertEqual(notebook.cells[0].cellType, .raw)
+    }
+
     func testPointerInsertionActivatesCorrectNotebookAndEntersEditing() {
         let app = AppState()
         let cell = NotebookCell(type: .code)

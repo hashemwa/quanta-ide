@@ -144,12 +144,13 @@ extension AppState {
     }
 
     @MainActor var ideCommands: [IDECommand] {
-        [
+        let general: [IDECommand] = [
             IDECommand(id: "open", title: "Open File…", shortcut: "⌘O", action: openFilePanel),
             IDECommand(id: "folder", title: "Open Folder…", shortcut: "⇧⌘O", action: openFolderPanel),
             IDECommand(id: "notebook", title: "New Notebook", shortcut: "⌘N", action: newNotebook),
             IDECommand(id: "script", title: "New Python File", shortcut: "⇧⌘N", action: newScript),
             IDECommand(id: "save", title: "Save File", shortcut: "⌘S", enabled: activeDocumentIsEditable, action: saveActiveDocument),
+            IDECommand(id: "save-as", title: "Save As…", shortcut: "⇧⌘S", enabled: activeDocument?.isFileBacked == true, action: saveActiveDocumentAs),
             IDECommand(id: "run", title: runCommandTitle, shortcut: "⌘R", enabled: activeDocument != nil, action: runActiveDocument),
             IDECommand(id: "run-selected", title: "Run Selected Cells", shortcut: "", enabled: selection.selectedCellIDs.count > 1, action: runSelectedCells),
             IDECommand(id: "stop", title: "Interrupt Execution", shortcut: "⌘.", enabled: activeDocument?.dataSession?.isLoading == true || (activeDocument?.dataSession == nil && kernelStatus == .busy), action: interruptActiveExecution),
@@ -185,6 +186,38 @@ extension AppState {
             IDECommand(id: "reset-layout", title: "Reset Window Layout", shortcut: "", action: resetLayout),
             IDECommand(id: "stage", title: "Stage All Changes", shortcut: "", enabled: !git.isBusy && !(git.snapshot?.unstaged.isEmpty ?? true), action: stageAllChanges),
             IDECommand(id: "commit", title: "Write Commit Message…", shortcut: "⌃⌘C", enabled: !git.isBusy && git.availability == .ready && !(git.snapshot?.isClean ?? true), action: focusCommitMessage),
+        ]
+        return general + notebookCommands
+    }
+
+    @MainActor private var notebookCommands: [IDECommand] {
+        let isNotebook = activeDocument?.kind == .notebook
+        return [
+            IDECommand(id: "run-and-advance", title: "Run Cell and Advance", shortcut: "⇧⌘↩", enabled: hasSelectedCell, action: { self.runSelectedCell(advance: true) }),
+            IDECommand(id: "run-insert-below", title: "Run Cell and Insert Below", shortcut: "⌥↩", enabled: hasSelectedCell, action: commandRunAndInsertBelow),
+            IDECommand(id: "run-above", title: "Run Cells Above", shortcut: "", enabled: hasSelectedCell, action: { self.commandRunCells(above: true) }),
+            IDECommand(id: "run-below", title: "Run Cells Below", shortcut: "", enabled: hasSelectedCell, action: { self.commandRunCells(above: false) }),
+            IDECommand(id: "restart-run-all", title: "Restart Kernel and Run All", shortcut: "", enabled: isNotebook, action: restartAndRunAll),
+            IDECommand(id: "restart-clear", title: "Restart Kernel and Clear Outputs", shortcut: "", enabled: isNotebook, action: restartAndClearOutputs),
+            IDECommand(id: "clear-all-outputs", title: "Clear All Outputs", shortcut: "", enabled: isNotebook, action: { self.clearAllOutputs(in: self.activeDocument) }),
+            IDECommand(id: "clear-output", title: "Clear Cell Output", shortcut: "", enabled: hasSelectedCell, action: commandClearOutput),
+            IDECommand(id: "toggle-output", title: "Hide or Show Output", shortcut: "O (command mode)", enabled: hasSelectedCell, action: commandToggleOutput),
+            IDECommand(id: "copy-cell", title: "Copy Cell", shortcut: "C (command mode)", enabled: hasSelectedCell, action: commandCopy),
+            IDECommand(id: "cut-cell", title: "Cut Cell", shortcut: "X (command mode)", enabled: hasSelectedCell, action: commandCut),
+            IDECommand(id: "paste-above", title: "Paste Cell Above", shortcut: "⇧V (command mode)", enabled: hasSelectedCell, action: commandPasteAbove),
+            IDECommand(id: "paste-below", title: "Paste Cell Below", shortcut: "V (command mode)", enabled: hasSelectedCell, action: commandPaste),
+            IDECommand(id: "duplicate-cell", title: "Duplicate Cell", shortcut: "", enabled: hasSelectedCell, action: commandDuplicate),
+            IDECommand(id: "delete-cell", title: "Delete Cell", shortcut: "D D (command mode)", enabled: hasSelectedCell, action: commandDelete),
+            IDECommand(id: "undo-delete-cell", title: "Undo Delete Cell", shortcut: "⌥⌘Z", enabled: canUndoCellDeletion, action: { if let document = self.activeDocument { self.undoCellDeletion(in: document) } }),
+            IDECommand(id: "move-up", title: "Move Cell Up", shortcut: "⌥⌘[", enabled: hasSelectedCell, action: { self.commandMove(-1) }),
+            IDECommand(id: "move-down", title: "Move Cell Down", shortcut: "⌥⌘]", enabled: hasSelectedCell, action: { self.commandMove(1) }),
+            IDECommand(id: "split-cell", title: "Split Cell at Cursor", shortcut: "⌃⇧-", enabled: hasSelectedCell, action: splitSelectedCell),
+            IDECommand(id: "merge-below", title: "Merge Cell With Below", shortcut: "", enabled: canMergeSelectedCellWithBelow, action: mergeSelectedCellWithBelow),
+            IDECommand(id: "merge-selected", title: "Merge Selected Cells", shortcut: "⇧M (command mode)", enabled: canMergeSelectedCells, action: mergeSelectedCells),
+            IDECommand(id: "convert-markdown", title: "Convert to Markdown", shortcut: "M (command mode)", enabled: hasSelectedCell, action: { self.commandConvert(to: .markdown) }),
+            IDECommand(id: "convert-code", title: "Convert to Code", shortcut: "Y (command mode)", enabled: hasSelectedCell, action: { self.commandConvert(to: .code) }),
+            IDECommand(id: "convert-raw", title: "Convert to Raw", shortcut: "R (command mode)", enabled: hasSelectedCell, action: { self.commandConvert(to: .raw) }),
+            IDECommand(id: "export-python", title: "Export Notebook as Python…", shortcut: "", enabled: isNotebook, action: exportActiveNotebookAsPython),
         ]
     }
 }

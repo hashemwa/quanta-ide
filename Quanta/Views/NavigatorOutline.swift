@@ -260,6 +260,9 @@ struct NavigatorOutline: NSViewRepresentable {
             if targets.count == 1, let item = targets.first {
                 let node = item.node
                 if node.isDirectory {
+                    menu.addItem(ActionMenuItem("New Notebook…") { [app] in
+                        app.createFile(in: node.url, suggestedName: "Untitled.ipynb")
+                    })
                     menu.addItem(ActionMenuItem("New File…") { [app] in app.createFile(in: node.url) })
                     menu.addItem(ActionMenuItem("New Folder…") { [app] in app.createFolder(in: node.url) })
                     menu.addItem(ActionMenuItem("Paste") { [app] in app.pasteNodes(into: node.url) })
@@ -274,6 +277,9 @@ struct NavigatorOutline: NSViewRepresentable {
                     menu.addItem(ActionMenuItem("Rename…") { [app] in app.renameNode(node) })
                 }
             } else if targets.isEmpty {
+                menu.addItem(ActionMenuItem("New Notebook…") { [app] in
+                    app.createFile(in: rootURL, suggestedName: "Untitled.ipynb")
+                })
                 menu.addItem(ActionMenuItem("New File…") { [app] in app.createFile(in: rootURL) })
                 menu.addItem(ActionMenuItem("New Folder…") { [app] in app.createFolder(in: rootURL) })
                 menu.addItem(ActionMenuItem("Paste") { [app] in app.pasteNodes(into: rootURL) })

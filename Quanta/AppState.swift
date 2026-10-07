@@ -846,14 +846,20 @@ final class AppState: ObservableObject {
         }
     }
 
+    func saveActiveDocumentAs() {
+        if let document = activeDocument {
+            _ = save(document, choosingLocation: true)
+        }
+    }
+
     @discardableResult
-    func save(_ document: Document, interactive: Bool = true) -> Bool {
+    func save(_ document: Document, interactive: Bool = true, choosingLocation: Bool = false) -> Bool {
         guard document.isFileBacked else { return true }
         var url = document.url
-        if url == nil {
+        if url == nil || choosingLocation {
             let panel = NSSavePanel()
-            panel.directoryURL = workspace?.rootURL
-            panel.nameFieldStringValue = document.displayName
+            panel.directoryURL = document.url?.deletingLastPathComponent() ?? workspace?.rootURL
+            panel.nameFieldStringValue = document.url?.lastPathComponent ?? document.displayName
             let ext = document.kind == .notebook ? "ipynb" : "py"
             if let type = UTType(filenameExtension: ext) {
                 panel.allowedContentTypes = [type]
@@ -862,7 +868,7 @@ final class AppState: ObservableObject {
             url = chosen
         }
         guard let target = url else { return false }
-        if document.url != nil, let known = document.fileModificationDate,
+        if !choosingLocation, document.url != nil, let known = document.fileModificationDate,
            let current = fileModificationDate(of: target), current != known {
             guard interactive, confirmOverwritingChangedFile(document) else { return false }
         }
@@ -1820,7 +1826,17 @@ final class AppState: ObservableObject {
         get { editorPresentation.scrollRequest }
         set { editorPresentation.scrollRequest = newValue }
     }
-    private var pendingDeleteTimestamp: TimeInterval = 0
+    private var pendingChord: (key: String, time: TimeInterval)?
+
+    private func completesChord(_ key: String) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let pending = pendingChord, pending.key == key, now - pending.time < 0.7 {
+            pendingChord = nil
+            return true
+        }
+        pendingChord = (key, now)
+        return false
+    }
 
     func enterCommandMode() {
         guard let window = NSApp.keyWindow ?? NSApp.mainWindow,
@@ -1879,32 +1895,54 @@ final class AppState: ObservableObject {
             index = found
         } else if selectedCellID == nil {
             index = 0
+            selectedCellID = notebook.cells[0].id
         } else {
             selectedCellID = notebook.cells[0].id
             return true
         }
         let cell = notebook.cells[index]
-        if event.charactersIgnoringModifiers?.lowercased() != "d" { pendingDeleteTimestamp = 0 }
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        let shift = event.modifierFlags.contains(.shift)
+        if pendingChord?.key != key { pendingChord = nil }
 
         switch event.keyCode {
         case 36:
-            if event.modifierFlags.contains(.shift) {
+            if shift {
                 runCell(cell, in: document, advance: true)
             } else {
                 enterEditMode()
             }
             return true
         case 126:
-            selectCell(at: index - 1, in: notebook)
+            if shift { extendCellSelection(by: -1, in: notebook) } else { selectCell(at: index - 1, in: notebook) }
             return true
         case 125:
-            selectCell(at: index + 1, in: notebook)
+            if shift { extendCellSelection(by: 1, in: notebook) } else { selectCell(at: index + 1, in: notebook) }
             return true
         default:
             break
         }
 
-        switch event.charactersIgnoringModifiers?.lowercased() {
+        switch key {
+        case "j":
+            if shift { extendCellSelection(by: 1, in: notebook) } else { selectCell(at: index + 1, in: notebook) }
+            return true
+        case "k":
+            if shift { extendCellSelection(by: -1, in: notebook) } else { selectCell(at: index - 1, in: notebook) }
+            return true
+        case "1", "2", "3", "4", "5", "6":
+            guard !shift, let level = Int(key) else { return false }
+            commandHeading(level)
+            return true
+        case "r":
+            commandConvert(to: .raw)
+            return true
+        case "i":
+            if completesChord(key) { interruptKernel() }
+            return true
+        case "0":
+            if completesChord(key) { restartKernel() }
+            return true
         case "a":
             insertCell(type: .code, nextTo: cell, offset: 0, in: notebook, document: document)
             return true
@@ -1912,29 +1950,22 @@ final class AppState: ObservableObject {
             insertCell(type: .code, nextTo: cell, offset: 1, in: notebook, document: document)
             return true
         case "d":
-            let now = ProcessInfo.processInfo.systemUptime
-            if now - pendingDeleteTimestamp < 0.7 {
-                pendingDeleteTimestamp = 0
-                deleteCell(cell, in: notebook, document: document)
-            } else {
-                pendingDeleteTimestamp = now
-            }
+            if completesChord(key) { deleteCells(selectedCells(in: notebook), in: notebook, document: document) }
             return true
         case "c":
-            copyCell(cell, in: notebook)
+            copyCells(selectedCells(in: notebook), in: notebook)
             return true
         case "x":
-            copyCell(cell, in: notebook)
-            deleteCell(cell, in: notebook, document: document)
+            commandCut()
             return true
         case "v":
-            pasteCell(after: cell, in: notebook, document: document)
+            if shift { commandPasteAbove() } else { pasteCell(after: cell, in: notebook, document: document) }
             return true
         case "m":
-            convertCell(cell, to: .markdown, in: document)
+            if shift { mergeSelectedCells() } else { commandConvert(to: .markdown) }
             return true
         case "y":
-            convertCell(cell, to: .code, in: document)
+            commandConvert(to: .code)
             return true
         case "z":
             undoCellDeletion(in: document)
@@ -2004,8 +2035,73 @@ final class AppState: ObservableObject {
     }
 
     func commandConvert(to type: CellType) {
-        guard let ctx = selectionContext, ctx.cell.cellType != type else { return }
-        convertCell(ctx.cell, to: type, in: ctx.document)
+        guard let ctx = selectionContext else { return }
+        for cell in selectedCells(in: ctx.notebook) where cell.cellType != type {
+            convertCell(cell, to: type, in: ctx.document)
+        }
+    }
+
+    func commandPasteAbove() {
+        guard let ctx = selectionContext,
+              let index = ctx.notebook.cells.firstIndex(where: { $0.id == ctx.cell.id }) else { return }
+        pasteCells(at: index, in: ctx.notebook, document: ctx.document)
+    }
+
+    func commandRunAndInsertBelow() {
+        guard let ctx = selectionContext else { return }
+        runCell(ctx.cell, in: ctx.document, advance: false)
+        insertCell(type: .code, nextTo: ctx.cell, offset: 1, in: ctx.notebook, document: ctx.document,
+                   editing: !isCommandMode)
+    }
+
+    func commandHeading(_ level: Int) {
+        guard let ctx = selectionContext, (1...6).contains(level) else { return }
+        let cell = ctx.cell
+        if cell.cellType != .markdown { convertCell(cell, to: .markdown, in: ctx.document) }
+        var lines = cell.source.components(separatedBy: "\n")
+        let title = lines[0].drop(while: { $0 == "#" }).drop(while: { $0 == " " })
+        lines[0] = String(repeating: "#", count: level) + " " + title
+        cell.source = lines.joined(separator: "\n")
+        cell.isEditingMarkdown = false
+        ctx.document.isDirty = true
+        cellRevision += 1
+    }
+
+    var canMergeSelectedCells: Bool {
+        guard let ctx = selectionContext else { return false }
+        return selectedCells(in: ctx.notebook).count > 1
+    }
+
+    func mergeSelectedCells() {
+        guard let ctx = selectionContext else { return }
+        let cells = selectedCells(in: ctx.notebook)
+        guard cells.count > 1, let first = cells.first else {
+            mergeSelectedCellWithBelow()
+            return
+        }
+        guard runningChainDocumentID != ctx.document.id else {
+            userNotice = "Stop the current Run All before deleting or reordering cells."
+            return
+        }
+        for cell in cells.dropFirst() {
+            guard let index = ctx.notebook.cells.firstIndex(where: { $0.id == cell.id }) else { continue }
+            ctx.document.deletedCells.append((dict: ctx.notebook.serializeCell(cell), index: index,
+                                              restoreSource: (cellID: first.id, source: first.source)))
+            first.source += "\n" + cell.source
+            ctx.notebook.cells.remove(at: index)
+        }
+        selection.selectedCellIDs = [first.id]
+        selectedCellID = first.id
+        ctx.document.isDirty = true
+        cellRevision += 1
+    }
+
+    private func extendCellSelection(by offset: Int, in notebook: Notebook) {
+        guard let current = notebook.cells.firstIndex(where: { $0.id == selectedCellID }) else { return }
+        let target = notebook.cells[max(0, min(current + offset, notebook.cells.count - 1))]
+        if selection.anchorCellID == nil { selection.anchorCellID = selectedCellID }
+        selectCell(target, in: notebook, modifiers: .shift)
+        scrollRequest = target.id
     }
 
     func commandMove(_ direction: Int) {
@@ -2103,20 +2199,25 @@ final class AppState: ObservableObject {
     }
 
     func copyCells(_ cells: [NotebookCell], in notebook: Notebook) {
+        guard !cells.isEmpty else { return }
         cellClipboard = cells.map { notebook.serializeCell($0) }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(cells.map(\.source).joined(separator: "\n\n"), forType: .string)
     }
 
     func pasteCell(after cell: NotebookCell, in notebook: Notebook, document: Document) {
-        guard !cellClipboard.isEmpty else { return }
         guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        pasteCells(at: index + 1, in: notebook, document: document)
+    }
+
+    private func pasteCells(at index: Int, in notebook: Notebook, document: Document) {
+        guard !cellClipboard.isEmpty else { return }
         let restored = cellClipboard.map { source -> NotebookCell in
             var dict = source
             dict["id"] = NotebookCell.makeNBID()
             return Notebook.parseCell(dict)
         }
-        notebook.cells.insert(contentsOf: restored, at: index + 1)
+        notebook.cells.insert(contentsOf: restored, at: max(0, min(index, notebook.cells.count)))
         selection.selectedCellIDs = Set(restored.map(\.id))
         selectedCellID = restored.last?.id
         scrollRequest = restored.last?.id
@@ -2252,6 +2353,12 @@ final class AppState: ObservableObject {
         if kernelStatus != .starting && kernelStatus != .idle {
             pendingRunAllDocumentID = nil
         }
+    }
+
+    func restartAndClearOutputs() {
+        guard allowExecution(), let document = activeDocument, document.kind == .notebook else { return }
+        clearAllOutputs(in: document)
+        restartKernel(confirm: false)
     }
 
     func kernelBecameIdle() {
@@ -2696,10 +2803,11 @@ final class AppState: ObservableObject {
         return name.isEmpty ? nil : name
     }
 
-    func createFile(in directory: URL) {
-        guard let name = promptForName(title: "New File",
-                                       message: "Name for the new file:",
-                                       initial: "untitled.py") else { return }
+    func createFile(in directory: URL, suggestedName: String = "untitled.py") {
+        let notebook = suggestedName.hasSuffix(".ipynb")
+        guard let name = promptForName(title: notebook ? "New Notebook" : "New File",
+                                       message: notebook ? "Name for the new notebook:" : "Name for the new file:",
+                                       initial: suggestedName) else { return }
         let url = directory.appendingPathComponent(name)
         guard !FileManager.default.fileExists(atPath: url.path) else {
             userNotice = "“\(name)” already exists. Choose a different name."
