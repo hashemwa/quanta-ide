@@ -119,7 +119,7 @@ case "$cmd" in
     mkdir -p "$CACHE_DIR"
     set +e
     xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -configuration "$config" \
-      -destination "platform=macOS,arch=$(uname -m)" -only-testing:QuantaTests ${SIGNING[@]+"${SIGNING[@]}"} 2>&1 \
+      -destination "platform=macOS,arch=$(uname -m)" -only-testing:QuantaTests ENABLE_TESTABILITY=YES ${SIGNING[@]+"${SIGNING[@]}"} 2>&1 \
       | tee "$log" | grep -E "(failed|error:|XCTAssert|recorded an issue)"
     rc=${PIPESTATUS[0]}
     set -e
