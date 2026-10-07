@@ -234,7 +234,7 @@ struct DetailSplitView: View {
                 PanelResizeHandle(height: $app.consoleHeight,
                                   range: DS.Layout.consoleMinHeight...480,
                                   defaultHeight: DS.Layout.consoleDefaultHeight)
-                BottomPanel()
+                BottomPanel(terminal: app.terminal)
                     .frame(height: min(max(draggedConsoleHeight ?? app.consoleHeight,
                                            DS.Layout.consoleMinHeight), 480))
                     .transition(.move(edge: .bottom))

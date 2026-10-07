@@ -278,17 +278,9 @@ struct SidebarView: View {
                                     detail: "No file name matches “\(fileFilter)”.")
             }
         }
-        .onChange(of: selectedFiles) { old, selection in
-            guard selection.count == 1, let url = selection.first,
-                  old != selection, url.resolvingSymlinksInPath() != app.activeDocument?.url?.resolvingSymlinksInPath() else { return }
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
-                  !isDirectory.boolValue else { return }
-            app.openFile(url)
-        }
         .onChange(of: app.activeDocumentID, initial: true) { _, _ in
             let active = app.activeDocument?.url
-            if let active, selectedFiles.count <= 1 { selectedFiles = [active] }
+            if selectedFiles.count <= 1 { selectedFiles = active.map { [$0] } ?? [] }
         }
     }
 

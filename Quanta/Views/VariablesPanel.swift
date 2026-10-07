@@ -9,19 +9,17 @@ final class VariableStore: ObservableObject {
 
 struct VariablesPanel: View {
     @ObservedObject private var store = AppState.shared.variableStore
+    @ObservedObject private var state = AppState.shared.variablesPanelState
     private var app: AppState { AppState.shared }
-    @State private var selected: String?
+    @State private var selected = AppState.shared.variablesPanelState.selected
     @State private var detailsFor: String?
-    @State private var query = ""
-    @State private var typeFilter = "All Types"
-    @State private var sortByType = false
 
     private var visibleVariables: [VariableInfo] {
         store.items.filter {
-            (query.isEmpty || $0.name.localizedStandardContains(query) || $0.summary.localizedStandardContains(query))
-                && (typeFilter == "All Types" || $0.typeName == typeFilter)
+            (state.query.isEmpty || $0.name.localizedStandardContains(state.query) || $0.summary.localizedStandardContains(state.query))
+                && (state.typeFilter == "All Types" || $0.typeName == state.typeFilter)
         }.sorted {
-            sortByType && $0.typeName != $1.typeName ? $0.typeName < $1.typeName : $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            state.sortByType && $0.typeName != $1.typeName ? $0.typeName < $1.typeName : $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
     }
 
@@ -29,22 +27,22 @@ struct VariablesPanel: View {
         let types = ["All Types"] + Set(store.items.map(\.typeName)).sorted()
         return BarMenu(sections: [
             .init(title: "Type", items: types.map { type in
-                .init(title: type, isOn: typeFilter == type) { typeFilter = type }
+                .init(title: type, isOn: state.typeFilter == type) { state.typeFilter = type }
             }),
             .init(title: "Sort By", items: [
-                .init(title: "Name", isOn: !sortByType) { sortByType = false },
-                .init(title: "Type", isOn: sortByType) { sortByType = true },
+                .init(title: "Name", isOn: !state.sortByType) { state.sortByType = false },
+                .init(title: "Type", isOn: state.sortByType) { state.sortByType = true },
             ]),
-        ], isActive: typeFilter != "All Types")
+        ], isActive: state.typeFilter != "All Types")
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if typeFilter != "All Types" {
+            if state.typeFilter != "All Types" {
                 PanelBar {
-                    Text(typeFilter).font(.caption).foregroundStyle(.secondary)
+                    Text(state.typeFilter).font(.caption).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
-                    IconButton("xmark.circle.fill", help: "Show All Variable Types") { typeFilter = "All Types" }
+                    IconButton("xmark.circle.fill", help: "Show All Variable Types") { state.typeFilter = "All Types" }
                 }
             }
             if store.items.isEmpty {
@@ -70,18 +68,24 @@ struct VariablesPanel: View {
                     if visibleVariables.isEmpty {
                         NavigatorEmptyState("No Matching Variables", systemImage: "magnifyingglass",
                                             detail: "Try another name or variable type.") {
-                            Button("Clear Filters") { query = ""; typeFilter = "All Types" }
+                            Button("Clear Filters") { state.query = ""; state.typeFilter = "All Types" }
                         }
                     }
                 }
             }
-            FilterBar(text: $query, prompt: "Filter Variables", menu: filterMenu) {
+            FilterBar(text: $state.query, prompt: "Filter Variables", menu: filterMenu) {
                 FilterBarButton("arrow.clockwise", help: "Refresh Variables") { app.refreshVariables() }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onChange(of: selected) { _, selection in
+            if state.selected != selection { state.selected = selection }
+        }
+        .onChange(of: state.selected) { _, selection in
+            if selected != selection { selected = selection }
+        }
         .onChange(of: store.items.map(\.typeName)) { _, types in
-            if typeFilter != "All Types", !types.contains(typeFilter) { typeFilter = "All Types" }
+            if state.typeFilter != "All Types", !types.contains(state.typeFilter) { state.typeFilter = "All Types" }
         }
     }
 

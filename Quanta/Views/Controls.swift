@@ -968,6 +968,7 @@ struct FilterField: View {
 struct SearchField: NSViewRepresentable {
     enum Style { case search, filter }
 
+    @Environment(\.isEnabled) private var isEnabled
     @Binding var text: String
     let prompt: String
     var style: Style = .search
@@ -987,6 +988,7 @@ struct SearchField: NSViewRepresentable {
             coordinator?.scheduleFocus(field)
         }
         field.placeholderString = prompt
+        field.isEnabled = isEnabled
         field.delegate = context.coordinator
         field.target = context.coordinator
         field.action = #selector(Coordinator.submit(_:))
@@ -1022,6 +1024,8 @@ struct SearchField: NSViewRepresentable {
 
     func updateNSView(_ field: NSSearchField, context: Context) {
         context.coordinator.parent = self
+        if field.isEnabled != isEnabled { field.isEnabled = isEnabled }
+        if !isEnabled, field.currentEditor() != nil { field.window?.makeFirstResponder(nil) }
         applyStyle(to: field, coordinator: context.coordinator)
         if field.placeholderString != prompt { field.placeholderString = prompt }
         if field.stringValue != text, (field.currentEditor() as? NSTextView)?.hasMarkedText() != true {
@@ -1047,7 +1051,7 @@ struct SearchField: NSViewRepresentable {
 
         func scheduleFocus(_ field: NSSearchField) {
             let request = parent.focusRequest
-            guard !isDismantled, parent.handledFocusRequest != request,
+            guard !isDismantled, field.isEnabled, parent.handledFocusRequest != request,
                   scheduledFocusRequest != request, field.window != nil else { return }
             scheduledFocusRequest = request
             DispatchQueue.main.async { [weak self, weak field] in
@@ -1055,7 +1059,7 @@ struct SearchField: NSViewRepresentable {
                 self.scheduledFocusRequest = nil
                 guard !self.isDismantled, self.parent.focusRequest == request,
                       self.parent.handledFocusRequest != request,
-                      let field, let window = field.window,
+                      let field, field.isEnabled, let window = field.window,
                       !field.isHiddenOrHasHiddenAncestor,
                       window.makeFirstResponder(field) else { return }
                 self.parent.handledFocusRequest = request
@@ -1063,13 +1067,13 @@ struct SearchField: NSViewRepresentable {
         }
 
         func controlTextDidChange(_ notification: Notification) {
-            guard let field = notification.object as? NSSearchField else { return }
+            guard let field = notification.object as? NSSearchField, field.isEnabled else { return }
             guard (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
             parent.text = field.stringValue
         }
 
         @objc func showFilterMenu(_ sender: Any?) {
-            guard let field, let menu = parent.filterMenu?.makeMenu(),
+            guard let field, field.isEnabled, let menu = parent.filterMenu?.makeMenu(),
                   let cell = field.cell as? NSSearchFieldCell else { return }
             let button = cell.searchButtonRect(forBounds: field.bounds)
             let origin = NSPoint(x: button.minX, y: field.isFlipped ? button.maxY : button.minY)
@@ -1077,6 +1081,7 @@ struct SearchField: NSViewRepresentable {
         }
 
         @objc func submit(_ sender: NSSearchField) {
+            guard sender.isEnabled else { return }
             parent.text = sender.stringValue
             guard parent.allowsEmptySubmission || !sender.stringValue.isEmpty else { return }
             parent.onSubmit()

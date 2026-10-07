@@ -19,16 +19,20 @@ struct GitCommandResult {
 private final class PipeDrain {
     private let condition = NSCondition()
     private let handle: FileHandle
+    private let reader: DispatchSourceRead
     private var storage = Data()
     private var isFinished = false
 
     init(_ pipe: Pipe) {
         handle = pipe.fileHandleForReading
-        handle.readabilityHandler = { [self] source in
-            let chunk = source.availableData
+        reader = DispatchSource.makeReadSource(fileDescriptor: handle.fileDescriptor,
+                                               queue: DispatchQueue(label: "quanta.git.pipe", qos: .userInitiated))
+        reader.setEventHandler { [weak self] in
+            guard let self else { return }
+            let chunk = handle.availableData
             condition.lock()
             if chunk.isEmpty {
-                source.readabilityHandler = nil
+                reader.cancel()
                 isFinished = true
                 condition.broadcast()
             } else {
@@ -36,6 +40,7 @@ private final class PipeDrain {
             }
             condition.unlock()
         }
+        reader.resume()
     }
 
     func waitUntilEndOfFile(before deadline: Date) {
@@ -45,7 +50,7 @@ private final class PipeDrain {
     }
 
     func stop() {
-        handle.readabilityHandler = nil
+        reader.cancel()
         condition.lock()
         isFinished = true
         condition.broadcast()

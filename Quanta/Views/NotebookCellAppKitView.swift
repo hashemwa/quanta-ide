@@ -36,6 +36,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private var editorState = NotebookCellEditorState()
     private var cell: NotebookCell?
     var cellID: UUID? { cell?.id }
+    var layoutRevision: UInt64 { cell?.layoutRevision ?? 0 }
     private weak var document: Document?
     private weak var notebook: Notebook?
     private var monoFontSize: CGFloat = 12
@@ -45,6 +46,8 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private var editorFocused = false
     private var isSelected = false
     private var measurementPending = false
+    private var refreshPending = false
+    private var selectionPending = false
 
     private static let wellInsets = NSEdgeInsets(top: DS.Space.xs, left: DS.Space.s,
                                                   bottom: DS.Space.xs, right: DS.Space.s)
@@ -283,15 +286,13 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     private func bindModel() {
         guard let cell else { return }
         cell.objectWillChange
-            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                DispatchQueue.main.async { self?.refresh(force: false) }
+                self?.scheduleRefresh()
             }
             .store(in: &cancellables)
         AppState.shared.selection.objectWillChange
-            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                DispatchQueue.main.async { self?.refreshSelection() }
+                self?.scheduleSelectionRefresh()
             }
             .store(in: &cancellables)
         ScrollActivityMonitor.shared.$isLiveScrolling
@@ -306,6 +307,26 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
                 self.updateControlVisibility()
             }
             .store(in: &cancellables)
+    }
+
+    private func scheduleRefresh() {
+        guard !refreshPending else { return }
+        refreshPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.refreshPending = false
+            self.refresh(force: false)
+        }
+    }
+
+    private func scheduleSelectionRefresh() {
+        guard !selectionPending else { return }
+        selectionPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.selectionPending = false
+            self.refreshSelection()
+        }
     }
 
     private func refresh(force: Bool, fontChanged: Bool = false) {
@@ -325,27 +346,27 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         if sourceChanged {
             rebuildSource()
             lastSource = cell.source
-        } else if cell.source != lastSource {
-            if let editor, !editor.hasMarkedText(), editor.string != cell.source {
+        } else if !EditorTextRange.isSameText(cell.source, lastSource) {
+            if let editor, !editor.hasMarkedText(), !EditorTextRange.isSameText(editor.string, cell.source) {
                 let selection = editor.selectedRange()
                 editor.string = cell.source
                 editorState.undoManager.removeAllActions()
-                if let storage = editor.textStorage { PythonHighlighter.highlight(storage) }
+                editor.highlightSource()
                 editor.setSelectedRange(NSRange(location: min(selection.location,
                                                                 (editor.string as NSString).length),
                                                 length: 0))
-                scheduleEditorMeasurement(force: true)
+                scheduleEditorMeasurement()
             } else if cell.isSourceCollapsed || (cell.cellType == .markdown && !cell.isEditingMarkdown) {
                 rebuildSource()
             }
             lastSource = cell.source
         }
         if outputChanged { rebuildOutput() }
-        if fontChanged { scheduleEditorMeasurement(force: true) }
+        if fontChanged { scheduleEditorMeasurement() }
         lastPresentation = presentation
-        refreshStatus()
+        let gutterChanged = refreshStatus()
         refreshSelection()
-        onSizeChange?()
+        if sourceChanged || outputChanged || fontChanged || gutterChanged { onSizeChange?() }
     }
 
     private func rebuildSource() {
@@ -373,6 +394,10 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         }
         if cell.cellType == .markdown && !cell.isEditingMarkdown {
             sourceCard.style = .markdown
+            if let markdown = sourceCard.contentView as? NotebookMarkdownHostingView {
+                markdown.rootView.content = markdownRoot(for: cell)
+                return
+            }
             let markdown = NotebookMarkdownHostingView(content: markdownRoot(for: cell))
             markdown.sizingOptions = [.intrinsicContentSize]
             markdown.onSingleClick = { [weak self] in self?.selectMarkdown() }
@@ -395,7 +420,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         editorHeightConstraint = constraint
         sourceCard.setContent(editor, insets: Self.wellInsets)
         replaceSource(with: sourceCard)
-        scheduleEditorMeasurement(force: true)
+        scheduleEditorMeasurement()
     }
 
     private func markdownRoot(for cell: NotebookCell) -> AnyView {
@@ -421,13 +446,13 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         editor.autoresizingMask = []
         editor.drawsBackground = false
         editor.delegate = self
-        if editor.string != cell.source {
+        if !EditorTextRange.isSameText(editor.string, cell.source) {
             editor.string = cell.source
             editorState.undoManager.removeAllActions()
         }
-        if let storage = editor.textStorage { PythonHighlighter.highlight(storage) }
         EditorRegistry.shared.register(editor, for: cell.id)
         if let document { editor.bindCodeTools(document: document, sourceID: cell.id, isPython: cell.cellType == .code) }
+        editor.highlightSource()
         editor.onCommand = { [weak self] command in
             guard let self, let cell = self.cell, let document = self.document else { return false }
             AppState.shared.handleCellCommand(command, cell: cell, document: document)
@@ -439,10 +464,10 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             self.editorFocused = focused
             self.sourceCard.isFocused = focused
             guard focused, let cell = self.cell, let document = self.document else { return }
-            AppState.shared.activeDocumentID = document.id
+            AppState.shared.activateDocument(document.id)
             AppState.shared.selectedCellID = cell.id
         }
-        editor.onLayoutChange = { [weak self] in self?.scheduleEditorMeasurement(force: false) }
+        editor.onLayoutChange = { [weak self] in self?.scheduleEditorMeasurement() }
         return editor
     }
 
@@ -462,16 +487,22 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
             replaceOutput(with: button)
             return
         }
-        let output = NotebookCellHostingView(content: AnyView(
-            OutputListView(cell: cell)
+        let content = AnyView(
+            OutputListView(cell: cell, baseDirectory: document?.url?.deletingLastPathComponent())
                 .environment(\.monoFontSize, monoFontSize)
-        ))
+        )
+        if let output = outputView as? NotebookCellHostingView {
+            output.rootView.content = content
+            return
+        }
+        let output = NotebookCellHostingView(content: content)
         output.sizingOptions = [.intrinsicContentSize]
         output.onSizeChange = { [weak self] in self?.onSizeChange?() }
         replaceOutput(with: output)
     }
 
     private func replaceSource(with view: NSView?) {
+        guard sourceView !== view else { return }
         sourceWidthConstraint?.isActive = false
         sourceWidthConstraint = nil
         if let sourceView {
@@ -489,6 +520,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
     }
 
     private func replaceOutput(with view: NSView?) {
+        guard outputView !== view else { return }
         outputWidthConstraint?.isActive = false
         outputWidthConstraint = nil
         if let outputView {
@@ -505,8 +537,10 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         }
     }
 
-    private func refreshStatus() {
-        guard let cell else { return }
+    private func refreshStatus() -> Bool {
+        guard let cell else { return false }
+        let oldStaleHidden = staleImage.isHidden
+        let oldDurationHidden = durationLabel.isHidden
         let isCode = cell.cellType == .code
         gutterStack.edgeInsets.top = isCode
             ? Self.wellInsets.top + DS.Space.s + (EditorTheme.lineHeight - DS.Layout.statusSlot) / 2
@@ -541,6 +575,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         markdownButton.toolTip = markdownHelp
         markdownButton.setAccessibilityLabel(IconButton.accessibilityName(markdownHelp))
         if cell.isRunning { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
+        return oldStaleHidden != staleImage.isHidden || oldDurationHidden != durationLabel.isHidden
     }
 
     private func refreshSelection() {
@@ -616,17 +651,17 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         hovering = bounds.contains(point)
     }
 
-    private func scheduleEditorMeasurement(force: Bool) {
+    private func scheduleEditorMeasurement() {
         guard !measurementPending else { return }
         measurementPending = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.measurementPending = false
-            self.measureEditor(force: force)
+            self.measureEditor()
         }
     }
 
-    private func measureEditor(force: Bool) {
+    private func measureEditor() {
         guard let editor, let cell, let layoutManager = editor.layoutManager,
               let container = editor.textContainer else { return }
         let width = editor.bounds.width - editor.textContainerInset.width * 2
@@ -637,7 +672,7 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
         let textHeight = max(used.maxY, layoutManager.extraLineFragmentRect.maxY)
         let sourceHeight = max(textHeight + editor.textContainerInset.height * 2 + 2, 30)
         let height = max(sourceHeight, editor.inlineCompletionMinimumHeight)
-        guard force || abs(height - (editorHeightConstraint?.constant ?? 0)) > 0.5 else { return }
+        guard abs(height - (editorHeightConstraint?.constant ?? 0)) > 0.5 else { return }
         editorHeightConstraint?.constant = height
         if abs(cell.editorHeight - sourceHeight) > 0.5 { cell.editorHeight = sourceHeight }
         onSizeChange?()
@@ -645,15 +680,13 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
 
     func textDidChange(_ notification: Notification) {
         guard let editor, let cell, let document else { return }
-        scheduleEditorMeasurement(force: true)
+        scheduleEditorMeasurement()
         guard !editor.hasMarkedText() else { return }
-        if cell.source != editor.string {
+        if !EditorTextRange.isSameText(cell.source, editor.string) {
             cell.source = editor.string
             if !document.isDirty { document.isDirty = true }
         }
-        if let storage = editor.textStorage {
-            PythonHighlighter.highlight(storage, editedRange: editor.lastEditedRange)
-        }
+        editor.highlightSource(editedRange: editor.lastEditedRange)
         lastSource = editor.string
     }
 
@@ -661,20 +694,20 @@ final class NotebookCellAppKitView: NSView, NSTextViewDelegate, NSDraggingSource
 
     private func selectCell() {
         guard let cell, let notebook, let document else { return }
-        AppState.shared.activeDocumentID = document.id
+        AppState.shared.activateDocument(document.id)
         AppState.shared.selectCell(cell, in: notebook, modifiers: NSEvent.modifierFlags)
     }
 
     private func selectMarkdown() {
         guard let cell, let document else { return }
-        AppState.shared.activeDocumentID = document.id
+        AppState.shared.activateDocument(document.id)
         AppState.shared.selectedCellID = cell.id
         AppState.shared.enterCommandMode()
     }
 
     private func beginMarkdownEditing() {
         guard let cell, let document else { return }
-        AppState.shared.activeDocumentID = document.id
+        AppState.shared.activateDocument(document.id)
         AppState.shared.selectedCellID = cell.id
         cell.isEditingMarkdown = true
         refresh(force: true)
@@ -941,6 +974,7 @@ private final class NotebookCellCardView: NSView {
     }
 
     private var content: NSView?
+    var contentView: NSView? { content }
     var isFocused = false { didSet { if isFocused != oldValue { needsDisplay = true } } }
     var style = Style.editor { didSet { if style != oldValue { needsDisplay = true } } }
 
@@ -956,6 +990,7 @@ private final class NotebookCellCardView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func setContent(_ view: NSView, insets: NSEdgeInsets) {
+        guard content !== view else { return }
         content?.removeFromSuperview()
         content = view
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -979,7 +1014,7 @@ private final class NotebookCellCardView: NSView {
 }
 
 private struct NotebookHostedContent: View {
-    let content: AnyView
+    var content: AnyView
     var width: CGFloat?
 
     var body: some View {
@@ -989,6 +1024,7 @@ private struct NotebookHostedContent: View {
 
 private class NotebookCellHostingView: NSHostingView<NotebookHostedContent> {
     var onSizeChange: (() -> Void)?
+    private var sizeChangePending = false
 
     convenience init(content: AnyView) {
         self.init(rootView: NotebookHostedContent(content: content))
@@ -1002,7 +1038,13 @@ private class NotebookCellHostingView: NSHostingView<NotebookHostedContent> {
 
     override func invalidateIntrinsicContentSize() {
         super.invalidateIntrinsicContentSize()
-        DispatchQueue.main.async { [weak self] in self?.onSizeChange?() }
+        guard !sizeChangePending else { return }
+        sizeChangePending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.sizeChangePending = false
+            self.onSizeChange?()
+        }
     }
 }
 

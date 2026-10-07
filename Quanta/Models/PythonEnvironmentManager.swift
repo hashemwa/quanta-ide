@@ -327,11 +327,22 @@ private final class PythonEnvironmentCommand: @unchecked Sendable {
         var environment = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("PIP_") && !$0.key.hasPrefix("PYTHON") }
         environment["PIP_CONFIG_FILE"] = "/dev/null"
         process.environment = environment
-        stdout.fileHandleForReading.readabilityHandler = { [self] handle in drain(handle, isError: false, report: report) }
-        stderr.fileHandleForReading.readabilityHandler = { [self] handle in drain(handle, isError: true, report: report) }
+        let readers = DispatchQueue(label: "quanta.python.environment.output", qos: .userInitiated)
+        let outputReader = DispatchSource.makeReadSource(fileDescriptor: stdout.fileHandleForReading.fileDescriptor, queue: readers)
+        let errorReader = DispatchSource.makeReadSource(fileDescriptor: stderr.fileHandleForReading.fileDescriptor, queue: readers)
+        outputReader.setEventHandler { [self] in
+            drain(stdout.fileHandleForReading, reader: outputReader, isError: false, report: report)
+        }
+        errorReader.setEventHandler { [self] in
+            drain(stderr.fileHandleForReading, reader: errorReader, isError: true, report: report)
+        }
+        outputReader.resume()
+        errorReader.resume()
         defer {
-            stdout.fileHandleForReading.readabilityHandler = nil
-            stderr.fileHandleForReading.readabilityHandler = nil
+            outputReader.cancel()
+            errorReader.cancel()
+            outputReader.setEventHandler(handler: nil)
+            errorReader.setEventHandler(handler: nil)
         }
         condition.lock()
         guard stopReason == nil else {
@@ -367,11 +378,12 @@ private final class PythonEnvironmentCommand: @unchecked Sendable {
         return result
     }
 
-    private func drain(_ handle: FileHandle, isError: Bool, report: @escaping @Sendable (String) -> Void) {
+    private func drain(_ handle: FileHandle, reader: DispatchSourceRead, isError: Bool,
+                       report: @escaping @Sendable (String) -> Void) {
         let chunk = handle.availableData
         condition.lock()
         guard !chunk.isEmpty else {
-            handle.readabilityHandler = nil
+            reader.cancel()
             endedStreams += 1
             condition.broadcast()
             condition.unlock()

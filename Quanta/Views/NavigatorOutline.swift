@@ -34,6 +34,8 @@ struct NavigatorOutline: NSViewRepresentable {
         outline.backgroundColor = .clear
         outline.dataSource = context.coordinator
         outline.delegate = context.coordinator
+        outline.target = context.coordinator
+        outline.action = #selector(Coordinator.openClickedFile(_:))
         outline.registerForDraggedTypes([.fileURL])
         outline.setDraggingSourceOperationMask(.every, forLocal: true)
         outline.setDraggingSourceOperationMask(.copy, forLocal: false)
@@ -109,6 +111,7 @@ struct NavigatorOutline: NSViewRepresentable {
         var directoriesWithChanges: Set<String> = []
         var expansionKey: String { "QuantaNavigatorExpanded.v1.\(parent.root.url.path)" }
         private var app: AppState { AppState.shared }
+        var openFile: (URL) -> Void = { AppState.shared.openFile($0) }
 
         init(_ parent: NavigatorOutline) { self.parent = parent }
 
@@ -148,7 +151,9 @@ struct NavigatorOutline: NSViewRepresentable {
         }
 
         func refreshVisibleCells(_ outline: NSOutlineView) {
-            for row in 0..<outline.numberOfRows {
+            let visible = outline.rows(in: outline.visibleRect)
+            guard visible.location != NSNotFound, visible.location < outline.numberOfRows else { return }
+            for row in visible.location..<min(visible.location + visible.length, outline.numberOfRows) {
                 guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? NavigatorCellView,
                       let item = outline.item(atRow: row) as? Item else { continue }
                 configure(cell, for: item)
@@ -159,6 +164,15 @@ struct NavigatorOutline: NSViewRepresentable {
             guard !updating, let outline = notification.object as? NSOutlineView else { return }
             let selected = Set(outline.selectedRowIndexes.compactMap { (outline.item(atRow: $0) as? Item)?.node.url })
             if parent.selection != selected { parent.selection = selected }
+            if selected.count == 1, let item = outline.item(atRow: outline.selectedRow) as? Item,
+               !item.node.isDirectory { openFile(item.node.url) }
+        }
+
+        @objc func openClickedFile(_ outline: NSOutlineView) {
+            guard !updating, outline.selectedRowIndexes.count == 1,
+                  let item = outline.item(atRow: outline.clickedRow) as? Item,
+                  !item.node.isDirectory else { return }
+            openFile(item.node.url)
         }
 
         func outlineViewItemDidExpand(_ notification: Notification) { saveExpansion(notification) }

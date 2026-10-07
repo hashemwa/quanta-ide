@@ -128,7 +128,7 @@ private struct EditorPaneView: View {
                             Button(candidate.displayName) {
                                 if secondary { app.splitDocumentID = candidate.id }
                                 else { app.primarySplitDocumentID = candidate.id }
-                                app.activeDocumentID = candidate.id
+                                app.activateDocument(candidate.id)
                             }
                         }
                     } label: {
@@ -319,8 +319,8 @@ struct TabItemView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            app.primarySplitDocumentID = document.id
-            app.activeDocumentID = document.id
+            if app.primarySplitDocumentID != document.id { app.primarySplitDocumentID = document.id }
+            app.activateDocument(document.id)
         }
         .onGeometryChange(for: CGFloat.self) { proxy in proxy.size.width } action: { width = $0 }
         .draggable(document.id.uuidString)
@@ -329,12 +329,12 @@ struct TabItemView: View {
                                                  app: app, insertion: $insertion,
                                                  trackingDrop: $trackingDrop))
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction { app.activeDocumentID = document.id }
+        .accessibilityAction { app.activateDocument(document.id) }
         .scrollAwareHover($hovering)
         .help(document.url?.path ?? document.displayName)
         .contextMenu {
             Button(document.isPinned ? "Unpin Tab" : "Pin Tab") { app.togglePin(document) }
-            Button("Split Editor") { app.activeDocumentID = document.id; app.toggleSplitEditor() }
+            Button("Split Editor") { app.activateDocument(document.id); app.toggleSplitEditor() }
             Divider()
             Button("Close Tab") { app.closeDocument(document) }
             Button("Close Other Tabs") { app.closeOtherDocuments(except: document) }

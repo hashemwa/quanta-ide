@@ -3,7 +3,7 @@ import WebKit
 
 struct BottomPanel: View {
     @EnvironmentObject private var app: AppState
-    @ObservedObject private var terminal = AppState.shared.terminal
+    @ObservedObject var terminal: TerminalSession
 
     @State private var plotSelection: UUID?
     @State private var plotAllFiles = false
@@ -68,7 +68,7 @@ struct BottomPanel: View {
                                             detail: "Open a Python file or notebook to check its code.")
                     }
                 }
-                ConsoleView(query: consoleQuery, scope: consoleScope, isActive: app.bottomPane == .console)
+                ConsoleView(query: consoleQuery, scope: consoleScope, isActive: app.showConsole && app.bottomPane == .console)
                     .opacity(app.bottomPane == .console ? 1 : 0)
                     .allowsHitTesting(app.bottomPane == .console)
                     .accessibilityHidden(app.bottomPane != .console)
@@ -99,7 +99,7 @@ struct BottomPanel: View {
             }
         } else {
             VStack(spacing: 0) {
-                TerminalSurface(session: terminal, isActive: app.bottomPane == .terminal)
+                TerminalSurface(session: terminal, isActive: app.showConsole && app.bottomPane == .terminal)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if !terminal.running, terminal.exitStatus != nil {
                     Divider()
@@ -150,12 +150,12 @@ private struct TerminalSurface: NSViewRepresentable {
 
 extension AppState {
     func showPythonConsole() {
-        bottomPane = .console
+        if bottomPane != .console { bottomPane = .console }
         setConsoleVisible(true)
         console.focusRequest += 1
     }
     func showTerminal() {
-        bottomPane = .terminal
+        if bottomPane != .terminal { bottomPane = .terminal }
         setConsoleVisible(true)
         terminal.start(in: workspace?.rootURL ?? FileManager.default.homeDirectoryForCurrentUser)
         terminal.focus()
