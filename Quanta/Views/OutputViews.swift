@@ -2,40 +2,51 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct OutputListView: View {
-    @ObservedObject var cell: NotebookCell
+    let cell: NotebookCell
+    let baseDirectory: URL?
+    @State private var outputs: [CellOutput]
+
+    init(cell: NotebookCell, baseDirectory: URL? = nil) {
+        self.cell = cell
+        self.baseDirectory = baseDirectory
+        _outputs = State(initialValue: cell.outputs)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            ForEach(cell.outputs) { output in
-                OutputItemView(output: output)
+            ForEach(outputs) { output in
+                OutputItemView(output: output, baseDirectory: baseDirectory)
             }
         }
         .environment(\.outputCellID, cell.id)
         .padding(.bottom, 2)
+        .onReceive(cell.$outputs) { outputs = $0 }
     }
 }
 
 struct OutputItemView: View {
     let output: CellOutput
+    var baseDirectory: URL? = nil
+    @ObservedObject private var presentation = AppState.shared.outputPresentation
     @Environment(\.monoFontSize) private var monoSize
 
+    @ViewBuilder
     var body: some View {
+        if !presentation.usesEnhancedDataOutputs, let text = output.enhancedDataText {
+            plainResult(text)
+        } else {
+            formattedOutput
+        }
+    }
+
+    @ViewBuilder
+    private var formattedOutput: some View {
         switch output.kind {
         case .stream(let name, let text):
             StreamOutputView(name: name, text: text)
 
         case .executeResult(let text):
-            Text(text.trimmingTrailingNewlines)
-                .font(.system(size: monoSize, design: .monospaced))
-                .textSelection(.enabled)
-                .padding(.leading, DS.Layout.cellTextInset)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contextMenu {
-                    Button("Copy Text") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(text, forType: .string)
-                    }
-                }
+            plainResult(text)
 
         case .image(let data, let image):
             if let image {
@@ -70,9 +81,17 @@ struct OutputItemView: View {
             ObjectCardView(payload: payload)
 
         case .rich(let bundle):
-            RichOutputView(bundle: bundle)
-                .frame(height: DS.Layout.richOutputHeight)
-                .accessibilityLabel("Rich notebook output")
+            if RichOutput.renderedTextMIME(bundle) != nil {
+                if let latex = bundle["text/latex"] {
+                    DisplayMathView(tex: RichOutput.latexExpression(latex))
+                } else {
+                    MarkdownView(source: RichOutput.text(bundle["text/markdown"]), baseDirectory: baseDirectory)
+                }
+            } else {
+                RichOutputView(bundle: bundle)
+                    .frame(height: DS.Layout.richOutputHeight)
+                    .accessibilityLabel("Rich notebook output")
+            }
 
         case .unsupported(let mime):
             Label("Rich output (\(mime)) — not rendered yet, preserved on save",
@@ -81,6 +100,20 @@ struct OutputItemView: View {
                 .foregroundStyle(.secondary)
                 .padding(.leading, DS.Layout.cellTextInset)
         }
+    }
+
+    private func plainResult(_ text: String) -> some View {
+        Text(StreamOutputView.clipped(text.trimmingTrailingNewlines))
+            .font(.system(size: monoSize, design: .monospaced))
+            .textSelection(.enabled)
+            .padding(.leading, DS.Layout.cellTextInset)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contextMenu {
+                Button("Copy Text") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+            }
     }
 }
 
@@ -238,6 +271,7 @@ struct DataFrameOutputView: View {
 enum MarkdownBlock: Equatable {
     case heading(Int, String)
     case code(String)
+    case fencedCode(language: String, source: String)
     case bullet(String)
     case paragraph(String)
     case math(String)
@@ -331,7 +365,9 @@ struct MarkdownView: View {
     static func parse(_ source: String) -> [MarkdownBlock] {
         var result: [MarkdownBlock] = []
         var codeFence: (marker: Character, length: Int)?
+        var codeLanguage = ""
         var mathEnd: String?
+        var mathEnvironment = false
         var codeLines: [String] = []
         var mathLines: [String] = []
         var paragraph: [String] = []
@@ -343,30 +379,36 @@ struct MarkdownView: View {
             }
         }
         func flushMath() {
-            let tex = mathLines.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            let tex = mathLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             if !tex.isEmpty { result.append(.math(tex)) }
             mathLines = []
             mathEnd = nil
+            mathEnvironment = false
+        }
+        func flushCode() {
+            let code = codeLines.joined(separator: "\n")
+            result.append(codeLanguage.isEmpty ? .code(code) : .fencedCode(language: codeLanguage, source: code))
+            codeLines = []
+            codeFence = nil
         }
 
-        let lines = source.components(separatedBy: "\n")
+        let lines = source.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
         var inTable = false
         for (lineIndex, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let fence = codeFence {
                 let run = trimmed.prefix(while: { $0 == fence.marker }).count
                 if run >= fence.length, trimmed.dropFirst(run).trimmingCharacters(in: .whitespaces).isEmpty {
-                    result.append(.code(codeLines.joined(separator: "\n")))
-                    codeLines = []
-                    codeFence = nil
+                    flushCode()
                 } else {
                     codeLines.append(line)
                 }
                 continue
             }
             if let closing = mathEnd {
-                if trimmed.hasSuffix(closing) {
-                    mathLines.append(String(trimmed.dropLast(closing.count)))
+                let ending = mathEnvironment ? texBeforeComment(trimmed) : trimmed
+                if ending.hasSuffix(closing) {
+                    mathLines.append(mathEnvironment ? trimmed : String(trimmed.dropLast(closing.count)))
                     flushMath()
                 } else {
                     mathLines.append(trimmed)
@@ -378,6 +420,20 @@ struct MarkdownView: View {
                 flushParagraph()
                 inTable = false
                 codeFence = (marker, trimmed.prefix(while: { $0 == marker }).count)
+                codeLanguage = trimmed.dropFirst(codeFence!.length).split(whereSeparator: \.isWhitespace).first.map(String.init)?.lowercased() ?? ""
+                continue
+            }
+            if let environment = displayEnvironment(in: trimmed) {
+                flushParagraph()
+                inTable = false
+                let closing = "\\end{\(environment)}"
+                mathLines = [trimmed]
+                if texBeforeComment(trimmed).hasSuffix(closing) {
+                    flushMath()
+                } else {
+                    mathEnd = closing
+                    mathEnvironment = true
+                }
                 continue
             }
             if trimmed.hasPrefix("$$") || trimmed.hasPrefix(#"\["#) {
@@ -449,10 +505,30 @@ struct MarkdownView: View {
             }
             paragraph.append(trimmed)
         }
-        if codeFence != nil { result.append(.code(codeLines.joined(separator: "\n"))) }
+        if codeFence != nil { flushCode() }
         if mathEnd != nil { flushMath() }
         flushParagraph()
         return result
+    }
+
+    private static func displayEnvironment(in line: String) -> String? {
+        guard line.hasPrefix(#"\begin{"#), let end = line.firstIndex(of: "}") else { return nil }
+        let name = String(line[line.index(line.startIndex, offsetBy: 7)..<end])
+        let supported: Set<String> = ["equation", "equation*", "align", "align*", "alignat", "alignat*",
+                                      "gather", "gather*", "aligned", "alignedat", "gathered", "displaymath"]
+        return supported.contains(name) ? name : nil
+    }
+
+    private static func texBeforeComment(_ line: String) -> String {
+        var escaped = false
+        for index in line.indices {
+            let character = line[index]
+            if character == "%", !escaped {
+                return line[..<index].trimmingCharacters(in: .whitespaces)
+            }
+            escaped = character == "\\" && !escaped
+        }
+        return line
     }
 
     static func isTableSeparator(_ line: String) -> Bool {
@@ -683,7 +759,7 @@ struct MarkdownView: View {
         let doubleDollar = !parenthesized && start + 1 < chars.count && chars[start + 1] == "$"
         let width = parenthesized || doubleDollar ? 2 : 1
         let begin = start + width
-        guard begin < chars.count, !chars[begin].isWhitespace else { return nil }
+        guard begin < chars.count, parenthesized || doubleDollar || !chars[begin].isWhitespace else { return nil }
         var i = begin
         while i < chars.count, chars[i] != "\n" {
             let closing: Bool
@@ -693,7 +769,7 @@ struct MarkdownView: View {
                 closing = chars[i] == "$" && (!doubleDollar || i + 1 < chars.count && chars[i + 1] == "$")
             }
             if closing {
-                guard i > begin, !chars[i - 1].isWhitespace,
+                guard i > begin, parenthesized || doubleDollar || !chars[i - 1].isWhitespace,
                       parenthesized || i + width == chars.count || !chars[i + width].isNumber else { return nil }
                 return (String(chars[begin..<i]), i + width)
             }
@@ -830,6 +906,12 @@ struct MarkdownView: View {
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(.quaternary))
+        case .fencedCode(let language, let code):
+            Text(Self.highlightedCode(code, language: language))
+                .font(.system(size: monoSize, design: .monospaced))
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(.quaternary))
         case .bullet(let text):
             HStack(alignment: .top, spacing: 6) {
                 Text("•")
@@ -874,6 +956,13 @@ struct MarkdownView: View {
             }
             .frame(maxWidth: .infinity, alignment: frameAlignment(alignment))
         }
+    }
+
+    static func highlightedCode(_ source: String, language: String) -> AttributedString {
+        guard ["python", "py", "python3"].contains(language) else { return AttributedString(source) }
+        let storage = NSTextStorage(string: source)
+        PythonHighlighter.applyColors(to: storage)
+        return AttributedString(storage)
     }
 
     @ViewBuilder
@@ -997,7 +1086,13 @@ struct DisplayMathView: View {
         Group {
             switch rendered.results[tex] {
             case .image(let image, _)?:
-                Image(nsImage: image)
+                GeometryReader { geometry in
+                    ScrollView(.horizontal) {
+                        Image(nsImage: image)
+                            .frame(minWidth: geometry.size.width, alignment: .center)
+                    }
+                }
+                    .frame(height: image.size.height)
                     .frame(maxWidth: .infinity, alignment: .center)
             case .failure(let message)?:
                 Text(verbatim: "$$\(tex)$$")

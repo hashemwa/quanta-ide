@@ -263,7 +263,9 @@ final class CopilotService: ObservableObject {
             ], timeout: 20)
             guard !Task.isCancelled, revision == self.revision, canSuggest,
                   app?.isWorkspaceTrusted != false,
-                  CopilotDocumentSnapshot(document: document, sourceID: sourceID, source: source, caret: caret)?.text.utf16.elementsEqual(snapshot.text.utf16) == true,
+                  let currentSnapshot = CopilotDocumentSnapshot(document: document, sourceID: sourceID, source: source, caret: caret),
+                  currentSnapshot.uri == snapshot.uri, currentSnapshot.languageID == snapshot.languageID,
+                  currentSnapshot.text.utf16.elementsEqual(snapshot.text.utf16),
                   let items = (result as? [String: Any])?["items"] as? [[String: Any]] else { return nil }
             return items.prefix(8).compactMap { snapshot.suggestion(from: $0, revision: revision) }.first
         } catch {
@@ -384,7 +386,7 @@ final class CopilotService: ObservableObject {
         }
         closeDocument()
         transport?.notify("textDocument/didOpen", params: [
-            "textDocument": ["uri": snapshot.uri, "languageId": "python", "version": 0, "text": snapshot.text],
+            "textDocument": ["uri": snapshot.uri, "languageId": snapshot.languageID, "version": 0, "text": snapshot.text],
         ])
         transport?.notify("textDocument/didFocus", params: ["textDocument": ["uri": snapshot.uri]])
         openDocument = (snapshot.uri, snapshot.text, 0)

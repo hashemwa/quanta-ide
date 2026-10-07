@@ -25,7 +25,8 @@ enum NotebookExporter {
         return parts.joined(separator: "\n\n") + "\n"
     }
 
-    static func html(from notebook: Notebook, title: String, baseDirectory: URL? = nil) -> String {
+    static func html(from notebook: Notebook, title: String, baseDirectory: URL? = nil,
+                     enhancedDataOutputs: Bool = true) -> String {
         var body = ""
         for cell in notebook.cells {
             switch cell.cellType {
@@ -37,7 +38,7 @@ enum NotebookExporter {
                 body += "<div class=\"cell\"><div class=\"prompt\">[\(count)]</div>"
                 body += "<pre class=\"code\">\(highlightedPython(cell.source))</pre></div>\n"
                 for output in cell.outputs {
-                    body += outputHTML(output)
+                    body += outputHTML(output, enhancedDataOutputs: enhancedDataOutputs, baseDirectory: baseDirectory)
                 }
             case .raw:
                 body += "<pre class=\"raw\">\(escape(cell.source))</pre>\n"
@@ -74,20 +75,30 @@ enum NotebookExporter {
         .rich-output { margin: 8px 0 8px 42px; }
         .rich-output img { margin-left: 0; }
         .rich-output pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+        .output-card { border:1px solid #8886; border-radius:6px; padding:10px; }
+        .output-card p { margin:4px 0; }
+        .output-card dt { font-weight:600; }
+        .output-card dd { margin-left:16px; overflow-wrap:anywhere; }
+        .array-preview { display:block; width:100%; max-width:600px; margin-left:0; }
+        .array-preview.heatmap { width:auto; max-height:320px; image-rendering:pixelated; }
         math { font-size: 1.1em; }
+        math[display="block"] { width:max-content; margin-left:auto; margin-right:auto; }
+        .math { overflow-x:auto; }
+        .stderr { border-left:2px solid #d70015; }
         iframe { display: block; }
         @media print {
           @page { size: letter; margin: 0.5in; }
           body { max-width: none; margin: 0; padding: 0; background: white; color: black; }
           pre, .code { white-space: pre-wrap; overflow-wrap: anywhere; }
+          .math { overflow:visible; }
           .code, .md code { background: #f5f5f7; }
           .code { \(syntaxVariables(dark: false)) }
           .err { color: #a00; background: #fff1f0; }
           .cell { display: block; }
           .prompt { float: left; padding-right: 8px; }
-          .code { margin-left: 42px; }
+          .cell > .code { margin-left: 42px; }
           h1, h2, h3, h4, h5, h6 { break-after: avoid; }
-          tr, img, iframe, math { break-inside: avoid; }
+          tr, img, iframe, math, .output-card { break-inside: avoid; }
           thead { display: table-header-group; }
           img { max-height: 8in; object-fit: contain; }
         }
@@ -128,18 +139,28 @@ enum NotebookExporter {
         """
     }
 
-    private static func outputHTML(_ output: CellOutput) -> String {
+    private static func outputHTML(_ output: CellOutput, enhancedDataOutputs: Bool, baseDirectory: URL?) -> String {
+        if !enhancedDataOutputs, let text = output.enhancedDataText {
+            return "<pre class=\"out\">\(escape(text))</pre>\n"
+        }
+        if let native = NotebookOutputExport.html(output) { return native + "\n" }
         if let bundle = RichOutput.bundle(output) {
+            if let rendered = RichOutput.renderedTextHTML(bundle, baseDirectory: baseDirectory) {
+                return "<div class=\"rich-output\">\(rendered)</div>\n"
+            }
             if let figure = bundle[RichOutput.plotlyMIME] as? [String: Any],
                let document = RichOutput.plotlyDocument(figure) {
                 return "<iframe data-quanta-plot sandbox=\"allow-scripts\" referrerpolicy=\"no-referrer\" style=\"width:100%;height:500px;border:0\" srcdoc=\"\(RichOutput.escape(document))\"></iframe>\n"
             }
-            let document = RichOutput.safeDocument(RichOutput.staticHTML(bundle))
-            let encoded = Data(RichOutput.staticHTML(bundle).utf8).base64EncodedString()
+            let content = RichOutput.staticHTML(bundle)
+            let document = RichOutput.safeDocument(content)
+            let encoded = Data(content.utf8).base64EncodedString()
             return "<iframe data-quanta-static=\"\(encoded)\" sandbox=\"\" referrerpolicy=\"no-referrer\" style=\"width:100%;height:360px;border:0\" srcdoc=\"\(RichOutput.escape(document))\"></iframe>\n"
         }
         switch output.kind {
-        case .stream(_, let text), .executeResult(let text):
+        case .stream(let name, let text):
+            return "<pre class=\"out\(name == "stderr" ? " stderr" : "")\">\(ANSIRenderer.html(text))</pre>\n"
+        case .executeResult(let text):
             return "<pre class=\"out\">\(escape(text))</pre>\n"
         case .image(let data, _), .plotlyFigure(_, _, let data, _, _):
             guard !data.isEmpty else {
@@ -178,6 +199,12 @@ enum NotebookExporter {
             case .heading(let level, let text): html += "<h\(level)>\(content(text))</h\(level)>\n"
             case .paragraph(let text): html += "<p>\(content(text))</p>\n"
             case .code(let code): html += "<pre><code>\(escape(code))</code></pre>\n"
+            case .fencedCode(let language, let code):
+                if ["python", "py", "python3"].contains(language) {
+                    html += "<pre class=\"code\"><code>\(highlightedPython(code))</code></pre>\n"
+                } else {
+                    html += "<pre><code>\(escape(code))</code></pre>\n"
+                }
             case .bullet(let text):
                 if !inList { html += "<ul>\n"; inList = true }
                 html += "<li>\(content(text))</li>\n"

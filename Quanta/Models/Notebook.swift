@@ -11,20 +11,21 @@ enum CellType: String {
 final class NotebookCell: ObservableObject, Identifiable {
     let id = UUID()
     var nbID: String
-    @Published var cellType: CellType
-    @Published var source: String
-    @Published var outputs: [CellOutput]
+    private(set) var layoutRevision: UInt64 = 0
+    @Published var cellType: CellType { didSet { if cellType != oldValue { layoutRevision &+= 1 } } }
+    @Published var source: String { didSet { if !EditorTextRange.isSameText(source, oldValue) { layoutRevision &+= 1 } } }
+    @Published var outputs: [CellOutput] { didSet { layoutRevision &+= 1 } }
     @Published var executionCount: Int?
     @Published var isRunning = false
     @Published var isQueued = false
-    @Published var isEditingMarkdown = false
-    @Published var editorHeight: CGFloat
+    @Published var isEditingMarkdown = false { didSet { if isEditingMarkdown != oldValue { layoutRevision &+= 1 } } }
+    @Published var editorHeight: CGFloat { didSet { if editorHeight != oldValue { layoutRevision &+= 1 } } }
     @Published var lastDuration: Double?
     @Published var lastExecutedSource: String?
-    var hasStaleOutput: Bool { !outputs.isEmpty && lastExecutedSource.map { $0 != source } == true }
+    var hasStaleOutput: Bool { !outputs.isEmpty && lastExecutedSource.map { !EditorTextRange.isSameText($0, source) } == true }
     var runStartedAt: Date?
-    @Published var isSourceCollapsed = false
-    @Published var isOutputCollapsed = false
+    @Published var isSourceCollapsed = false { didSet { if isSourceCollapsed != oldValue { layoutRevision &+= 1 } } }
+    @Published var isOutputCollapsed = false { didSet { if isOutputCollapsed != oldValue { layoutRevision &+= 1 } } }
     var metadata: [String: Any]
     var extraKeys: [String: Any]
 
@@ -53,7 +54,8 @@ final class NotebookCell: ObservableObject, Identifiable {
 }
 
 final class Notebook: ObservableObject {
-    @Published var cells: [NotebookCell]
+    private(set) var structureRevision: UInt64 = 0
+    @Published var cells: [NotebookCell] { didSet { structureRevision &+= 1 } }
     var metadata: [String: Any]
     var nbformat: Int
     var nbformatMinor: Int
@@ -150,7 +152,7 @@ final class Notebook: ObservableObject {
         switch dict["output_type"] as? String {
         case "stream":
             return .stream(name: dict["name"] as? String ?? "stdout",
-                           text: joinedText(dict["text"]).strippingANSI)
+                           text: "".appendingTerminalOutput(joinedText(dict["text"])))
         case "error":
             let tb = (dict["traceback"] as? [String])?.joined(separator: "\n") ?? ""
             return .error(ename: dict["ename"] as? String ?? "Error",
@@ -241,7 +243,7 @@ final class Notebook: ObservableObject {
         switch output.kind {
         case .stream(let name, let text):
             return ["output_type": "stream", "name": name,
-                    "text": sourceLines(text.strippingANSI)]
+                    "text": sourceLines(text)]
         case .executeResult(let text):
             return ["output_type": "execute_result",
                     "execution_count": executionCount ?? NSNull(),

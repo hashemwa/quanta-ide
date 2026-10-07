@@ -117,7 +117,7 @@ final class CompletionPanel {
     }
 
     func refresh(from textView: QuantaTextView) {
-        if isShowing(for: textView), textView.string != source { hide() }
+        if isShowing(for: textView), !EditorTextRange.isSameText(textView.string, source) { hide() }
     }
 
     private func refilter() {
@@ -161,7 +161,8 @@ final class CompletionPanel {
             return
         }
         let completion = filtered[row]
-        guard host.string == source, let transaction = CompletionTransaction(source: source, completion: completion) else { hide(); return }
+        guard EditorTextRange.isSameText(host.string, source),
+              let transaction = CompletionTransaction(source: source, completion: completion) else { hide(); return }
         hide()
         let ranges = transaction.edits.map { NSValue(range: $0.range) }
         guard host.shouldChangeText(inRanges: ranges, replacementStrings: transaction.edits.map(\.text)) else { return }

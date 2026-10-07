@@ -2,6 +2,15 @@ import AppKit
 import WebKit
 
 final class NotebookPDFRenderer: NSObject, WKNavigationDelegate {
+    struct TableLayout {
+        let header: CGRect
+        let bottom: Double
+    }
+
+    struct PageLayout {
+        let rect: CGRect
+        let header: CGRect?
+    }
     private let completion: (NotebookPDFRenderer, Data?) -> Void
     private var finished = false
     private var timeout: DispatchWorkItem?
@@ -35,14 +44,23 @@ final class NotebookPDFRenderer: NSObject, WKNavigationDelegate {
         const style = document.createElement('style');
         style.textContent = `:root{color-scheme:light}body{width:720px;max-width:720px;margin:0;padding:0;background:white;color:black}
           pre,.code{white-space:pre-wrap;overflow-wrap:anywhere}.code,.md code{background:#f5f5f7}
-          .cell{display:block}.prompt{float:left;padding-right:8px}.code{margin-left:42px}
+          .cell{display:block}.prompt{float:left;padding-right:8px}.cell>.code{margin-left:42px}
           .err{color:#a00;background:#fff1f0}img{max-width:calc(100% - 42px);max-height:900px;object-fit:contain}
           .md img,.rich-output img{max-width:100%}`;
         document.head.appendChild(style);
         await document.fonts.ready;
+        for (const math of document.querySelectorAll('math[display="block"]')) {
+          const container = math.closest('.math,.rich-output') || document.body;
+          const available = container.clientWidth;
+          const width = math.getBoundingClientRect().width;
+          if (available > 0 && width > available) {
+            math.style.fontSize = `${parseFloat(getComputedStyle(math).fontSize) * available / width}px`;
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 0));
         const height = Math.ceil(document.body.getBoundingClientRect().bottom + window.scrollY);
         const ranges = [];
-        for (const element of document.querySelectorAll('tr,img,iframe,math,h1,h2,h3,h4,h5,h6')) {
+        for (const element of document.querySelectorAll('tr,img,iframe,math,h1,h2,h3,h4,h5,h6,.output-card')) {
           const rect = element.getBoundingClientRect();
           ranges.push([rect.top + window.scrollY, rect.bottom + window.scrollY]);
         }
@@ -54,7 +72,15 @@ final class NotebookPDFRenderer: NSObject, WKNavigationDelegate {
           range.selectNodeContents(node);
           for (const rect of range.getClientRects()) ranges.push([rect.top + window.scrollY, rect.bottom + window.scrollY]);
         }
-        return {height, ranges};
+        const tables = [];
+        for (const table of document.querySelectorAll('table')) {
+          const head = table.querySelector(':scope > thead');
+          if (!head) continue;
+          const rect = head.getBoundingClientRect();
+          tables.push({x:rect.left,y:rect.top+window.scrollY,width:rect.width,height:rect.height,
+            bottom:table.getBoundingClientRect().bottom+window.scrollY});
+        }
+        return {height, ranges, tables};
         """#
         webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { [weak self] result in
             guard let self, !self.finished else { return }
@@ -67,64 +93,95 @@ final class NotebookPDFRenderer: NSObject, WKNavigationDelegate {
                 guard pair.count == 2, pair[0].isFinite, pair[1].isFinite, pair[1] >= pair[0] else { return nil }
                 return pair[0]...pair[1]
             }
-            let rects = Self.pageRects(height: height, ranges: ranges)
-            guard rects.count <= 500 else { self.finish(nil); return }
+            let tables = (layout["tables"] as? [[String: Double]] ?? []).compactMap { table -> TableLayout? in
+                guard let x = table["x"], let y = table["y"], let width = table["width"],
+                      let height = table["height"], let bottom = table["bottom"],
+                      [x, y, width, height, bottom].allSatisfy(\.isFinite),
+                      width > 0, height > 0, height < 480, bottom > y + height else { return nil }
+                return TableLayout(header: CGRect(x: x, y: y, width: width, height: height), bottom: bottom)
+            }
+            let pages = Self.pageLayouts(height: height, ranges: ranges, tables: tables)
+            guard pages.count <= 500 else { self.finish(nil); return }
             let data = NSMutableData()
             var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
             guard let consumer = CGDataConsumer(data: data), let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
                 self.finish(nil)
                 return
             }
-            self.capture(rects, index: 0, context: context, data: data)
+            self.capture(pages, index: 0, context: context, data: data)
         }
     }
 
     static func pageRects(height: Double, ranges: [ClosedRange<Double>]) -> [CGRect] {
+        pageLayouts(height: height, ranges: ranges, tables: []).map(\.rect)
+    }
+
+    static func pageLayouts(height: Double, ranges: [ClosedRange<Double>], tables: [TableLayout]) -> [PageLayout] {
         guard height.isFinite, height > 0, height <= 480_000 else { return [] }
         let pageHeight = 960.0
-        var result: [CGRect] = []
+        var result: [PageLayout] = []
         var top = 0.0
         while top < height, result.count <= 500 {
-            var bottom = min(top + pageHeight, height)
+            let header = tables.first { top >= $0.header.maxY && top < $0.bottom }?.header
+            let available = pageHeight - (header?.height ?? 0)
+            var bottom = min(top + available, height)
             for _ in 0..<100 {
-                let crossing = ranges.filter { $0.lowerBound > top + 1 && $0.lowerBound < bottom && $0.upperBound > bottom && $0.upperBound - $0.lowerBound <= pageHeight }
+                let crossing = ranges.filter { $0.lowerBound > top + 1 && $0.lowerBound < bottom && $0.upperBound > bottom && $0.upperBound - $0.lowerBound <= available }
                 guard let start = crossing.map(\.lowerBound).min() else { break }
                 bottom = start
             }
-            result.append(CGRect(x: 0, y: top, width: 720, height: bottom - top))
+            result.append(PageLayout(rect: CGRect(x: 0, y: top, width: 720, height: bottom - top), header: header))
             top = bottom
         }
         return result
     }
 
-    private func capture(_ rects: [CGRect], index: Int, context: CGContext, data: NSMutableData) {
+    private func capture(_ pages: [PageLayout], index: Int, context: CGContext, data: NSMutableData) {
         guard !finished else { context.closePDF(); return }
-        guard index < rects.count else {
+        guard index < pages.count else {
             context.closePDF()
             finish(data as Data)
             return
         }
+        let page = pages[index]
+        context.beginPDFPage(nil)
+        func captureContent() {
+            self.captureRegion(page.rect, offset: page.header?.height ?? 0, context: context) { success in
+                guard success else { context.closePDF(); self.finish(nil); return }
+                context.endPDFPage()
+                self.capture(pages, index: index + 1, context: context, data: data)
+            }
+        }
+        if let header = page.header {
+            captureRegion(header, offset: 0, context: context) { success in
+                guard success else { context.closePDF(); self.finish(nil); return }
+                captureContent()
+            }
+        } else {
+            captureContent()
+        }
+    }
+
+    private func captureRegion(_ rect: CGRect, offset: CGFloat, context: CGContext, completion: @escaping (Bool) -> Void) {
         let configuration = WKPDFConfiguration()
-        configuration.rect = rects[index]
+        configuration.rect = rect
         webView.createPDF(configuration: configuration) { [weak self] result in
             guard let self, !self.finished else { context.closePDF(); return }
             guard case .success(let pageData) = result,
                   let provider = CGDataProvider(data: pageData as CFData),
                   let document = CGPDFDocument(provider), let page = document.page(at: 1) else {
-                context.closePDF()
-                self.finish(nil)
+                completion(false)
                 return
             }
-            context.beginPDFPage(nil)
             context.saveGState()
-            let height = rects[index].height * 0.75
-            let destination = CGRect(x: 36, y: 756 - height, width: 540, height: height)
+            let height = rect.height * 0.75
+            let destination = CGRect(x: 36 + rect.minX * 0.75, y: 756 - offset * 0.75 - height,
+                                     width: rect.width * 0.75, height: height)
             context.clip(to: destination)
             context.concatenate(page.getDrawingTransform(.mediaBox, rect: destination, rotate: 0, preserveAspectRatio: true))
             context.drawPDFPage(page)
             context.restoreGState()
-            context.endPDFPage()
-            self.capture(rects, index: index + 1, context: context, data: data)
+            completion(true)
         }
     }
 

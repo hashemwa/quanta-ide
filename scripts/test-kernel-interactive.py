@@ -257,15 +257,18 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual([message["output_type"] for message in emitted], ["display_data", "execute_result", "execute_result"])
 
     def test_latex_display_and_final_result_keep_distinct_output_types(self):
-        try:
-            import matplotlib
-        except ImportError:
-            self.skipTest("matplotlib is not installed")
         code = "class Formula:\n    def _repr_latex_(self):\n        return '$x^2$'\nvalue = Formula()\ndisplay(value)\nvalue"
-        emitted = outputs(exchange(["import matplotlib.mathtext", code]), 1)
-        self.assertEqual([message["type"] for message in emitted], ["display", "display"])
+        emitted = outputs(exchange([code]))
+        self.assertEqual([message["type"] for message in emitted], ["rich", "rich"])
         self.assertEqual([message["output_type"] for message in emitted], ["display_data", "execute_result"])
         self.assertEqual(emitted[0]["mime_bundle"], emitted[1]["mime_bundle"])
+        self.assertEqual(emitted[0]["mime_bundle"]["text/latex"], "$x^2$")
+
+    def test_markdown_repr_retains_source_without_python_packages(self):
+        code = "class Notes:\n    def _repr_markdown_(self):\n        return '# Result\\nThe value is $x^2$'\nNotes()"
+        emitted = outputs(exchange([code]))
+        self.assertEqual(emitted[0]["type"], "rich")
+        self.assertEqual(emitted[0]["mime_bundle"]["text/markdown"], "# Result\nThe value is $x^2$")
 
     def test_clear_output_flushes_preceding_streams_and_keeps_wait_flag(self):
         code = "print('old', end='')\nclear_output()\ndisplay(1)\nclear_output(wait=True)\nprint('new', end='')"

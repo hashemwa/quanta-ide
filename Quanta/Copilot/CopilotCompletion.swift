@@ -99,6 +99,7 @@ struct CopilotDocumentSnapshot {
     static let suggestionLimit = 8 * 1_024
 
     let uri: String
+    let languageID: String
     let text: String
     let source: String
     let caret: Int
@@ -111,21 +112,28 @@ struct CopilotDocumentSnapshot {
               Range(NSRange(location: caret, length: 0), in: source) != nil else { return nil }
         var before: [String] = []
         var after: [String] = []
+        var markdownCell: NotebookCell?
         if document.kind == .notebook {
-            let cells = document.notebook?.cells.filter { $0.cellType == .code } ?? []
-            guard let index = cells.firstIndex(where: { $0.id == sourceID }) else { return nil }
-            var remaining = Self.contextLimit - source.utf16.count
-            for cell in cells[..<index].reversed() {
-                let count = cell.source.utf16.count
-                guard count <= remaining - 2 else { break }
-                before.append(cell.source)
-                remaining -= count + 2
-            }
-            for cell in cells.dropFirst(index + 1) {
-                let count = cell.source.utf16.count
-                guard count <= remaining - 2 else { break }
-                after.append(cell.source)
-                remaining -= count + 2
+            guard let active = document.notebook?.cells.first(where: { $0.id == sourceID }),
+                  active.cellType != .raw else { return nil }
+            if active.cellType == .markdown {
+                markdownCell = active
+            } else {
+                let cells = document.notebook?.cells.filter { $0.cellType == .code } ?? []
+                guard let index = cells.firstIndex(where: { $0.id == sourceID }) else { return nil }
+                var remaining = Self.contextLimit - source.utf16.count
+                for cell in cells[..<index].reversed() {
+                    let count = cell.source.utf16.count
+                    guard count <= remaining - 2 else { break }
+                    before.append(cell.source)
+                    remaining -= count + 2
+                }
+                for cell in cells.dropFirst(index + 1) {
+                    let count = cell.source.utf16.count
+                    guard count <= remaining - 2 else { break }
+                    after.append(cell.source)
+                    remaining -= count + 2
+                }
             }
         } else {
             guard document.kind == .script, sourceID == document.id else { return nil }
@@ -137,7 +145,14 @@ struct CopilotDocumentSnapshot {
         self.position = position
         self.source = source
         self.caret = caret
-        uri = document.url?.absoluteString ?? "untitled:quanta-\(document.id.uuidString).py"
+        languageID = markdownCell == nil ? "python" : "markdown"
+        if let markdownCell {
+            let name = "\(document.url?.lastPathComponent ?? document.id.uuidString).cell-\(markdownCell.id.uuidString).md"
+            uri = document.url?.deletingLastPathComponent().appendingPathComponent(name).absoluteString
+                ?? "untitled:quanta-\(name)"
+        } else {
+            uri = document.url?.absoluteString ?? "untitled:quanta-\(document.id.uuidString).py"
+        }
     }
 
     func suggestion(from item: [String: Any], revision: Int) -> CopilotSuggestion? {

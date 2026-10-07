@@ -40,6 +40,7 @@ final class AppState: ObservableObject {
     private var navigationIndex = -1
     private var isNavigatingHistory = false
     let variableStore = VariableStore()
+    let variablesPanelState = VariablesPanelState()
     var variables: [VariableInfo] {
         get { variableStore.items }
         set { variableStore.items = newValue }
@@ -51,6 +52,11 @@ final class AppState: ObservableObject {
     let console = ConsoleModel()
     let plots = PlotHistory()
     let dataBrowser = DataBrowser()
+    lazy var outputPresentation: OutputPresentation = {
+        let presentation = OutputPresentation()
+        presentation.onChange = { [weak self] in self?.pushAppearance() }
+        return presentation
+    }()
     @Published var kernelStatus: KernelStatus = .stopped
     let selection = CellSelection()
     var selectedCellID: UUID? {
@@ -70,6 +76,10 @@ final class AppState: ObservableObject {
     var isCommandMode: Bool {
         get { selection.isCommandMode }
         set { if selection.isCommandMode != newValue { selection.isCommandMode = newValue } }
+    }
+
+    func activateDocument(_ id: UUID?) {
+        if activeDocumentID != id { activeDocumentID = id }
     }
     @Published var showVariables = QuantaDefaults.store.object(forKey: "QuantaShowVariables") as? Bool ?? true {
         didSet { QuantaDefaults.store.set(showVariables, forKey: "QuantaShowVariables") }
@@ -430,7 +440,8 @@ final class AppState: ObservableObject {
 
     func pushAppearance() {
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        kernel.notify(["op": "config", "appearance": dark ? "dark" : "light", "adapt_plot_theme": adaptsPlotTheme])
+        kernel.notify(["op": "config", "appearance": dark ? "dark" : "light", "adapt_plot_theme": adaptsPlotTheme,
+                       "enhanced_data_outputs": outputPresentation.usesEnhancedDataOutputs])
     }
 
     private func clearRunningFlags() {
@@ -666,7 +677,7 @@ final class AppState: ObservableObject {
         if let existing = openDocuments.first(where: {
             $0.url?.resolvingSymlinksInPath().standardizedFileURL == resolvedURL
         }) {
-            activeDocumentID = existing.id
+            activateDocument(existing.id)
             return
         }
         do {
@@ -1956,13 +1967,13 @@ final class AppState: ObservableObject {
 
     func selectCell(_ cell: NotebookCell, in notebook: Notebook,
                     modifiers: NSEvent.ModifierFlags = []) {
-        activeDocumentID = activeDocument?.id
         if modifiers.contains(.shift), let anchor = selection.anchorCellID,
            let start = notebook.cells.firstIndex(where: { $0.id == anchor }),
            let end = notebook.cells.firstIndex(where: { $0.id == cell.id }) {
             let range = min(start, end)...max(start, end)
-            selection.selectedCellIDs = Set(range.map { notebook.cells[$0].id })
-            selection.selectedCellID = cell.id
+            let ids = Set(range.map { notebook.cells[$0].id })
+            if selection.selectedCellIDs != ids { selection.selectedCellIDs = ids }
+            selectedCellID = cell.id
         } else if modifiers.contains(.command) {
             if selection.selectedCellIDs.contains(cell.id) {
                 selection.selectedCellIDs.remove(cell.id)
@@ -1973,8 +1984,8 @@ final class AppState: ObservableObject {
                 selection.anchorCellID = cell.id
             }
         } else {
-            selection.selectedCellIDs = [cell.id]
-            selection.selectedCellID = cell.id
+            if selection.selectedCellIDs != [cell.id] { selection.selectedCellIDs = [cell.id] }
+            selectedCellID = cell.id
             selection.anchorCellID = cell.id
         }
         enterCommandMode()
@@ -2500,7 +2511,7 @@ final class AppState: ObservableObject {
         EditorTheme.fontSize = clamped
         for tv in EditorRegistry.shared.allViews {
             tv.typingAttributes = [.font: EditorTheme.font, .foregroundColor: EditorTheme.text]
-            if let storage = tv.textStorage { PythonHighlighter.highlight(storage) }
+            tv.highlightSource()
             tv.onLayoutChange?()
         }
     }
@@ -2516,7 +2527,8 @@ final class AppState: ObservableObject {
     func exportActiveNotebookAsHTML() {
         guard let document = activeDocument, let notebook = document.notebook else { return }
         let html = NotebookExporter.html(from: notebook, title: document.displayName,
-                                         baseDirectory: document.url?.deletingLastPathComponent())
+                                         baseDirectory: document.url?.deletingLastPathComponent(),
+                                         enhancedDataOutputs: outputPresentation.usesEnhancedDataOutputs)
         savePanelWrite(data: Data(html.utf8),
                        suggested: document.displayName.replacingOccurrences(of: ".ipynb", with: ".html"),
                        type: .html)
@@ -2531,7 +2543,8 @@ final class AppState: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         isExportingPDF = true
         let html = NotebookExporter.html(from: notebook, title: document.displayName,
-                                         baseDirectory: document.url?.deletingLastPathComponent())
+                                         baseDirectory: document.url?.deletingLastPathComponent(),
+                                         enhancedDataOutputs: outputPresentation.usesEnhancedDataOutputs)
         NotebookExporter.renderPDF(html: html) { [weak self] data in
             guard let self else { return }
             self.isExportingPDF = false

@@ -21,7 +21,8 @@ final class NotebookMathRenderState: ObservableObject {
               }) {
         let generation = UUID()
         self.generation = generation
-        results = [:]
+        let expressions = Set(request.expressions)
+        results = results.filter { expressions.contains($0.key) }
         var requested = Set<String>()
         for tex in request.expressions where requested.insert(tex).inserted {
             render(tex, request.display, request.fontSize, request.color) { [weak self] result in
@@ -44,9 +45,12 @@ enum NotebookMath {
 
     static func html(_ tex: String, display: Bool) -> String {
         let options: [String: Any] = ["output": "mathml", "displayMode": display,
-                                     "throwOnError": false, "trust": false, "maxExpand": 1000, "maxSize": 20]
+                                     "throwOnError": false, "trust": false, "maxExpand": 1000, "maxSize": 20,
+                                     "macros": [#"\mbox"#: #"\text{#1}"#]]
         if let context, let katex = context.objectForKeyedSubscript("katex"),
-           let result = katex.invokeMethod("renderToString", withArguments: [tex, options]),
+           let result = katex.invokeMethod("renderToString", withArguments: [
+               tex.replacingOccurrences(of: #"\begin{displaymath}"#, with: #"\begin{equation*}"#)
+                   .replacingOccurrences(of: #"\end{displaymath}"#, with: #"\end{equation*}"#), options]),
            !result.isUndefined, let html = result.toString() { return html }
         return "<code class=\"math-error\">\(RichOutput.escape(tex))</code>"
     }

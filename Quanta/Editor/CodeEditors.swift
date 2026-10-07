@@ -70,12 +70,12 @@ final class ScriptCanvas: NSObject, DocumentCanvas, NSTextViewDelegate {
         textView.string = document.text
         textView.bindCodeTools(document: document, sourceID: document.id)
         textView.setAccessibilityLabel(document.displayName)
-        if let storage = textView.textStorage { PythonHighlighter.highlight(storage) }
+        textView.highlightSource()
         EditorRegistry.shared.register(textView, for: document.id)
         textView.onCommand = { [weak self] command in self?.perform(command) ?? false }
         textView.onFocusChange = { [weak self] focused in
             guard focused, let document = self?.document else { return }
-            AppState.shared.activeDocumentID = document.id
+            AppState.shared.activateDocument(document.id)
         }
         textView.onLayoutChange = { [weak ruler] in ruler?.refreshMetrics() }
 
@@ -107,11 +107,11 @@ final class ScriptCanvas: NSObject, DocumentCanvas, NSTextViewDelegate {
             textView.textContainer?.containerSize.width = wrapsLines
                 ? scrollView.contentSize.width : CGFloat.greatestFiniteMagnitude
         }
-        guard textView.string != document.text, !textView.hasMarkedText() else { return }
+        guard !EditorTextRange.isSameText(textView.string, document.text), !textView.hasMarkedText() else { return }
         let selection = textView.selectedRange()
         textView.string = document.text
         undoManager.removeAllActions()
-        if let storage = textView.textStorage { PythonHighlighter.highlight(storage) }
+        textView.highlightSource()
         let length = (textView.string as NSString).length
         textView.setSelectedRange(NSRange(location: min(selection.location, length), length: 0))
         ruler.needsDisplay = true
@@ -138,12 +138,10 @@ final class ScriptCanvas: NSObject, DocumentCanvas, NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         defer { ruler.needsDisplay = true }
         guard let document, !textView.hasMarkedText() else { return }
-        if document.text != textView.string {
+        if !EditorTextRange.isSameText(document.text, textView.string) {
             document.text = textView.string
             if !document.isDirty { document.isDirty = true }
         }
-        if let storage = textView.textStorage {
-            PythonHighlighter.highlight(storage, editedRange: textView.lastEditedRange)
-        }
+        textView.highlightSource(editedRange: textView.lastEditedRange)
     }
 }

@@ -17,12 +17,14 @@ final class QuantaTextView: NSTextView {
     var completionSources: (() -> [String])?
     var inlineCompletionController: InlineCompletionController?
     var expandsForInlineCompletion = false
+    var sourceLanguage: EditorSourceLanguage = .python
     var inlineCompletionMinimumHeight: CGFloat { inlineCompletionController?.minimumEditorHeight ?? 0 }
     private weak var diagnosticsDocument: Document?
     private var diagnosticsSourceID: UUID?
     private var diagnosticsSubscription: AnyCancellable?
     private var completionWork: DispatchWorkItem?
     private var completionGeneration = 0
+    private var pythonSyntax: (source: String, tokens: [PythonHighlighter.Token])?
     private(set) var lastEditedRange = NSRange(location: 0, length: 0)
 
     override func shouldChangeText(in affectedCharRange: NSRange,
@@ -125,14 +127,17 @@ final class QuantaTextView: NSTextView {
     }
 
     func bindCodeTools(document: Document, sourceID: UUID, isPython: Bool = true) {
-        if isPython, inlineCompletionController == nil {
+        let cellType = document.notebook?.cells.first(where: { $0.id == sourceID })?.cellType
+        sourceLanguage = isPython ? .python : (cellType == .markdown ? .markdown : .plain)
+        let supportsSuggestions = sourceLanguage != .plain
+        if supportsSuggestions, inlineCompletionController == nil {
             let service = CopilotService.shared
             inlineCompletionController = InlineCompletionController(editor: self, provider: {
                 await service.completion(document: $0, sourceID: $1, source: $2, caret: $3)
             }, onShown: { service.didShow($0) }, onAccepted: { service.accept($0) },
                revisions: service.$revision.eraseToAnyPublisher())
         }
-        inlineCompletionController?.bind(document: isPython ? document : nil, sourceID: isPython ? sourceID : nil)
+        inlineCompletionController?.bind(document: supportsSuggestions ? document : nil, sourceID: supportsSuggestions ? sourceID : nil)
         guard diagnosticsDocument !== document || diagnosticsSourceID != sourceID || !isPython else { return }
         diagnosticsSubscription = nil
         clearPythonDiagnostics()
@@ -144,7 +149,8 @@ final class QuantaTextView: NSTextView {
         diagnosticsSubscription = state.$diagnostics.sink { [weak self, weak state] diagnostics in
             guard let self, let state else { return }
             self.clearPythonDiagnostics()
-            guard state.checkedSources[sourceID] == self.string, let layoutManager = self.layoutManager else { return }
+            guard let checked = state.checkedSources[sourceID], EditorTextRange.isSameText(checked, self.string),
+                  let layoutManager = self.layoutManager else { return }
             for diagnostic in diagnostics where diagnostic.sourceID == sourceID {
                 let range = diagnostic.editorRange(in: self.string)
                 guard range.length > 0 else { continue }
@@ -158,6 +164,26 @@ final class QuantaTextView: NSTextView {
         }
     }
 
+    func highlightSource(editedRange: NSRange? = nil) {
+        guard let storage = textStorage else { return }
+        if sourceLanguage == .python {
+            let tokens = pythonSyntaxTokens()
+            if let editedRange { PythonHighlighter.highlight(storage, editedRange: editedRange, tokens: tokens) }
+            else { PythonHighlighter.highlight(storage, tokens: tokens) }
+        } else {
+            pythonSyntax = nil
+            MarkdownHighlighter.highlight(storage, language: sourceLanguage, resetFont: editedRange == nil)
+        }
+    }
+
+    private func pythonSyntaxTokens() -> [PythonHighlighter.Token] {
+        let source = string
+        if let pythonSyntax, EditorTextRange.isSameText(pythonSyntax.source, source) { return pythonSyntax.tokens }
+        let tokens = PythonHighlighter.tokens(source)
+        pythonSyntax = (source, tokens)
+        return tokens
+    }
+
     private func clearPythonDiagnostics() {
         let range = NSRange(location: 0, length: string.utf16.count)
         for key in [NSAttributedString.Key.underlineStyle, .underlineColor, .toolTip] {
@@ -166,7 +192,7 @@ final class QuantaTextView: NSTextView {
     }
 
     func applyPythonFormatting(original: String, formatted: String) -> Bool {
-        guard string == original, !hasMarkedText() else { return false }
+        guard EditorTextRange.isSameText(string, original), !hasMarkedText() else { return false }
         let selection = selectedRange()
         breakUndoCoalescing()
         insertText(formatted, replacementRange: NSRange(location: 0, length: original.utf16.count))
@@ -176,7 +202,7 @@ final class QuantaTextView: NSTextView {
         let offset = min(selection.location, text.length)
         let caret = offset < text.length ? text.rangeOfComposedCharacterSequence(at: offset).location : offset
         setSelectedRange(NSRange(location: caret, length: 0))
-        return string == formatted
+        return EditorTextRange.isSameText(string, formatted)
     }
 
     override func insertText(_ value: Any, replacementRange: NSRange) {
@@ -184,8 +210,9 @@ final class QuantaTextView: NSTextView {
                 || EditorTextRange.isValid(replacementRange, length: textStorage?.length ?? string.utf16.count) else { return }
         super.insertText(value, replacementRange: replacementRange)
         completionWork?.cancel()
-        guard let text = value as? String, text.count == 1, !hasMarkedText(),
-              PythonHighlighter.allowsCompletion(in: string, at: selectedRange().location) else { return }
+        guard sourceLanguage == .python, let text = value as? String, text.count == 1, !hasMarkedText(),
+              PythonHighlighter.allowsCompletion(in: string, at: selectedRange().location,
+                                                tokens: pythonSyntaxTokens()) else { return }
         if text == "(" || text == "," { requestDocumentation(); return }
         guard let last = text.last, last.isLetter || last.isNumber || last == "_" || (last == "." && dotIsAttributeAccess()) else { return }
         let work = DispatchWorkItem { [weak self] in self?.requestCompletions() }
@@ -283,7 +310,7 @@ final class QuantaTextView: NSTextView {
     }
 
     func requestCompletions() {
-        guard let completionProvider, !hasMarkedText(), !isHiddenOrHasHiddenAncestor,
+        guard sourceLanguage == .python, let completionProvider, !hasMarkedText(), !isHiddenOrHasHiddenAncestor,
               selectedRange().length == 0 else { return }
         let caret = selectedRange().location
         let source = string
@@ -293,7 +320,7 @@ final class QuantaTextView: NSTextView {
             guard let self, self.completionGeneration == generation, self.window != nil,
                   self.window?.firstResponder === self, !self.isHiddenOrHasHiddenAncestor,
                   !self.hasMarkedText(), self.selectedRange() == NSRange(location: caret, length: 0),
-                  self.string == source else { return }
+                  EditorTextRange.isSameText(self.string, source) else { return }
             CompletionPanel.shared.show(matches: matches, for: self)
             if CompletionPanel.shared.isShowing(for: self) { self.inlineCompletionController?.dismiss() }
         }
@@ -301,11 +328,11 @@ final class QuantaTextView: NSTextView {
 
     @discardableResult
     func requestDocumentation() -> Bool {
-        guard let inspectionProvider else { return false }
+        guard sourceLanguage == .python, let inspectionProvider else { return false }
         let caret = selectedRange().location
         let source = string
         inspectionProvider(source, caret) { [weak self] info in
-            guard let self, self.window?.firstResponder === self, self.string == source,
+            guard let self, self.window?.firstResponder === self, EditorTextRange.isSameText(self.string, source),
                   self.selectedRange().location == caret, let info else { return }
             DocumentationPopover.show(info, for: self)
         }
@@ -322,7 +349,7 @@ final class QuantaTextView: NSTextView {
         for ch in head {
             if ch == " " || ch == "\t" { indent.append(ch) } else { break }
         }
-        if head.trimmingCharacters(in: .whitespaces).hasSuffix(":") {
+        if sourceLanguage == .python, head.trimmingCharacters(in: .whitespaces).hasSuffix(":") {
             indent += "    "
         }
         super.insertNewline(sender)

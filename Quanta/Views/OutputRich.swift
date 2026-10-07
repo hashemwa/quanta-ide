@@ -9,18 +9,21 @@ enum ANSIRenderer {
         94: .blue, 95: .pink, 96: .teal, 97: Color(nsColor: .labelColor),
     ]
 
-    static func attributed(_ text: String) -> AttributedString {
-        var result = AttributedString()
+    struct Segment {
+        let text: String
+        let color: Color?
+        let bold: Bool
+    }
+
+    static func segments(_ text: String) -> [Segment] {
+        var result: [Segment] = []
         var color: Color?
         var bold = false
         var index = text.startIndex
 
         func flush(_ chunk: Substring) {
             guard !chunk.isEmpty else { return }
-            var piece = AttributedString(String(chunk))
-            if let color { piece.foregroundColor = color }
-            if bold { piece.inlinePresentationIntent = .stronglyEmphasized }
-            result.append(piece)
+            result.append(Segment(text: String(chunk), color: color, bold: bold))
         }
 
         while let escape = text.range(of: "\u{1B}[", range: index..<text.endIndex) {
@@ -30,21 +33,72 @@ enum ANSIRenderer {
                 break
             }
             if text[end] == "m" {
-                let codes = text[escape.upperBound..<end].split(separator: ";").compactMap { Int($0) }
-                for code in codes.isEmpty ? [0] : codes {
+                let raw = text[escape.upperBound..<end].split(separator: ";", omittingEmptySubsequences: false).map { Int($0) ?? 0 }
+                let codes = raw.isEmpty ? [0] : raw
+                var i = 0
+                while i < codes.count {
+                    let code = codes[i]
                     switch code {
                     case 0: color = nil; bold = false
                     case 1: bold = true
                     case 22: bold = false
                     case 39: color = nil
+                    case 38, 48:
+                        if i + 2 < codes.count, codes[i + 1] == 5 {
+                            if code == 38 { color = indexedColor(codes[i + 2]) }
+                            i += 2
+                        } else if i + 4 < codes.count, codes[i + 1] == 2 {
+                            let values = Array(codes[(i + 2)...(i + 4)])
+                            if code == 38, values.allSatisfy({ (0...255).contains($0) }) {
+                                color = Color(nsColor: NSColor(hex: values[0] << 16 | values[1] << 8 | values[2]))
+                            }
+                            i += 4
+                        }
                     default: if let c = palette[code] { color = c }
                     }
+                    i += 1
                 }
             }
             index = text.index(after: end)
         }
         flush(text[index...])
         return result
+    }
+
+    private static func indexedColor(_ index: Int) -> Color? {
+        guard (0...255).contains(index) else { return nil }
+        if index < 16 { return palette[index < 8 ? 30 + index : 90 + index - 8] }
+        if index >= 232 {
+            let value = 8 + (index - 232) * 10
+            return Color(nsColor: NSColor(hex: value << 16 | value << 8 | value))
+        }
+        let cube = index - 16
+        func level(_ value: Int) -> Int { value == 0 ? 0 : 55 + value * 40 }
+        return Color(nsColor: NSColor(hex: level(cube / 36) << 16 | level(cube / 6 % 6) << 8 | level(cube % 6)))
+    }
+
+    static func attributed(_ text: String) -> AttributedString {
+        var result = AttributedString()
+        for segment in segments(text) {
+            var piece = AttributedString(segment.text)
+            piece.foregroundColor = segment.color
+            if segment.bold { piece.inlinePresentationIntent = .stronglyEmphasized }
+            result.append(piece)
+        }
+        return result
+    }
+
+    static func html(_ text: String) -> String {
+        segments(text).map { segment in
+            var styles: [String] = []
+            if let color = segment.color, let rgb = NSColor(color).usingColorSpace(.sRGB) {
+                styles.append(String(format: "color:#%02X%02X%02X", Int((rgb.redComponent * 255).rounded()),
+                                     Int((rgb.greenComponent * 255).rounded()), Int((rgb.blueComponent * 255).rounded())))
+            }
+            if segment.bold { styles.append("font-weight:600") }
+            let escaped = RichOutput.escape(segment.text)
+            return styles.isEmpty ? escaped : "<span style=\"\(styles.joined(separator: ";"))\">\(escaped)</span>"
+        }.joined()
     }
 }
 
@@ -276,6 +330,12 @@ struct TracebackView: View {
 struct NDArrayView: View {
     let payload: NDArrayPayload
     @Environment(\.monoFontSize) private var monoSize
+    private static let heatmapCache: NSCache<NSUUID, NSImage> = {
+        let cache = NSCache<NSUUID, NSImage>()
+        cache.countLimit = 64
+        cache.totalCostLimit = 32 * 1024 * 1024
+        return cache
+    }()
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
@@ -295,20 +355,37 @@ struct NDArrayView: View {
                 SparklineView(values: series)
                     .frame(maxWidth: DS.Layout.outputMaxWidth)
                     .frame(height: 56)
-            } else if let grid = payload.grid, let image = Self.heatmapImage(grid) {
+                Text("Sampled preview · \(series.count) points")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if let image = Self.cachedHeatmapImage(payload) {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.none)
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: DS.Layout.outputMaxWidth, maxHeight: 320, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card))
+                Text("Heatmap preview · relative values")
+                    .font(.caption).foregroundStyle(.secondary)
             } else {
-                Text(payload.text.trimmingTrailingNewlines)
+                Text(StreamOutputView.clipped(payload.text.trimmingTrailingNewlines))
                     .font(.system(size: monoSize, design: .monospaced))
                     .textSelection(.enabled)
             }
+            if payload.series != nil || payload.grid != nil {
+                OutputTextPreview(text: payload.text)
+            }
         }
         .padding(.vertical, 2)
+    }
+
+    static func cachedHeatmapImage(_ payload: NDArrayPayload) -> NSImage? {
+        let key = payload.contentVersion as NSUUID
+        if let image = heatmapCache.object(forKey: key) { return image }
+        guard let grid = payload.grid, let image = heatmapImage(grid) else { return nil }
+        let height = min(grid.count, 512)
+        let width = min(grid.lazy.map(\.count).max() ?? 0, 512)
+        heatmapCache.setObject(image, forKey: key, cost: height * width * 4)
+        return image
     }
 
     static func compact(_ v: Double) -> String {
@@ -373,21 +450,32 @@ struct NDArrayView: View {
 struct SparklineView: View {
     let values: [Double?]
 
+    static func normalizedPoints(_ values: [Double?]) -> [CGPoint?] {
+        guard values.count > 1 else { return [] }
+        let count = min(values.count, 512)
+        let samples = (0..<count).map { values[$0 * (values.count - 1) / (count - 1)] }
+        let finite = samples.compactMap { $0 }.filter(\.isFinite)
+        guard finite.count > 1, let lo = finite.min(), let hi = finite.max() else { return [] }
+        let scale = max(abs(lo), abs(hi), 1)
+        let lower = lo / scale
+        let span = hi == lo ? 1 : hi / scale - lower
+        return samples.enumerated().map { i, value in
+            guard let value, value.isFinite else { return nil }
+            return CGPoint(x: Double(i) / Double(count - 1), y: (1 - (value / scale - lower) / span) * 0.92 + 0.04)
+        }
+    }
+
     var body: some View {
         Canvas { context, size in
-            let finite = values.compactMap { $0 }
-            guard finite.count > 1, let lo = finite.min(), let hi = finite.max() else { return }
-            let span = hi - lo == 0 ? 1 : hi - lo
             var path = Path()
             var started = false
-            for (i, value) in values.enumerated() {
-                guard let value else { started = false; continue }
-                let x = size.width * CGFloat(i) / CGFloat(max(values.count - 1, 1))
-                let y = size.height * (1 - CGFloat((value - lo) / span)) * 0.92 + size.height * 0.04
+            for point in Self.normalizedPoints(values) {
+                guard let point else { started = false; continue }
+                let scaledPoint = CGPoint(x: size.width * point.x, y: size.height * point.y)
                 if started {
-                    path.addLine(to: CGPoint(x: x, y: y))
+                    path.addLine(to: scaledPoint)
                 } else {
-                    path.move(to: CGPoint(x: x, y: y))
+                    path.move(to: scaledPoint)
                     started = true
                 }
             }
@@ -406,6 +494,7 @@ struct JSONTreeView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             JSONNodeView(key: nil, value: payload.value, depth: 0)
+            OutputTextPreview(text: payload.text)
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -415,6 +504,7 @@ struct JSONTreeView: View {
 }
 
 struct JSONNodeView: View {
+    static let previewLimit = 300
     let key: String?
     let value: Any
     let depth: Int
@@ -425,21 +515,24 @@ struct JSONNodeView: View {
         self.key = key
         self.value = value
         self.depth = depth
-        _expanded = State(initialValue: depth < 1)
+        let count = (value as? [String: Any])?.count ?? (value as? [Any])?.count ?? 0
+        _expanded = State(initialValue: depth < 1 && count <= 12)
     }
 
     var body: some View {
         if let dict = value as? [String: Any] {
             containerView(count: dict.count, label: "{…}") {
-                ForEach(dict.keys.sorted(), id: \.self) { k in
+                ForEach(Array(dict.keys.sorted().prefix(Self.previewLimit)), id: \.self) { k in
                     JSONNodeView(key: k, value: dict[k] ?? "", depth: depth + 1)
                 }
+                previewNotice(count: dict.count)
             }
         } else if let array = value as? [Any] {
             containerView(count: array.count, label: "[…]") {
-                ForEach(array.indices, id: \.self) { i in
+                ForEach(array.indices.prefix(Self.previewLimit), id: \.self) { i in
                     JSONNodeView(key: "\(i)", value: array[i], depth: depth + 1)
                 }
+                previewNotice(count: array.count)
             }
         } else {
             HStack(alignment: .top, spacing: 4) {
@@ -448,6 +541,15 @@ struct JSONNodeView: View {
                     .font(.system(size: monoSize, design: .monospaced))
                     .foregroundStyle(Self.scalarColor(value))
             }
+        }
+    }
+
+    @ViewBuilder
+    private func previewNotice(count: Int) -> some View {
+        if count > Self.previewLimit {
+            Text("Showing first \(Self.previewLimit) of \(count) items. The full saved output is preserved in the notebook and exports.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -509,6 +611,7 @@ struct JSONNodeView: View {
 }
 
 struct ObjectCardView: View {
+    static let previewLimit = 300
     let payload: ObjectCardPayload
     @Environment(\.monoFontSize) private var monoSize
 
@@ -518,15 +621,17 @@ struct ObjectCardView: View {
                 Image(systemName: "cube")
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                Text(payload.title)
-                    .font(.system(size: monoSize + 1, weight: .semibold, design: .monospaced))
-                Text(payload.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(payload.title)
+                        .font(.system(size: monoSize + 1, weight: .semibold, design: .monospaced))
+                    Text(payload.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             if !payload.badges.isEmpty {
-                HStack(spacing: 4) {
-                    Text("fitted:")
+                WrappingHStack {
+                    Text("learned:")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     ForEach(payload.badges.prefix(8), id: \.self) { badge in
@@ -534,23 +639,60 @@ struct ObjectCardView: View {
                     }
                 }
             }
-            let columns = [GridItem(.adaptive(minimum: 190), alignment: .leading)]
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 3) {
-                ForEach(payload.fields, id: \.name) { field in
-                    HStack(spacing: 4) {
-                        Text(field.name)
+            parameterGrid(Array(payload.fields.prefix(12)))
+            if payload.fields.count > 12 {
+                DisclosureGroup("More parameters (\(payload.fields.count - 12))") {
+                    parameterGrid(Array(payload.fields.dropFirst(12).prefix(Self.previewLimit - 12)))
+                    if payload.fields.count > Self.previewLimit {
+                        Text("Showing first \(Self.previewLimit) of \(payload.fields.count) parameters. The full saved output is preserved in the notebook and exports.")
                             .foregroundStyle(.secondary)
-                        Text("= \(field.value)")
-                            .foregroundStyle(.primary)
                     }
-                    .font(.system(size: monoSize - 1, design: .monospaced))
-                    .lineLimit(1)
                 }
+                .font(.caption)
             }
+            OutputTextPreview(text: payload.text)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .outputCard()
         .textSelection(.enabled)
+    }
+
+    private func parameterGrid(_ fields: [(name: String, value: String)]) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), alignment: .leading)], alignment: .leading, spacing: 3) {
+            ForEach(fields, id: \.name) { field in
+                HStack(spacing: 4) {
+                    Text(field.name).foregroundStyle(.secondary)
+                    Text("= \(field.value)").foregroundStyle(.primary)
+                }
+                .font(.system(size: monoSize - 1, design: .monospaced))
+                .lineLimit(1)
+                .help("\(field.name) = \(field.value)")
+            }
+        }
+    }
+}
+
+struct OutputTextPreview: View {
+    let text: String
+    @Environment(\.monoFontSize) private var monoSize
+
+    @ViewBuilder
+    var body: some View {
+        if !text.isEmpty {
+            DisclosureGroup("Text preview") {
+                Text(StreamOutputView.clipped(text.trimmingTrailingNewlines))
+                    .font(.system(size: monoSize, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.caption)
+            .contextMenu {
+                Button("Copy Text") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+            }
+        }
     }
 }

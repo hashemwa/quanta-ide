@@ -137,7 +137,7 @@ final class DocumentCodeTools: ObservableObject {
             }
             switch result {
             case .success(let text):
-                if text == source.source {
+                if EditorTextRange.isSameText(text, source.source) {
                     self.notice = "Code is already formatted."
                 } else if apply(source.source, text) {
                     self.schedule()
@@ -256,7 +256,8 @@ extension AppState {
     @MainActor
     func revealDiagnostic(_ diagnostic: PythonDiagnostic, in document: Document) {
         guard let source = document.pythonSources.first(where: { $0.id == diagnostic.sourceID }),
-              document.codeTools.checkedSources[source.id] == source.source else { return }
+              let checked = document.codeTools.checkedSources[source.id],
+              EditorTextRange.isSameText(checked, source.source) else { return }
         activeDocumentID = document.id
         let range = diagnostic.editorRange(in: source.source)
         if document.kind == .notebook {

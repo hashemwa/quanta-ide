@@ -33,6 +33,7 @@ warnings.filterwarnings("ignore", message=".*which is a non-GUI backend.*")
 
 _dark_appearance = False
 _adapt_plot_theme = True
+_enhanced_data_outputs = True
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 MAX_STREAM_BYTES = 2_000_000
@@ -610,7 +611,8 @@ def _try_rich_repr(obj):
             pass
     for name, mime in [("_repr_html_", "text/html"), ("_repr_svg_", "image/svg+xml"),
                        ("_repr_png_", "image/png"), ("_repr_jpeg_", "image/jpeg"),
-                       ("_repr_json_", "application/json")]:
+                       ("_repr_json_", "application/json"), ("_repr_latex_", "text/latex"),
+                       ("_repr_markdown_", "text/markdown")]:
         if mime in bundle:
             continue
         method = getattr(obj, name, None)
@@ -651,21 +653,6 @@ def _try_rich_repr(obj):
             return True
         except Exception:
             pass
-    repr_latex = getattr(obj, "_repr_latex_", None)
-    if callable(repr_latex):
-        try:
-            tex = repr_latex()
-        except Exception:
-            tex = None
-        if isinstance(tex, str) and tex.strip():
-            tex = _rewrite_tex(tex.strip().strip("$").replace("\n", " "))
-            try:
-                png, _ = _render_mathtext(tex, 14, _appearance_fg())
-                emit({"id": _current_id, "type": "display", "mime": "image/png",
-                      "data": base64.b64encode(png).decode()})
-                return True
-            except Exception:
-                pass
     return False
 
 def _try_ndarray(obj):
@@ -794,6 +781,9 @@ def _portable_output(message):
     return None
 
 def _emit_result(obj, name_hint, explicit=False):
+    if not _enhanced_data_outputs and _uses_enhanced_data_output(obj):
+        _emit_plain_result(obj)
+        return
     payload = dataframe_payload(obj, name=name_hint, max_cols=40, head_tail=True)
     if payload is not None:
         emit({"id": _current_id, "type": "dataframe", "payload": payload})
@@ -812,6 +802,17 @@ def _emit_result(obj, name_hint, explicit=False):
         return
     if _try_jsonlike(obj):
         return
+    _emit_plain_result(obj)
+
+def _uses_enhanced_data_output(obj):
+    pd = sys.modules.get("pandas")
+    np = sys.modules.get("numpy")
+    return (isinstance(obj, (dict, list, tuple))
+            or (pd is not None and isinstance(obj, (pd.DataFrame, pd.Series)))
+            or (np is not None and isinstance(obj, np.ndarray))
+            or (getattr(type(obj), "__module__", "") or "").startswith("sklearn."))
+
+def _emit_plain_result(obj):
     try:
         r = repr(obj)
     except Exception as e:
@@ -1564,6 +1565,8 @@ def main():
                     globals()["_dark_appearance"] = msg["appearance"] == "dark"
                 if isinstance(msg.get("adapt_plot_theme"), bool):
                     globals()["_adapt_plot_theme"] = msg["adapt_plot_theme"]
+                if isinstance(msg.get("enhanced_data_outputs"), bool):
+                    globals()["_enhanced_data_outputs"] = msg["enhanced_data_outputs"]
             elif op == "shutdown":
                 break
         except Exception:

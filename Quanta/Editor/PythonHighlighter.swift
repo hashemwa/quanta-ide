@@ -28,7 +28,7 @@ enum PythonHighlighter {
         let kind: Kind
     }
 
-    static func highlight(_ storage: NSTextStorage) {
+    static func highlight(_ storage: NSTextStorage, tokens: [Token]? = nil) {
         let full = NSRange(location: 0, length: storage.length)
         let font = EditorTheme.font
         var ranges: [NSRange] = []
@@ -37,18 +37,18 @@ enum PythonHighlighter {
         }
         storage.beginEditing()
         for range in ranges { storage.addAttribute(.font, value: font, range: range) }
-        applyColors(to: storage)
+        applyColors(to: storage, tokens: tokens)
         storage.endEditing()
     }
 
-    static func highlight(_ storage: NSTextStorage, editedRange: NSRange) {
-        applyColors(to: storage)
+    static func highlight(_ storage: NSTextStorage, editedRange: NSRange, tokens: [Token]? = nil) {
+        applyColors(to: storage, tokens: tokens)
     }
 
-    private static func applyColors(to storage: NSTextStorage) {
+    static func applyColors(to storage: NSTextStorage, tokens: [Token]? = nil) {
         let full = NSRange(location: 0, length: storage.length)
         let desired = NSMutableAttributedString(string: storage.string, attributes: [.foregroundColor: EditorTheme.text])
-        for token in tokens(storage.string) {
+        for token in tokens ?? self.tokens(storage.string) {
             desired.addAttribute(.foregroundColor, value: color(token.kind), range: token.range)
         }
         var changes: [(NSRange, NSColor)] = []
@@ -76,10 +76,10 @@ enum PythonHighlighter {
         }
     }
 
-    static func allowsCompletion(in source: String, at offset: Int) -> Bool {
+    static func allowsCompletion(in source: String, at offset: Int, tokens: [Token]? = nil) -> Bool {
         guard offset > 0, offset <= source.utf16.count else { return false }
         let ns = source as NSString
-        return !tokens(source).contains {
+        return !(tokens ?? self.tokens(source)).contains {
             guard $0.kind == .comment || $0.kind == .string || $0.kind == .number else { return false }
             if offset > $0.range.location && offset < NSMaxRange($0.range) { return true }
             guard offset == NSMaxRange($0.range) else { return false }
@@ -102,6 +102,7 @@ enum PythonHighlighter {
         let chars: [UInt16]
         var result: [Token] = []
         var i = 0
+        var currentLineEnd = -1
         var count: Int { chars.count }
 
         init(_ source: String) { self.source = source; text = source as NSString; chars = Array(source.utf16) }
@@ -122,8 +123,10 @@ enum PythonHighlighter {
             return true
         }
         func lineEnd(_ start: Int) -> Int {
+            if start <= currentLineEnd { return currentLineEnd }
             var end = start
             while end < count, chars[end] != 10, chars[end] != 13 { end += 1 }
+            currentLineEnd = end
             return end
         }
         func softKeyword(_ value: String, _ start: Int) -> Bool {

@@ -75,6 +75,73 @@ final class PythonLexicalContextTests: XCTestCase {
         }
     }
 
+    func testDenseNumericLinesKeepCorrectRangesAcrossLineEndingsAndInterpolation() {
+        let values = (0..<2_000).map { String($0) }
+        let source = "values = [" + values.joined(separator: ", ")
+            + "]\r\nmatch value:\r    case 0x_FF:\n        print(f'🙂 {1.e-3j + .25}')\ntext = '''123\n456'''"
+        let numbers = PythonHighlighter.tokens(source).filter { $0.kind == .number }
+            .map { (source as NSString).substring(with: $0.range) }
+        XCTAssertEqual(numbers, values + ["0x_FF", "1.e-3j", ".25"])
+        XCTAssertEqual(kind(source, "match value"), .keyword)
+        XCTAssertEqual(kind(source, "case 0x"), .keyword)
+        XCTAssertEqual(kind(source, "'''123"), .string)
+    }
+
+    func testScriptSyntaxStaysCorrectAfterEditsUndoAndReplacingSource() throws {
+        let original = "value = 'text'\nprint(1)"
+        let document = Document(script: nil, text: original)
+        let canvas = ScriptCanvas(document: document)
+        let scroll = try XCTUnwrap(canvas.view as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? QuantaTextView)
+        let quote = (original as NSString).range(of: "'", options: .backwards)
+        editor.insertText("", replacementRange: quote)
+        assertEditorColors(editor)
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.string, original)
+        assertEditorColors(editor)
+        document.text = "text = '''🙂\nprint(2)'''\nreturn 3"
+        canvas.update(document: document, showsLineNumbers: true, wrapsLines: true)
+        assertEditorColors(editor)
+        document.text = original
+        canvas.update(document: document, showsLineNumbers: true, wrapsLines: true)
+        assertEditorColors(editor)
+    }
+
+    func testUnicodeEquivalentScriptEditsKeepExactSourceRangesAndRejectStaleFormatting() throws {
+        let composed = "value = 'café'\nprint(1)"
+        let decomposed = "value = 'cafe\u{301}'\nprint(1)"
+        XCTAssertEqual(composed, decomposed)
+        XCTAssertNotEqual(composed.utf16.count, decomposed.utf16.count)
+        let document = Document(script: nil, text: composed)
+        let canvas = ScriptCanvas(document: document)
+        let scroll = try XCTUnwrap(canvas.view as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? QuantaTextView)
+        editor.insertText(decomposed, replacementRange: NSRange(location: 0, length: composed.utf16.count))
+        XCTAssertTrue(document.text.utf16.elementsEqual(decomposed.utf16))
+        assertEditorColors(editor)
+        XCTAssertFalse(editor.applyPythonFormatting(original: composed, formatted: "value = 2"))
+        XCTAssertTrue(editor.string.utf16.elementsEqual(decomposed.utf16))
+        editor.undoManager?.undo()
+        XCTAssertTrue(editor.string.utf16.elementsEqual(composed.utf16))
+        assertEditorColors(editor)
+        for source in [decomposed, composed] {
+            document.text = source
+            canvas.update(document: document, showsLineNumbers: true, wrapsLines: true)
+            XCTAssertTrue(editor.string.utf16.elementsEqual(source.utf16))
+            assertEditorColors(editor)
+        }
+    }
+
+    private func assertEditorColors(_ editor: QuantaTextView, file: StaticString = #filePath, line: UInt = #line) {
+        let expected = NSTextStorage(string: editor.string)
+        PythonHighlighter.highlight(expected)
+        for offset in 0..<expected.length {
+            XCTAssertEqual(editor.textStorage?.attribute(.foregroundColor, at: offset, effectiveRange: nil) as? NSColor,
+                           expected.attribute(.foregroundColor, at: offset, effectiveRange: nil) as? NSColor,
+                           "Incorrect syntax after source change at \(offset)", file: file, line: line)
+        }
+    }
+
 }
 
 @MainActor

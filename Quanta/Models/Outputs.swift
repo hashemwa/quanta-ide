@@ -58,6 +58,7 @@ struct TraceFrame: Identifiable {
 }
 
 struct NDArrayPayload {
+    let contentVersion = UUID()
     let shape: [Int]
     let dtype: String
     let stats: [String: Double]

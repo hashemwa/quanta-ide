@@ -73,9 +73,9 @@ final class NotebookMarkdownRegressionTests: XCTestCase {
 
     func testCodeFenceRequiresTheMatchingCharacterAndLength() {
         XCTAssertEqual(MarkdownView.parse("````python\n```\n$x$\n`````\nAfter"),
-                       [.code("```\n$x$"), .paragraph("After")])
+                       [.fencedCode(language: "python", source: "```\n$x$"), .paragraph("After")])
         XCTAssertEqual(MarkdownView.parse("~~~python\n```\n$$x$$\n~~~\nAfter"),
-                       [.code("```\n$$x$$"), .paragraph("After")])
+                       [.fencedCode(language: "python", source: "```\n$$x$$"), .paragraph("After")])
         XCTAssertEqual(MarkdownView.parse("```\n``` not a closing fence\n```"),
                        [.code("``` not a closing fence")])
     }

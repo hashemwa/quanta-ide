@@ -4,6 +4,10 @@ import Foundation
 struct PythonSourceInput: Codable, Equatable, Sendable {
     let id: UUID
     let source: String
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id && EditorTextRange.isSameText(lhs.source, rhs.source)
+    }
 }
 
 struct PythonDiagnostic: Identifiable, Codable, Hashable, Sendable {

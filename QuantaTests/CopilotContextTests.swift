@@ -66,7 +66,7 @@ final class CopilotContextTests: XCTestCase {
         XCTAssertNil(CopilotDocumentSnapshot(document: document, sourceID: active.id,
                                              source: String(repeating: "a", count: CopilotDocumentSnapshot.contextLimit + 1), caret: 0))
         active.cellType = .markdown
-        XCTAssertNil(CopilotDocumentSnapshot(document: document, sourceID: active.id, source: "print", caret: 5))
+        XCTAssertEqual(CopilotDocumentSnapshot(document: document, sourceID: active.id, source: "print", caret: 5)?.languageID, "markdown")
     }
 
     func testCompletionUsesCellLineEndings() throws {

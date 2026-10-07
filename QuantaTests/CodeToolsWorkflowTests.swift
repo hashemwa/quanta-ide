@@ -77,9 +77,13 @@ final class CodeToolsWorkflowTests: XCTestCase {
         state.configure(document: document, python: "/usr/bin/python3", directory: nil, enabled: true)
         try await waitUntil { state.hasChecked }
         XCTAssertEqual(state.diagnostics.first?.sourceID, document.id)
-        document.text = "values = [1, 2]\n"
-        try await waitUntil { state.checkedSources[document.id] == document.text }
-        XCTAssertTrue(state.diagnostics.isEmpty)
+        for source in ["values = [1, 2]\n", "value = 'café'\n", "value = 'cafe\u{301}'\n"] {
+            document.text = source
+            try await waitUntil {
+                state.checkedSources[document.id].map { $0.utf16.elementsEqual(source.utf16) } == true
+            }
+            XCTAssertTrue(state.diagnostics.isEmpty)
+        }
     }
 
     func testNotebookReplacementAndCellTypeChangesAreObserved() async throws {
@@ -111,17 +115,22 @@ final class CodeToolsWorkflowTests: XCTestCase {
     }
 
     func testFormattingRejectsCodeEditedWhileFormatterRuns() async throws {
-        let document = Document(script: nil, text: "values=[1,2]")
-        let state = document.codeTools
-        defer { state.cancel() }
-        state.configure(document: document, python: try interpreter(), directory: nil, enabled: true)
-        var applied = false
-        state.format(sourceID: document.id) { _, _ in applied = true; return true }
-        document.text = "values=[3,4]"
-        try await waitUntil { !state.isFormatting }
-        XCTAssertFalse(applied)
-        XCTAssertEqual(document.text, "values=[3,4]")
-        XCTAssertTrue(state.notice?.contains("changed while formatting") == true)
+        let python = try interpreter()
+        let composed = "value = 'café'"
+        let decomposed = "value = 'cafe\u{301}'"
+        for (original, edited) in [("values=[1,2]", "values=[3,4]"), (composed, decomposed), (decomposed, composed)] {
+            let document = Document(script: nil, text: original)
+            let state = document.codeTools
+            defer { state.cancel() }
+            state.configure(document: document, python: python, directory: nil, enabled: true)
+            var applied = false
+            state.format(sourceID: document.id) { _, _ in applied = true; return true }
+            document.text = edited
+            try await waitUntil { !state.isFormatting }
+            XCTAssertFalse(applied)
+            XCTAssertTrue(document.text.utf16.elementsEqual(edited.utf16))
+            XCTAssertTrue(state.notice?.contains("changed while formatting") == true)
+        }
     }
 
     func testFormattingIsUndoableAndRejectsStaleEditorText() throws {

@@ -120,6 +120,62 @@ class InspectionTests(unittest.TestCase):
 
 
 class RichOutputTests(unittest.TestCase):
+    def test_plain_output_preference_switches_collections_without_losing_variables(self):
+        messages = exchange([
+            {"id": "enhanced", "op": "execute", "code": "values = {'items': list(range(60))}\nidentity = id(values)\nvalues"},
+            {"op": "config", "enhanced_data_outputs": False},
+            {"id": "plain", "op": "execute", "code": "display(values)\nvalues"},
+            {"op": "config", "enhanced_data_outputs": True},
+            {"id": "restored", "op": "execute", "code": "assert id(values) == identity\nvalues"},
+        ])
+        self.assertTrue(any(m.get("id") == "enhanced" and m.get("type") == "jsontree" for m in messages))
+        plain = [m for m in messages if m.get("id") == "plain" and m.get("type") == "result"]
+        self.assertEqual(len(plain), 2)
+        self.assertEqual(plain[0]["output_type"], "display_data")
+        self.assertEqual(plain[1]["output_type"], "execute_result")
+        self.assertIn("'items': [0, 1, 2", plain[0]["text"])
+        self.assertTrue(any(m.get("id") == "restored" and m.get("type") == "jsontree" for m in messages))
+
+    def test_plain_output_preference_keeps_explicit_html_rendering(self):
+        messages = exchange([
+            {"op": "config", "enhanced_data_outputs": False},
+            {"id": "html", "op": "execute", "code": "class Rich:\n    def _repr_html_(self):\n        return '<b>Formatted display</b>'\ndisplay(Rich())"},
+        ])
+        rich = next(m for m in messages if m.get("type") == "rich")
+        self.assertEqual(rich["mime_bundle"]["text/html"], "<b>Formatted display</b>")
+        self.assertEqual(rich["output_type"], "display_data")
+
+    def test_plain_model_result_does_not_inspect_parameters(self):
+        code = "class Model:\n    __module__ = 'sklearn.test'\n    def get_params(self):\n        raise AssertionError('parameter introspection should be skipped')\n    def __repr__(self):\n        return 'Model(alpha=0.5)'\nModel()"
+        messages = exchange([{"op": "config", "enhanced_data_outputs": False}, {"id": "model", "op": "execute", "code": code}])
+        self.assertFalse(any(m.get("type") == "error" for m in messages))
+        self.assertEqual(next(m["text"] for m in messages if m.get("type") == "result"), "Model(alpha=0.5)")
+
+    def test_plain_array_result_skips_statistical_preview_work(self):
+        try:
+            import numpy
+        except ImportError:
+            self.skipTest("numpy is not installed")
+        code = "import numpy as np\nvalues = np.arange(1000000)\ndef unavailable(*args, **kwargs):\n    raise AssertionError('preview statistics should be skipped')\nnp.nanmin = unavailable\nvalues"
+        messages = exchange([{"op": "config", "enhanced_data_outputs": False}, {"id": "array", "op": "execute", "code": code}])
+        self.assertFalse(any(m.get("type") in ("error", "ndarray") for m in messages))
+        self.assertIn("array([", next(m["text"] for m in messages if m.get("type") == "result"))
+
+    def test_plain_dataframe_result_does_not_emit_custom_table(self):
+        try:
+            import pandas
+        except ImportError:
+            self.skipTest("pandas is not installed")
+        messages = exchange([
+            {"op": "config", "enhanced_data_outputs": False},
+            {"id": "plain", "op": "execute", "code": "import pandas as pd\nframe = pd.DataFrame({'reading': [10, 20]})\nframe"},
+            {"op": "config", "enhanced_data_outputs": True},
+            {"id": "enhanced", "op": "execute", "code": "frame"},
+        ])
+        plain = next(m for m in messages if m.get("id") == "plain" and m.get("type") == "result")
+        self.assertIn("reading", plain["text"])
+        self.assertTrue(any(m.get("id") == "enhanced" and m.get("type") == "dataframe" for m in messages))
+
     def test_mime_bundle_and_metadata_are_preserved(self):
         messages = exchange([{"id": "rich", "op": "execute", "code": "class Rich:\n    def _repr_mimebundle_(self):\n        return ({'text/html': '<b>hello</b>', 'application/json': {'x': [1, 2]}, 'application/vnd.example+json': {'keep': True}}, {'text/html': {'isolated': True}})\nRich()"}])
         result = next(m for m in messages if m.get("type") == "rich")

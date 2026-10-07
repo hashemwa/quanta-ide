@@ -30,7 +30,8 @@ enum RichOutput {
             if let data = Data(base64Encoded: text(bundle[mime]), options: .ignoreUnknownCharacters),
                let image = NSImage(data: data) { return .image(data: data, image: image) }
         }
-        if bundle["text/html"] != nil || bundle["image/svg+xml"] != nil { return .rich(bundle) }
+        if bundle["text/html"] != nil || bundle["image/svg+xml"] != nil
+            || bundle["text/latex"] != nil || bundle["text/markdown"] != nil { return .rich(bundle) }
         if let json = bundle["application/json"] {
             return .jsonTree(JSONTreePayload(value: json, summary: "JSON", text: text(bundle["text/plain"])))
         }
@@ -102,12 +103,39 @@ enum RichOutput {
                 return "<img alt=\"Image output\" src=\"data:\(mime);base64,\(bytes.base64EncodedString())\">"
             }
         }
+        if let rendered = renderedTextHTML(bundle) { return rendered }
         if let json = bundle["application/json"],
            let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys, .fragmentsAllowed]),
            let text = String(data: data, encoding: .utf8) { return "<pre>\(escape(text))</pre>" }
         let fallback = bundle["text/plain"].map { text($0) }
             ?? "Unsupported rich output: " + bundle.keys.sorted().joined(separator: ", ")
         return "<pre>\(escape(fallback))</pre>"
+    }
+
+    static func latexExpression(_ value: Any?) -> String {
+        let source = text(value).trimmingCharacters(in: .whitespacesAndNewlines)
+        for (opening, closing) in [("$$", "$$"), (#"\["#, #"\]"#), (#"\("#, #"\)"#), ("$", "$")] {
+            if source.hasPrefix(opening), source.hasSuffix(closing), source.count >= opening.count + closing.count {
+                return String(source.dropFirst(opening.count).dropLast(closing.count))
+            }
+        }
+        return source
+    }
+
+    static func renderedTextHTML(_ bundle: [String: Any], baseDirectory: URL? = nil) -> String? {
+        switch renderedTextMIME(bundle) {
+        case "text/latex": NotebookMath.html(latexExpression(bundle["text/latex"]), display: true)
+        case "text/markdown": NotebookExporter.markdownToHTML(text(bundle["text/markdown"]), baseDirectory: baseDirectory)
+        default: nil
+        }
+    }
+
+    static func renderedTextMIME(_ bundle: [String: Any]) -> String? {
+        guard bundle["text/html"] == nil, bundle["image/svg+xml"] == nil,
+              !["image/png", "image/jpeg", "image/gif", "image/webp", plotlyMIME].contains(where: { bundle[$0] != nil }) else { return nil }
+        if bundle["text/latex"] != nil { return "text/latex" }
+        if bundle["text/markdown"] != nil { return "text/markdown" }
+        return nil
     }
 
     static func safeDocument(_ body: String) -> String {
