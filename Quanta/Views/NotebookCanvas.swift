@@ -38,6 +38,7 @@ final class NotebookCanvas: DocumentCanvas {
     private var dirtyCellIDs: Set<UUID> = []
     private var measuredWidth: CGFloat = 0
     private var measuredViewportWidth: CGFloat = 0
+    private var measuredViewportHeight: CGFloat = 0
     private var layoutPending = false
     private var prefetchPending = false
     private var viewportUpdatePending = false
@@ -56,7 +57,7 @@ final class NotebookCanvas: DocumentCanvas {
     private var boundsObserver: NSObjectProtocol?
     private var outputPresentationCancellable: AnyCancellable?
     private var toolbarPositionPending = false
-    private var lastWidthChange: TimeInterval = 0
+    private var lastViewportChange: TimeInterval = 0
     private var addCellHeightCache: (key: AddCellHeightKey, height: CGFloat)?
     private var resizeSettle: DispatchWorkItem?
 
@@ -236,8 +237,12 @@ final class NotebookCanvas: DocumentCanvas {
         let structureChanged = needsReset || needsSync
         if needsReset { reset(width: width) }
         if needsSync { syncCells() }
+        if measuredWidth > 0, abs(size.width - measuredViewportWidth) > 0.5
+            || abs(size.height - measuredViewportHeight) > 0.5 {
+            noteViewportChange()
+        }
+        measuredViewportHeight = size.height
         if abs(width - measuredWidth) > 0.5 {
-            if measuredWidth > 0 { noteWidthChange() }
             measuredWidth = width
             measuredViewportWidth = size.width
             heights = heights.filter { views[$0.key] != nil }
@@ -254,11 +259,11 @@ final class NotebookCanvas: DocumentCanvas {
 
     private var isResizing: Bool {
         scrollView?.inLiveResize == true
-            || ProcessInfo.processInfo.systemUptime - lastWidthChange < Self.resizeSettleDelay
+            || ProcessInfo.processInfo.systemUptime - lastViewportChange < Self.resizeSettleDelay
     }
 
-    private func noteWidthChange() {
-        lastWidthChange = ProcessInfo.processInfo.systemUptime
+    private func noteViewportChange() {
+        lastViewportChange = ProcessInfo.processInfo.systemUptime
         guard resizeSettle == nil else { return }
         scheduleResizeSettle()
     }
@@ -424,7 +429,7 @@ final class NotebookCanvas: DocumentCanvas {
     private func realizeCellsForScroll() {
         guard !isLayingOut, !viewportUpdatePending, measuredWidth > 0, let scrollView, !offsets.isEmpty else { return }
         let visible = scrollView.contentView.bounds
-        let margin = visible.height * Self.realizedViewports
+        let margin = isResizing ? 0 : visible.height * Self.realizedViewports
         guard let range = indices(from: visible.minY - margin, to: visible.maxY + margin),
               range.contains(where: { views[cellIDs[$0]] == nil }) else { return }
         layoutCells()
