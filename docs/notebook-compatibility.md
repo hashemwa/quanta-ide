@@ -22,12 +22,14 @@ standard-library bridge. It does not run an IPython or Jupyter kernel.
 | Interactive Jupyter widgets | Not supported by the current bridge. |
 | Imported rich output dictionaries | Preserved on save, even when Quanta cannot display a representation. |
 | HTML, SVG, JPEG and JSON | MIME bundles survive save/reopen. HTML and SVG use a script-disabled renderer; remote resources and navigation are blocked. |
+| LaTeX and Markdown rich outputs | `text/latex` and `text/markdown` render natively and survive save/reopen. Markdown output images resolve relative to the notebook folder and are embedded in HTML/PDF exports. `_repr_latex_()` and `_repr_markdown_()` work without matplotlib. Higher-priority HTML, images, SVG, and Plotly representations retain precedence. |
 | DataFrames | Save an HTML table preview, text fallback, and a native snapshot. Reopened snapshots do not query a variable in the current kernel. |
 | Plotly | Save structured Plotly JSON plus an available PNG fallback. Reopen interactively using a bundled offline renderer. |
-| Arrays, JSON trees and model cards | Save structured snapshots and text fallbacks; array/card snapshots retain their native views. |
+| Arrays, JSON trees and model cards | Save structured snapshots and text fallbacks; array/card snapshots retain their native views. HTML/PDF exports include array statistics and sparklines/heatmaps, and model-card badges and fields. Expanded JSON containers preview at most 300 children; saved data and exports retain the full saved representation. |
+| Enhanced/text data output choice | Settings → General → Notebook Outputs defaults to enhanced views. Turning it off immediately shows saved data outputs as text and makes new Python data results skip custom previews. HTML/PDF use this choice. Switching back restores saved previews; text-only results need rerunning to create previews. Images, plots, HTML and equations retain their formatting. |
 | Markdown previews | Native text wraps to the cell width. Basic HTML formatting, character entities and text alignment are supported; arbitrary HTML attributes and scripts are not. `$...$`, `$$...$$`, `\(...\)` and `\[...\]` equations use the bundled offline MathML renderer without a Python kernel. Inline equations also render in headings and tables. Code spans and fenced code keep math literal; table parsing preserves escaped pipes and pipes inside code or equations. Tables require a Markdown separator row. |
-| HTML export | Markdown tables, offline MathML equations, full text outputs, and sanitized rich HTML. SVG/JPEG images are embedded. Plotly embeds an offline renderer in an isolated frame and can substantially increase file size. |
-| PDF export | Paginated US Letter pages with margins, wrapped code/text, tables, equations, embedded images, and rendered Plotly figures. Figures finish rendering before capture; exports are limited to 500 pages and 35 seconds. |
+| HTML export | Markdown tables, offline MathML equations, syntax-colored Python cells/fences, ANSI-colored streams, full saved text outputs, structured array/model cards, and sanitized rich HTML. SVG/JPEG images are embedded. Plotly embeds an offline renderer in an isolated frame and can substantially increase file size. |
+| PDF export | Paginated US Letter pages with margins, wrapped code/text, syntax colors, tables, equations, embedded images, and rendered Plotly figures. Table headings repeat on continuation pages. Wide display equations scale to the page. Output cards stay together when they fit on a page. Figures finish rendering before capture; exports are limited to 500 pages and 35 seconds. |
 
 Recognized unsupported commands fail the entire cell before any Python statements in
 it execute. Subsequent cells can still run. Text inside Python strings is preserved,
@@ -51,16 +53,38 @@ Printed output is batched in bounded chunks and flushed while execution continue
 Explicit flushes, transitions between stdout and stderr, and subsequent results or
 errors flush preceding text. The existing per-execution output cap still applies.
 The stream flusher sleeps when no text is pending.
+ANSI foreground colors and bold text survive save/reopen and HTML/PDF export,
+including 256-color and RGB foreground sequences. ANSI backgrounds and other
+terminal effects are not reproduced. Very large text results have a bounded native
+preview; copying and exporting retain their full saved text.
 
 Markdown remains a custom subset rather than a complete CommonMark implementation.
 Nested lists, ordered lists, and block quotes need further work. Unsupported TeX is
 shown as an error or source fallback. Editing equations or changing appearance
 invalidates their old render requests; transient renderer failures can be retried.
+The shared renderer supports `\mbox{...}` through a `\text{...}` compatibility macro
+and recognizes `displaymath` as an unnumbered equation. Display blocks preserve
+line breaks so TeX `%` comments cannot swallow the following line. Backslash math
+delimiters allow surrounding whitespace; single-dollar delimiters keep their
+currency heuristics. Common bare display environments are recognized, wide display
+equations scroll horizontally, and Python fences have syntax colors.
+Comments after a display environment's closing line leave the next paragraph
+separate. Windows line endings are supported in Markdown fences, equations, and
+tables; Python fence metadata does not disable edit-mode syntax colors.
+This is KaTeX math rather than a full LaTeX document engine: cross-equation
+`\label`/`\eqref`, `multline`, TikZ, external packages, and macro definitions shared
+between separate equations remain unsupported. Very large native equations
+exceeding the renderer's bounds fall back to visible source.
 
 Rich output is a saved presentation, not a full dataset backup. DataFrames retain the
 bounded rows/columns shown in their preview; array and JSON-tree snapshots retain the
 bridge's existing size/depth limits. Unknown imported MIME types remain intact. Generic
 HTML scripts and Jupyter widget communication are not enabled by workspace trust.
+
+Array previews identify sampled/relative values and expose saved text. Large JSON
+roots start collapsed. Model cards show 12 parameters initially; expanding shows
+up to 300, while saved fields remain intact for export. Model badges identify learned
+attribute names rather than certifying that fitting completed successfully.
 
 New DataFrame snapshots also retain original string representations for copying,
 separately from shortened display previews. These are bounded to 1 MB per value and

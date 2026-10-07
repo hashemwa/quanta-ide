@@ -34,6 +34,17 @@ Contrast checks use the actual native script background and notebook code well, 
 as a readability benchmark. Highlighting remains lexical: member names and pandas/NumPy
 attributes are not resolved through a project type-analysis service.
 
+Markdown notebook cells use their own edit-mode coloring for headings, list markers,
+emphasis, links, inline code, equations, and TeX commands. Python fenced blocks use
+Python syntax colors, including fences with additional metadata and Windows line
+endings. Markdown editing does not show Python completion menus,
+Python documentation, or Python's colon-triggered indentation. Raw cells remain
+plain text.
+
+Source synchronization and cached highlight ranges use exact character sequences,
+so Unicode edits that look identical still save correctly and invalidate old
+formatting and completion replies.
+
 ## GitHub Copilot
 
 Click the floating Copilot icon at the bottom-right of the editor, choose **Sign in with GitHub**, then **Copy Code
@@ -41,10 +52,10 @@ and Open GitHub**. Paste the one-time code into GitHub and authorize your accoun
 Suggestions turn on after GitHub confirms Copilot access. The same controls are in the
 **Copilot** menu and the command palette.
 
-Suggestions appear as faint text at the end of a code line. **Tab** accepts a visible
+Suggestions appear as faint text at the end of a code or Markdown line. **Tab** accepts a visible
 suggestion as one undoable edit; **Escape** dismisses it. Normal completion menus and
 snippet navigation retain priority. Multiline suggestions appear at the end of a script
-or code cell, with up to eight lines; notebook cells temporarily expand to show them.
+or editable code/Markdown cell, with up to eight lines; notebook cells temporarily expand to show them.
 Previews that would cover existing code or cannot fit visibly are withheld. Previews do
 not change source, saved notebook contents, execution input, or undo history.
 
@@ -55,8 +66,10 @@ stops sending code. Untrusted workspaces cannot request suggestions. **Sign Out*
 the helper's Quanta account connection.
 
 Copilot is an optional cloud service: code context is sent to GitHub for suggestions.
-Notebook context includes bounded neighboring code cells; Markdown cells and execution
-outputs are not included in Quanta's document synchronization. The first sign-in downloads
+Code-cell context includes bounded neighboring code cells. For a Markdown cell,
+Quanta synchronizes only the active cell as a virtual Markdown document; neighboring
+cells and execution outputs are excluded. Raw cells cannot request suggestions.
+The first sign-in downloads
 GitHub's official Apple Silicon language server. No Node.js or Python package install is
 needed. The version is pinned and its download is checked against GitHub's SHA-256 digest.
 The helper and its separate account profile live under

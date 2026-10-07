@@ -1,4 +1,51 @@
-# Quality audit — October 5, 2026
+# Quality audit — October 5–7, 2026
+
+## October 7 staged-change review
+
+Reviewed the complete staged source, tests, tooling, and documentation. The review
+added these corrections:
+
+- Exact source comparisons preserve Unicode edits that look identical but use
+  different characters. Highlight caches cannot reuse ranges from a different
+  representation, saved scripts and cells retain the edit, old output becomes
+  stale, and formatting/completion replies cannot apply to the wrong source.
+- Windows line endings no longer keep Markdown fences, equations, or tables open.
+  Comments after a TeX environment's closing line no longer absorb following
+  paragraphs. Python fences with additional metadata retain their edit colors.
+- Markdown rich outputs resolve local images relative to the notebook in both
+  native preview and HTML/PDF export. Printed Markdown code fences no longer
+  inherit the extra indentation reserved for code-cell prompts.
+- Export reuses the array heatmap cache and generates static rich HTML once.
+  The variables list retains its native local selection binding while mirroring
+  persistent inspector selection in both directions.
+- The Release test command enables testability only for test builds, fixing its
+  previously failing test-module import without changing normal Release builds.
+
+Verification: all 400 native tests passed in Release with no recorded runtime
+warnings; the regular Release build passed. Both Python suites passed (58 tests,
+including five skips for optional packages). Regression checks include native
+editor changes and undo, saved Unicode source, inspector selection after resize,
+relative-image snapshots, and PDF code placement.
+
+This review does not resolve the previously recorded native window-resize hitches
+or missing SwiftUI instrument events. KaTeX remains a math renderer rather than a
+complete LaTeX document compiler; the limits in
+[notebook compatibility](notebook-compatibility.md) still apply.
+
+## Earlier audit history
+
+The later [October 6 notebook and app audit](notebook-audit-2026-10-06.md) records
+Markdown editing, Copilot Markdown support, export layout, navigation, and
+performance fixes, with current verification and remaining limitations.
+The subsequent [interaction and output polish](interaction-polish-2026-10-06.md)
+covers retained panels, keyboard focus, layout caching, and the enhanced/text output setting.
+The [panel layout repair](panel-layout-repair-2026-10-06.md) records the user's
+subsequent regression report and reverts panel retention. The later
+[performance research](performance-research-2026-10-06.md) restores animations and
+records a measured Python lexer improvement and remaining profiling targets.
+The [user-supplied Instruments trace audit](instruments-trace-audit-2026-10-06.md)
+identifies Release-build resize-associated frame hitches and their layout-heavy
+CPU stacks.
 
 This pass reviewed execution, output transport, native notebook rendering, Markdown
 and LaTeX, existing editor and data tooling, and readiness for daily data science work.
