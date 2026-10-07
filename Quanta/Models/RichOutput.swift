@@ -17,10 +17,9 @@ enum RichOutput {
             payload.removeValue(forKey: "name")
             if let frame = DataFramePayload(dict: payload) { return .dataFrame(frame) }
         }
-        if let payload = bundle["application/vnd.quanta.ndarray+json"] as? [String: Any],
-           let array = NDArrayPayload(dict: payload) { return .ndarray(array) }
-        if let payload = bundle["application/vnd.quanta.objectcard+json"] as? [String: Any],
-           let card = ObjectCardPayload(dict: payload) { return .objectCard(card) }
+        if retiredTextMIMEs.contains(where: { bundle[$0] != nil }) {
+            return .executeResult(text: text(bundle["text/plain"]).strippingANSI)
+        }
         if let figure = bundle[plotlyMIME] as? [String: Any], let html = plotlyHTML(figure),
            let js = bundledPlotlyPath {
             let png = Data(base64Encoded: text(bundle["image/png"]), options: .ignoreUnknownCharacters) ?? Data()
@@ -32,11 +31,20 @@ enum RichOutput {
         }
         if bundle["text/html"] != nil || bundle["image/svg+xml"] != nil
             || bundle["text/latex"] != nil || bundle["text/markdown"] != nil { return .rich(bundle) }
-        if let json = bundle["application/json"] {
-            return .jsonTree(JSONTreePayload(value: json, summary: "JSON", text: text(bundle["text/plain"])))
+        if let json = bundle["application/json"], let formatted = formattedJSON(json) {
+            return .executeResult(text: formatted)
         }
         if bundle["text/plain"] != nil { return .executeResult(text: text(bundle["text/plain"]).strippingANSI) }
         return .unsupported(mime: bundle.keys.sorted().first ?? "empty")
+    }
+
+    static let retiredTextMIMEs = ["application/vnd.quanta.ndarray+json", "application/vnd.quanta.objectcard+json"]
+
+    static func formattedJSON(_ value: Any) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: value,
+                                                     options: [.prettyPrinted, .sortedKeys, .fragmentsAllowed, .withoutEscapingSlashes])
+        else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     static var bundledPlotlyPath: String? {
@@ -87,7 +95,6 @@ enum RichOutput {
         switch output.kind {
         case .rich(let bundle): return bundle
         case .dataFrame(let frame): return ["text/html": tableHTML(frame), "text/plain": frame.text]
-        case .jsonTree(let tree): return ["application/json": tree.value, "text/plain": tree.text]
         default: return nil
         }
     }
@@ -104,29 +111,48 @@ enum RichOutput {
             }
         }
         if let rendered = renderedTextHTML(bundle) { return rendered }
-        if let json = bundle["application/json"],
-           let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys, .fragmentsAllowed]),
-           let text = String(data: data, encoding: .utf8) { return "<pre>\(escape(text))</pre>" }
+        if let json = bundle["application/json"], let text = formattedJSON(json) { return "<pre>\(escape(text))</pre>" }
         let fallback = bundle["text/plain"].map { text($0) }
             ?? "Unsupported rich output: " + bundle.keys.sorted().joined(separator: ", ")
         return "<pre>\(escape(fallback))</pre>"
     }
 
-    static func latexExpression(_ value: Any?) -> String {
+    static func latexMath(_ value: Any?) -> String? {
         let source = text(value).trimmingCharacters(in: .whitespacesAndNewlines)
         for (opening, closing) in [("$$", "$$"), (#"\["#, #"\]"#), (#"\("#, #"\)"#), ("$", "$")] {
             if source.hasPrefix(opening), source.hasSuffix(closing), source.count >= opening.count + closing.count {
-                return String(source.dropFirst(opening.count).dropLast(closing.count))
+                let inner = String(source.dropFirst(opening.count).dropLast(closing.count))
+                return containsDollar(inner) ? nil : inner
             }
         }
-        return source
+        return containsDollar(source) ? nil : source
+    }
+
+    private static func containsDollar(_ text: String) -> Bool {
+        var escaped = false
+        for character in text {
+            if escaped {
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "$" {
+                return true
+            }
+        }
+        return false
     }
 
     static func renderedTextHTML(_ bundle: [String: Any], baseDirectory: URL? = nil) -> String? {
         switch renderedTextMIME(bundle) {
-        case "text/latex": NotebookMath.html(latexExpression(bundle["text/latex"]), display: true)
-        case "text/markdown": NotebookExporter.markdownToHTML(text(bundle["text/markdown"]), baseDirectory: baseDirectory)
-        default: nil
+        case "text/latex":
+            guard let math = latexMath(bundle["text/latex"]) else {
+                return NotebookExporter.markdownToHTML(text(bundle["text/latex"]), baseDirectory: baseDirectory)
+            }
+            return NotebookMath.html(math, display: true)
+        case "text/markdown":
+            return NotebookExporter.markdownToHTML(text(bundle["text/markdown"]), baseDirectory: baseDirectory)
+        default:
+            return nil
         }
     }
 

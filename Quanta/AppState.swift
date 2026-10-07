@@ -52,11 +52,6 @@ final class AppState: ObservableObject {
     let console = ConsoleModel()
     let plots = PlotHistory()
     let dataBrowser = DataBrowser()
-    lazy var outputPresentation: OutputPresentation = {
-        let presentation = OutputPresentation()
-        presentation.onChange = { [weak self] in self?.pushAppearance() }
-        return presentation
-    }()
     @Published var kernelStatus: KernelStatus = .stopped
     let selection = CellSelection()
     var selectedCellID: UUID? {
@@ -165,6 +160,9 @@ final class AppState: ObservableObject {
         }
         kernel.onOrphanMessage = { [weak self] message in
             self?.handleOrphan(message)
+        }
+        kernel.onInputRequest = { [weak self] message in
+            self?.presentInputRequest(message)
         }
         configureSourceControl()
     }
@@ -407,13 +405,18 @@ final class AppState: ObservableObject {
     }
 
     func interruptKernel() {
+        cancelPendingRuns()
+        kernel.interrupt()
+    }
+
+    private func cancelPendingRuns() {
+        cancelQueuedCellRuns()
         if let id = runningChainDocumentID,
            let document = openDocuments.first(where: { $0.id == id }) {
             endRunChain(in: document)
         }
         pausedRunDocumentID = nil
         pausedRunCellIDs = []
-        kernel.interrupt()
     }
 
     func selectPython(_ path: String) {
@@ -441,7 +444,44 @@ final class AppState: ObservableObject {
     func pushAppearance() {
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         kernel.notify(["op": "config", "appearance": dark ? "dark" : "light", "adapt_plot_theme": adaptsPlotTheme,
-                       "enhanced_data_outputs": outputPresentation.usesEnhancedDataOutputs])
+                       "input_requests": true])
+    }
+
+    private func presentInputRequest(_ message: [String: Any]) {
+        dismissInputRequest()
+        let prompt = (message["prompt"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let alert = NSAlert()
+        alert.messageText = prompt.isEmpty ? "Python Is Waiting for Input" : prompt
+        alert.informativeText = "The running code called input(). Submit a value to continue, or interrupt it."
+        alert.addButton(withTitle: "Submit")
+        alert.addButton(withTitle: "Interrupt")
+        let field: NSTextField = message["password"] as? Bool == true
+            ? NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+            : NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        inputAlert = alert
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self, self.inputAlert === alert else { return }
+            self.inputAlert = nil
+            if response == .alertFirstButtonReturn {
+                self.kernel.replyToInput(field.stringValue)
+            } else {
+                self.cancelPendingRuns()
+                self.kernel.replyToInput(nil)
+            }
+        }
+        if let window = NSApp.mainWindow ?? NSApp.keyWindow {
+            alert.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(alert.runModal())
+        }
+    }
+
+    private func dismissInputRequest() {
+        guard let alert = inputAlert else { return }
+        inputAlert = nil
+        alert.window.sheetParent?.endSheet(alert.window, returnCode: .abort)
     }
 
     private func clearRunningFlags() {
@@ -451,6 +491,9 @@ final class AppState: ObservableObject {
         runningChainIndex = 0
         pausedRunDocumentID = nil
         pausedRunCellIDs = []
+        cellRunGeneration += 1
+        cellRunInFlight = false
+        cancelQueuedCellRuns()
         for document in openDocuments {
             document.notebook?.cells.forEach {
                 $0.isRunning = false
@@ -461,6 +504,7 @@ final class AppState: ObservableObject {
 
     private func kernelStatusChanged(_ status: KernelStatus) {
         kernelStatus = status
+        if status != .busy { dismissInputRequest() }
         if status == .dead {
             userNotice = "The Python kernel stopped unexpectedly. Restart it from the interpreter menu, then rerun the cells you need."
             clearRunningFlags()
@@ -805,14 +849,20 @@ final class AppState: ObservableObject {
         }
     }
 
+    func saveActiveDocumentAs() {
+        if let document = activeDocument {
+            _ = save(document, choosingLocation: true)
+        }
+    }
+
     @discardableResult
-    func save(_ document: Document, interactive: Bool = true) -> Bool {
+    func save(_ document: Document, interactive: Bool = true, choosingLocation: Bool = false) -> Bool {
         guard document.isFileBacked else { return true }
         var url = document.url
-        if url == nil {
+        if url == nil || choosingLocation {
             let panel = NSSavePanel()
-            panel.directoryURL = workspace?.rootURL
-            panel.nameFieldStringValue = document.displayName
+            panel.directoryURL = document.url?.deletingLastPathComponent() ?? workspace?.rootURL
+            panel.nameFieldStringValue = document.url?.lastPathComponent ?? document.displayName
             let ext = document.kind == .notebook ? "ipynb" : "py"
             if let type = UTType(filenameExtension: ext) {
                 panel.allowedContentTypes = [type]
@@ -821,7 +871,7 @@ final class AppState: ObservableObject {
             url = chosen
         }
         guard let target = url else { return false }
-        if document.url != nil, let known = document.fileModificationDate,
+        if !choosingLocation, document.url != nil, let known = document.fileModificationDate,
            let current = fileModificationDate(of: target), current != known {
             guard interactive, confirmOverwritingChangedFile(document) else { return false }
         }
@@ -973,11 +1023,6 @@ final class AppState: ObservableObject {
                let payload = DataFramePayload(dict: dict) {
                 appendConsoleExecutionOutput(.result, payload.text, runID: plotOrigin.runID)
             }
-        case "ndarray", "jsontree", "objectcard":
-            let text = (message["text"] as? String)
-                ?? ((message["payload"] as? [String: Any])?["text"] as? String)
-                ?? ""
-            appendConsoleExecutionOutput(.result, text, runID: plotOrigin.runID)
         case "rich":
             if let bundle = message["mime_bundle"] as? [String: Any] {
                 appendConsoleExecutionOutput(.result, RichOutput.text(bundle["text/plain"]),
@@ -1011,8 +1056,7 @@ final class AppState: ObservableObject {
     }
 
     private static let executionOutputTypes: Set<String> = [
-        "stream", "result", "display", "rich", "plotlyhtml", "dataframe",
-        "ndarray", "jsontree", "objectcard", "error",
+        "stream", "result", "display", "rich", "plotlyhtml", "dataframe", "error",
     ]
     private var consoleExecutionOutputIDs: [UUID: Set<UUID>] = [:]
     private var pendingConsoleClears: Set<UUID> = []
@@ -1032,6 +1076,13 @@ final class AppState: ObservableObject {
         if let ids = consoleExecutionOutputIDs.removeValue(forKey: runID) {
             console.removeLines(withIDs: ids)
         }
+    }
+
+    private struct QueuedCellRun {
+        weak var cell: NotebookCell?
+        weak var document: Document?
+        let documentID: UUID
+        let completion: ((Bool) -> Void)?
     }
 
     func runCell(_ cell: NotebookCell, in document: Document, advance: Bool,
@@ -1058,6 +1109,26 @@ final class AppState: ObservableObject {
             return
         }
         if document.id == activeDocumentID { selectedCellID = cell.id }
+        if let index = queuedCellRuns.firstIndex(where: { $0.cell === cell }) {
+            let earlier = queuedCellRuns[index]
+            if let completion {
+                queuedCellRuns[index] = QueuedCellRun(cell: cell, document: document, documentID: document.id,
+                                                      completion: { ok in
+                                                          earlier.completion?(ok)
+                                                          completion(ok)
+                                                      })
+            }
+        } else if cellRunInFlight {
+            cell.isQueued = true
+            queuedCellRuns.append(QueuedCellRun(cell: cell, document: document, documentID: document.id,
+                                                completion: completion))
+        } else {
+            startCellRun(cell, in: document, completion: completion)
+        }
+        if advance { advanceSelection(after: cell, in: document) }
+    }
+
+    private func startCellRun(_ cell: NotebookCell, in document: Document, completion: ((Bool) -> Void)?) {
         pendingStreams.removeValue(forKey: cell.id)
         pendingOutputClears.remove(cell.id)
         cell.lastExecutedSource = cell.source
@@ -1069,7 +1140,21 @@ final class AppState: ObservableObject {
         document.isDirty = true
         let plotOrigin = plots.beginRun(document: document, cell: cell)
         let executingCellID = cell.id
-        kernel.execute(code: cell.source) { [weak self, weak cell, weak document] message in
+        let documentID = document.id
+        let generation = cellRunGeneration
+        cellRunInFlight = true
+        let finish: (Bool) -> Void = { [weak self] ok in
+            guard let self else { return }
+            guard generation == self.cellRunGeneration else {
+                completion?(ok)
+                return
+            }
+            self.cellRunInFlight = false
+            if !ok { self.cancelQueuedCellRuns(in: documentID) }
+            completion?(ok)
+            self.startNextQueuedCellRun()
+        }
+        kernel.execute(code: cell.source, notebook: document.url) { [weak self, weak cell, weak document] message in
             guard let self else { return true }
             guard let cell else {
                 let type = message["type"] as? String
@@ -1078,16 +1163,46 @@ final class AppState: ObservableObject {
                     self.pendingStreams.removeValue(forKey: executingCellID)
                     self.pendingOutputClears.remove(executingCellID)
                     self.streamFlushScheduled.remove(executingCellID)
+                    finish(type == "done" && message["status"] as? String == "ok")
                 }
                 return finished
             }
             let finished = self.handleCellExecution(message, cell: cell, document: document,
-                                                    advance: advance, completion: completion)
+                                                    advance: false, completion: finish)
             if ["display", "plotlyhtml", "rich"].contains(message["type"] as? String ?? ""),
                let output = cell.outputs.last {
                 self.plots.record(output, origin: plotOrigin)
             }
             return finished
+        }
+    }
+
+    private func startNextQueuedCellRun() {
+        while !cellRunInFlight, !queuedCellRuns.isEmpty {
+            let run = queuedCellRuns.removeFirst()
+            guard let cell = run.cell, let document = run.document,
+                  openDocuments.contains(where: { $0.id == document.id }) else {
+                run.cell?.isQueued = false
+                run.completion?(false)
+                continue
+            }
+            guard kernel.isRunning, allowExecution() else {
+                cell.isQueued = false
+                run.completion?(false)
+                cancelQueuedCellRuns()
+                return
+            }
+            startCellRun(cell, in: document, completion: run.completion)
+        }
+    }
+
+    private func cancelQueuedCellRuns(in documentID: UUID? = nil) {
+        let cancelled = queuedCellRuns.filter { documentID == nil || $0.documentID == documentID }
+        guard !cancelled.isEmpty else { return }
+        queuedCellRuns.removeAll { documentID == nil || $0.documentID == documentID }
+        for run in cancelled {
+            run.cell?.isQueued = false
+            run.completion?(false)
         }
     }
 
@@ -1144,22 +1259,6 @@ final class AppState: ObservableObject {
             if let dict = message["payload"] as? [String: Any],
                let payload = DataFramePayload(dict: dict) {
                 appendCellOutput(.dataFrame(payload), message: message, cell: cell)
-            }
-        case "ndarray":
-            if let dict = message["payload"] as? [String: Any],
-               let payload = NDArrayPayload(dict: dict) {
-                appendCellOutput(.ndarray(payload), message: message, cell: cell)
-            }
-        case "jsontree":
-            if let data = message["data"] {
-                appendCellOutput(.jsonTree(JSONTreePayload(
-                    value: data,
-                    summary: message["summary"] as? String ?? "",
-                    text: message["text"] as? String ?? "")), message: message, cell: cell)
-            }
-        case "objectcard":
-            if let payload = ObjectCardPayload(dict: message) {
-                appendCellOutput(.objectCard(payload), message: message, cell: cell)
             }
         case "error":
             let frames = (message["frames"] as? [[String: Any]] ?? [])
@@ -1230,6 +1329,10 @@ final class AppState: ObservableObject {
         return raw
     }
 
+    private var inputAlert: NSAlert?
+    private var queuedCellRuns: [QueuedCellRun] = []
+    private var cellRunInFlight = false
+    private var cellRunGeneration = 0
     private var pendingStreams: [UUID: (name: String, text: String)] = [:]
     private var streamFlushScheduled: Set<UUID> = []
     private var pendingOutputClears: Set<UUID> = []
@@ -1320,7 +1423,12 @@ final class AppState: ObservableObject {
             runningChainCellIDs = []
             runningChainIndex = 0
         }
-        document.notebook?.cells.forEach { $0.isQueued = false }
+        let waiting = waitingCellIDs
+        document.notebook?.cells.forEach { $0.isQueued = waiting.contains($0.id) }
+    }
+
+    private var waitingCellIDs: Set<UUID> {
+        Set(queuedCellRuns.compactMap { $0.cell?.id })
     }
 
     private func runNextQueuedCell(in document: Document) {
@@ -1370,7 +1478,8 @@ final class AppState: ObservableObject {
         pausedRunDocumentID = nil
         pausedRunCellIDs = []
         let queued = Set(runningChainCellIDs)
-        notebook.cells.forEach { $0.isQueued = queued.contains($0.id) }
+        let waiting = waitingCellIDs
+        notebook.cells.forEach { $0.isQueued = queued.contains($0.id) || waiting.contains($0.id) }
         runNextQueuedCell(in: document)
     }
 
@@ -1403,7 +1512,8 @@ final class AppState: ObservableObject {
         pausedRunDocumentID = nil
         pausedRunCellIDs = []
         let queued = Set(runningChainCellIDs)
-        document.notebook?.cells.forEach { $0.isQueued = queued.contains($0.id) }
+        let waiting = waitingCellIDs
+        document.notebook?.cells.forEach { $0.isQueued = queued.contains($0.id) || waiting.contains($0.id) }
         runNextQueuedCell(in: document)
     }
 
@@ -1713,7 +1823,17 @@ final class AppState: ObservableObject {
         get { editorPresentation.scrollRequest }
         set { editorPresentation.scrollRequest = newValue }
     }
-    private var pendingDeleteTimestamp: TimeInterval = 0
+    private var pendingChord: (key: String, time: TimeInterval)?
+
+    private func completesChord(_ key: String) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let pending = pendingChord, pending.key == key, now - pending.time < 0.7 {
+            pendingChord = nil
+            return true
+        }
+        pendingChord = (key, now)
+        return false
+    }
 
     func enterCommandMode() {
         guard let window = NSApp.keyWindow ?? NSApp.mainWindow,
@@ -1772,32 +1892,54 @@ final class AppState: ObservableObject {
             index = found
         } else if selectedCellID == nil {
             index = 0
+            selectedCellID = notebook.cells[0].id
         } else {
             selectedCellID = notebook.cells[0].id
             return true
         }
         let cell = notebook.cells[index]
-        if event.charactersIgnoringModifiers?.lowercased() != "d" { pendingDeleteTimestamp = 0 }
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        let shift = event.modifierFlags.contains(.shift)
+        if pendingChord?.key != key { pendingChord = nil }
 
         switch event.keyCode {
         case 36:
-            if event.modifierFlags.contains(.shift) {
+            if shift {
                 runCell(cell, in: document, advance: true)
             } else {
                 enterEditMode()
             }
             return true
         case 126:
-            selectCell(at: index - 1, in: notebook)
+            if shift { extendCellSelection(by: -1, in: notebook) } else { selectCell(at: index - 1, in: notebook) }
             return true
         case 125:
-            selectCell(at: index + 1, in: notebook)
+            if shift { extendCellSelection(by: 1, in: notebook) } else { selectCell(at: index + 1, in: notebook) }
             return true
         default:
             break
         }
 
-        switch event.charactersIgnoringModifiers?.lowercased() {
+        switch key {
+        case "j":
+            if shift { extendCellSelection(by: 1, in: notebook) } else { selectCell(at: index + 1, in: notebook) }
+            return true
+        case "k":
+            if shift { extendCellSelection(by: -1, in: notebook) } else { selectCell(at: index - 1, in: notebook) }
+            return true
+        case "1", "2", "3", "4", "5", "6":
+            guard !shift, let level = Int(key) else { return false }
+            commandHeading(level)
+            return true
+        case "r":
+            commandConvert(to: .raw)
+            return true
+        case "i":
+            if completesChord(key) { interruptKernel() }
+            return true
+        case "0":
+            if completesChord(key) { restartKernel() }
+            return true
         case "a":
             insertCell(type: .code, nextTo: cell, offset: 0, in: notebook, document: document)
             return true
@@ -1805,29 +1947,22 @@ final class AppState: ObservableObject {
             insertCell(type: .code, nextTo: cell, offset: 1, in: notebook, document: document)
             return true
         case "d":
-            let now = ProcessInfo.processInfo.systemUptime
-            if now - pendingDeleteTimestamp < 0.7 {
-                pendingDeleteTimestamp = 0
-                deleteCell(cell, in: notebook, document: document)
-            } else {
-                pendingDeleteTimestamp = now
-            }
+            if completesChord(key) { deleteCells(selectedCells(in: notebook), in: notebook, document: document) }
             return true
         case "c":
-            copyCell(cell, in: notebook)
+            copyCells(selectedCells(in: notebook), in: notebook)
             return true
         case "x":
-            copyCell(cell, in: notebook)
-            deleteCell(cell, in: notebook, document: document)
+            commandCut()
             return true
         case "v":
-            pasteCell(after: cell, in: notebook, document: document)
+            if shift { commandPasteAbove() } else { pasteCell(after: cell, in: notebook, document: document) }
             return true
         case "m":
-            convertCell(cell, to: .markdown, in: document)
+            if shift { mergeSelectedCells() } else { commandConvert(to: .markdown) }
             return true
         case "y":
-            convertCell(cell, to: .code, in: document)
+            commandConvert(to: .code)
             return true
         case "z":
             undoCellDeletion(in: document)
@@ -1897,8 +2032,73 @@ final class AppState: ObservableObject {
     }
 
     func commandConvert(to type: CellType) {
-        guard let ctx = selectionContext, ctx.cell.cellType != type else { return }
-        convertCell(ctx.cell, to: type, in: ctx.document)
+        guard let ctx = selectionContext else { return }
+        for cell in selectedCells(in: ctx.notebook) where cell.cellType != type {
+            convertCell(cell, to: type, in: ctx.document)
+        }
+    }
+
+    func commandPasteAbove() {
+        guard let ctx = selectionContext,
+              let index = ctx.notebook.cells.firstIndex(where: { $0.id == ctx.cell.id }) else { return }
+        pasteCells(at: index, in: ctx.notebook, document: ctx.document)
+    }
+
+    func commandRunAndInsertBelow() {
+        guard let ctx = selectionContext else { return }
+        runCell(ctx.cell, in: ctx.document, advance: false)
+        insertCell(type: .code, nextTo: ctx.cell, offset: 1, in: ctx.notebook, document: ctx.document,
+                   editing: !isCommandMode)
+    }
+
+    func commandHeading(_ level: Int) {
+        guard let ctx = selectionContext, (1...6).contains(level) else { return }
+        let cell = ctx.cell
+        if cell.cellType != .markdown { convertCell(cell, to: .markdown, in: ctx.document) }
+        var lines = cell.source.components(separatedBy: "\n")
+        let title = lines[0].drop(while: { $0 == "#" }).drop(while: { $0 == " " })
+        lines[0] = String(repeating: "#", count: level) + " " + title
+        cell.source = lines.joined(separator: "\n")
+        cell.isEditingMarkdown = false
+        ctx.document.isDirty = true
+        cellRevision += 1
+    }
+
+    var canMergeSelectedCells: Bool {
+        guard let ctx = selectionContext else { return false }
+        return selectedCells(in: ctx.notebook).count > 1
+    }
+
+    func mergeSelectedCells() {
+        guard let ctx = selectionContext else { return }
+        let cells = selectedCells(in: ctx.notebook)
+        guard cells.count > 1, let first = cells.first else {
+            mergeSelectedCellWithBelow()
+            return
+        }
+        guard runningChainDocumentID != ctx.document.id else {
+            userNotice = "Stop the current Run All before deleting or reordering cells."
+            return
+        }
+        for cell in cells.dropFirst() {
+            guard let index = ctx.notebook.cells.firstIndex(where: { $0.id == cell.id }) else { continue }
+            ctx.document.deletedCells.append((dict: ctx.notebook.serializeCell(cell), index: index,
+                                              restoreSource: (cellID: first.id, source: first.source)))
+            first.source += "\n" + cell.source
+            ctx.notebook.cells.remove(at: index)
+        }
+        selection.selectedCellIDs = [first.id]
+        selectedCellID = first.id
+        ctx.document.isDirty = true
+        cellRevision += 1
+    }
+
+    private func extendCellSelection(by offset: Int, in notebook: Notebook) {
+        guard let current = notebook.cells.firstIndex(where: { $0.id == selectedCellID }) else { return }
+        let target = notebook.cells[max(0, min(current + offset, notebook.cells.count - 1))]
+        if selection.anchorCellID == nil { selection.anchorCellID = selectedCellID }
+        selectCell(target, in: notebook, modifiers: .shift)
+        scrollRequest = target.id
     }
 
     func commandMove(_ direction: Int) {
@@ -1996,20 +2196,25 @@ final class AppState: ObservableObject {
     }
 
     func copyCells(_ cells: [NotebookCell], in notebook: Notebook) {
+        guard !cells.isEmpty else { return }
         cellClipboard = cells.map { notebook.serializeCell($0) }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(cells.map(\.source).joined(separator: "\n\n"), forType: .string)
     }
 
     func pasteCell(after cell: NotebookCell, in notebook: Notebook, document: Document) {
-        guard !cellClipboard.isEmpty else { return }
         guard let index = notebook.cells.firstIndex(where: { $0.id == cell.id }) else { return }
+        pasteCells(at: index + 1, in: notebook, document: document)
+    }
+
+    private func pasteCells(at index: Int, in notebook: Notebook, document: Document) {
+        guard !cellClipboard.isEmpty else { return }
         let restored = cellClipboard.map { source -> NotebookCell in
             var dict = source
             dict["id"] = NotebookCell.makeNBID()
             return Notebook.parseCell(dict)
         }
-        notebook.cells.insert(contentsOf: restored, at: index + 1)
+        notebook.cells.insert(contentsOf: restored, at: max(0, min(index, notebook.cells.count)))
         selection.selectedCellIDs = Set(restored.map(\.id))
         selectedCellID = restored.last?.id
         scrollRequest = restored.last?.id
@@ -2147,6 +2352,12 @@ final class AppState: ObservableObject {
         }
     }
 
+    func restartAndClearOutputs() {
+        guard allowExecution(), let document = activeDocument, document.kind == .notebook else { return }
+        clearAllOutputs(in: document)
+        restartKernel(confirm: false)
+    }
+
     func kernelBecameIdle() {
         guard let id = pendingRunAllDocumentID else { return }
         pendingRunAllDocumentID = nil
@@ -2195,28 +2406,28 @@ final class AppState: ObservableObject {
 
     func recomputeFind(in document: Document, resetIndex: Bool) {
         let find = document.find
-        guard let notebook = document.notebook, !find.query.isEmpty else {
+        guard let notebook = document.notebook, !find.query.isEmpty,
+              let expression = try? find.options.expression(for: find.query) else {
             find.matches = []
             find.currentIndex = 0
             return
         }
         var matches: [(cellID: UUID, range: NSRange)] = []
         for cell in notebook.cells {
-            let ns = cell.source as NSString
-            var search = NSRange(location: 0, length: ns.length)
-            while true {
-                let found = ns.range(of: find.query, options: .caseInsensitive, range: search)
-                guard found.location != NSNotFound else { break }
-                matches.append((cell.id, found))
-                let next = found.location + max(found.length, 1)
-                guard next < ns.length else { break }
-                search = NSRange(location: next, length: ns.length - next)
+            let length = (cell.source as NSString).length
+            for result in expression.matches(in: cell.source, range: NSRange(location: 0, length: length))
+            where result.range.length > 0 {
+                matches.append((cell.id, result.range))
             }
         }
         find.matches = matches
         find.currentIndex = resetIndex ? 0
             : (matches.isEmpty ? 0 : min(find.currentIndex, matches.count - 1))
         find.hasNavigated = resetIndex ? false : find.hasNavigated
+    }
+
+    private func findReplacementTemplate(_ find: FindState) -> String {
+        find.options.regularExpression ? find.replacement : NSRegularExpression.escapedTemplate(for: find.replacement)
     }
 
     func findQueryChanged(in document: Document) {
@@ -2271,11 +2482,15 @@ final class AppState: ObservableObject {
         guard let cell = notebook.cells.first(where: { $0.id == match.cellID }) else { return }
         let ns = cell.source as NSString
         guard EditorTextRange.isValid(match.range, length: ns.length),
-              ns.substring(with: match.range).caseInsensitiveCompare(find.query) == .orderedSame else {
+              let expression = try? find.options.expression(for: find.query),
+              let result = expression.firstMatch(in: cell.source, options: .anchored, range: match.range),
+              result.range == match.range else {
             recomputeFind(in: document, resetIndex: false)
             return
         }
-        cell.source = ns.replacingCharacters(in: match.range, with: find.replacement)
+        let replacement = expression.replacementString(for: result, in: cell.source, offset: 0,
+                                                       template: findReplacementTemplate(find))
+        cell.source = ns.replacingCharacters(in: match.range, with: replacement)
         document.isDirty = true
         recomputeFind(in: document, resetIndex: false)
         if !find.matches.isEmpty {
@@ -2286,10 +2501,12 @@ final class AppState: ObservableObject {
 
     func replaceAllMatches(in document: Document) {
         let find = document.find
-        guard let notebook = document.notebook, !find.query.isEmpty else { return }
+        guard let notebook = document.notebook, !find.query.isEmpty,
+              let expression = try? find.options.expression(for: find.query) else { return }
+        let template = findReplacementTemplate(find)
         let pending = notebook.cells.compactMap { cell -> (NotebookCell, String)? in
-            let replaced = cell.source.replacingOccurrences(
-                of: find.query, with: find.replacement, options: .caseInsensitive)
+            let range = NSRange(location: 0, length: (cell.source as NSString).length)
+            let replaced = expression.stringByReplacingMatches(in: cell.source, range: range, withTemplate: template)
             return replaced == cell.source ? nil : (cell, replaced)
         }
         guard !pending.isEmpty else { return }
@@ -2527,8 +2744,7 @@ final class AppState: ObservableObject {
     func exportActiveNotebookAsHTML() {
         guard let document = activeDocument, let notebook = document.notebook else { return }
         let html = NotebookExporter.html(from: notebook, title: document.displayName,
-                                         baseDirectory: document.url?.deletingLastPathComponent(),
-                                         enhancedDataOutputs: outputPresentation.usesEnhancedDataOutputs)
+                                         baseDirectory: document.url?.deletingLastPathComponent())
         savePanelWrite(data: Data(html.utf8),
                        suggested: document.displayName.replacingOccurrences(of: ".ipynb", with: ".html"),
                        type: .html)
@@ -2543,8 +2759,7 @@ final class AppState: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         isExportingPDF = true
         let html = NotebookExporter.html(from: notebook, title: document.displayName,
-                                         baseDirectory: document.url?.deletingLastPathComponent(),
-                                         enhancedDataOutputs: outputPresentation.usesEnhancedDataOutputs)
+                                         baseDirectory: document.url?.deletingLastPathComponent())
         NotebookExporter.renderPDF(html: html) { [weak self] data in
             guard let self else { return }
             self.isExportingPDF = false
@@ -2589,10 +2804,11 @@ final class AppState: ObservableObject {
         return name.isEmpty ? nil : name
     }
 
-    func createFile(in directory: URL) {
-        guard let name = promptForName(title: "New File",
-                                       message: "Name for the new file:",
-                                       initial: "untitled.py") else { return }
+    func createFile(in directory: URL, suggestedName: String = "untitled.py") {
+        let notebook = suggestedName.hasSuffix(".ipynb")
+        guard let name = promptForName(title: notebook ? "New Notebook" : "New File",
+                                       message: notebook ? "Name for the new notebook:" : "Name for the new file:",
+                                       initial: suggestedName) else { return }
         let url = directory.appendingPathComponent(name)
         guard !FileManager.default.fileExists(atPath: url.path) else {
             userNotice = "“\(name)” already exists. Choose a different name."

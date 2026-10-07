@@ -5,6 +5,7 @@ A native Python and Jupyter notebook editor for macOS, built with SwiftUI and Ap
 ![Quanta showing a notebook, inline chart, outline, and live variables](docs/images/notebook.png)
 
 - Edit notebooks and scripts with source-name suggestions, live completions, and a shared Python console.
+- Run most Jupyter notebooks unchanged: common IPython magics, `!` shell commands, `%autoreload`, `input()`, and Jupyter command-mode keys; each notebook runs in its own folder.
 - Connect GitHub Copilot for native inline suggestions, with account, pause, and project controls.
 - Catch syntax mistakes in a native Problems panel; add Ruff for lint checks and undoable formatting.
 - Create a workspace environment and install packages through the Python Environment window.
@@ -48,8 +49,9 @@ Open [Examples/showcase.ipynb](Examples/showcase.ipynb) and press **⌘R**.
 It uses locally generated synthetic data to demonstrate tables, plots, math,
 model inspection, and SQLite export.
 
-Quanta uses its own Python bridge. Most IPython magics, shell escapes, and
-Jupyter widgets are unsupported; see [notebook compatibility](docs/notebook-compatibility.md).
+Quanta uses its own Python bridge. Common IPython magics (`%time`, `%timeit`,
+`%pip`, `%autoreload`, `%run`, `%%bash` and more), `!` shell commands and `obj?`
+help work; Jupyter widgets do not. See [notebook compatibility](docs/notebook-compatibility.md).
 
 ## Documentation
 

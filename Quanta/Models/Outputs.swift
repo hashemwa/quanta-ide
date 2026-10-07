@@ -57,55 +57,6 @@ struct TraceFrame: Identifiable {
     }
 }
 
-struct NDArrayPayload {
-    let contentVersion = UUID()
-    let shape: [Int]
-    let dtype: String
-    let stats: [String: Double]
-    let series: [Double?]?
-    let grid: [[Double?]]?
-    let text: String
-
-    init?(dict: [String: Any]) {
-        guard let shape = dict["shape"] as? [Int] else { return nil }
-        self.shape = shape
-        self.dtype = dict["dtype"] as? String ?? ""
-        self.stats = (dict["stats"] as? [String: Any] ?? [:])
-            .compactMapValues { ($0 as? NSNumber)?.doubleValue }
-        self.series = (dict["series"] as? [Any]).map { $0.map { ($0 as? NSNumber)?.doubleValue } }
-        self.grid = (dict["grid"] as? [[Any]]).map { rows in
-            rows.map { $0.map { ($0 as? NSNumber)?.doubleValue } }
-        }
-        self.text = dict["text"] as? String ?? ""
-    }
-
-    var shapeLabel: String { shape.map(String.init).joined(separator: " × ") }
-}
-
-struct JSONTreePayload {
-    let value: Any
-    let summary: String
-    let text: String
-}
-
-struct ObjectCardPayload {
-    let title: String
-    let subtitle: String
-    let fields: [(name: String, value: String)]
-    let badges: [String]
-    let text: String
-
-    init?(dict: [String: Any]) {
-        guard let title = dict["title"] as? String else { return nil }
-        self.title = title
-        self.subtitle = dict["subtitle"] as? String ?? ""
-        let raw = dict["fields"] as? [String: Any] ?? [:]
-        self.fields = raw.keys.sorted().map { ($0, "\(raw[$0] ?? "")") }
-        self.badges = dict["badges"] as? [String] ?? []
-        self.text = dict["text"] as? String ?? ""
-    }
-}
-
 struct DataFramePayload {
     var name: String?
     var columns: [String]
@@ -222,9 +173,6 @@ struct CellOutput: Identifiable {
         case plotlyFigure(html: String, jsPath: String, data: Data, image: NSImage?, height: Double)
         case error(ename: String, evalue: String, traceback: String, frames: [TraceFrame])
         case dataFrame(DataFramePayload)
-        case ndarray(NDArrayPayload)
-        case jsonTree(JSONTreePayload)
-        case objectCard(ObjectCardPayload)
         case rich([String: Any])
         case unsupported(mime: String)
     }

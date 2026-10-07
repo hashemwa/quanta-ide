@@ -20,6 +20,16 @@ DIAGNOSTIC_LIMIT = 1000
 FUTURE_FLAGS = sum(getattr(__future__, name).compiler_flag for name in __future__.all_feature_names)
 NOTEBOOK_COMMAND = re.compile(r"^[ \t]*(?:[A-Za-z_]\w*(?:[ \t]*,[ \t]*[A-Za-z_]\w*)*[ \t]*=[ \t]*)?(%{1,2}[A-Za-z_]\w*|!!?)")
 INLINE_MATPLOTLIB = re.compile(r"^[ \t]*%matplotlib[ \t]+inline[ \t]*(?:#[^\r\n]*)?[\r\n]*$")
+HELP_LINE = re.compile(r"[ \t]*\?{0,2}[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\?{0,2}[ \t]*\r?\n?")
+LINE_MAGICS = frozenset((
+    "aimport", "autoreload", "cat", "cd", "clear", "colors", "conda", "config", "cp", "dotenv", "env", "ll",
+    "load_ext", "ls", "lsmagic", "mamba", "matplotlib", "mkdir", "mv", "pinfo", "pinfo2", "pip", "precision",
+    "prun", "pwd", "reload_ext", "reset", "reset_selective", "rm", "rmdir", "run", "set_env", "sx", "system",
+    "time", "timeit", "unload_ext", "who", "who_ls", "whos", "xdel", "xmode"))
+PYTHON_CELL_MAGICS = frozenset(("time", "timeit", "capture", "prun"))
+CELL_MAGICS = PYTHON_CELL_MAGICS | frozenset((
+    "bash", "file", "html", "latex", "markdown", "perl", "python", "python3", "ruby", "script", "sh", "svg",
+    "writefile", "zsh"))
 STRING_TOKENS = frozenset(getattr(tokenize, name) for name in (
     "STRING", "FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END", "TSTRING_START", "TSTRING_MIDDLE", "TSTRING_END",
 ) if hasattr(tokenize, name))
@@ -53,6 +63,7 @@ def prepare_source(source_id, source):
     lines = source.splitlines(True)
     protected.update(index + 2 for index, line in enumerate(lines) if line.rstrip("\n").endswith("\\"))
     diagnostics = []
+    replaced = set()
     for index, line in enumerate(lines):
         if index + 1 in protected:
             continue
@@ -61,16 +72,28 @@ def prepare_source(source_id, source):
             continue
         command = NOTEBOOK_COMMAND.match(line)
         if command is None:
+            if "?" in line and HELP_LINE.fullmatch(line):
+                indent = line[:len(line) - len(line.lstrip())]
+                lines[index] = indent + "pass" + ("\n" if line.endswith("\n") else "")
+                replaced.add(index + 1)
             continue
         name = command.group(1)
-        diagnostics.append(diagnostic(source_id, index + 1, command.start(1) + 1,
-                                      index + 1, command.end(1) + 1,
-                                      "Static checks skip this IPython command: " + name, "IPYTHON", "warning"))
-        if name.startswith("%%"):
-            return "\n" * source.count("\n"), diagnostics
-        indent = line[:len(line) - len(line.lstrip())]
-        lines[index] = indent + "pass" + ("\n" if line.endswith("\n") else "")
-    return "".join(lines), diagnostics
+        magic = name.lstrip("%")
+        cell_magic = name.startswith("%%")
+        if name.startswith("%") and magic not in (CELL_MAGICS if cell_magic else LINE_MAGICS):
+            diagnostics.append(diagnostic(source_id, index + 1, command.start(1) + 1,
+                                          index + 1, command.end(1) + 1,
+                                          "Quanta's Python runner does not support " + name, "IPYTHON", "warning"))
+        if cell_magic:
+            if magic in PYTHON_CELL_MAGICS and not "".join(lines[:index]).strip():
+                lines[index] = "\n" if line.endswith("\n") else ""
+                continue
+            return "\n" * source.count("\n"), diagnostics, replaced
+        prefix = line[:command.start(1)]
+        replacement = prefix + "None" if "=" in prefix else prefix + "pass"
+        lines[index] = replacement + ("\n" if line.endswith("\n") else "")
+        replaced.add(index + 1)
+    return "".join(lines), diagnostics, replaced
 
 
 def syntax_diagnostics(sources):
@@ -214,6 +237,8 @@ def lint_with_ruff(sources, syntax, is_notebook):
         start = entry["location"]
         end = entry["end_location"]
         code = entry.get("code") or "SyntaxError"
+        if start["row"] in item.get("replaced", ()):
+            continue
         if code in ("invalid-syntax", "SyntaxError", "E999"):
             parser_mismatch = parser_mismatch or item["id"] not in invalid_sources
             continue
@@ -223,7 +248,7 @@ def lint_with_ruff(sources, syntax, is_notebook):
             lines = item["source"].split("\n")
             if 0 < start["row"] <= len(lines) and start["row"] == end["row"]:
                 name = lines[start["row"] - 1][start["column"] - 1:end["column"] - 1]
-                if name in ("display", "clear_output"):
+                if name in ("display", "clear_output", "get_ipython"):
                     continue
         severity = "error" if code in ("F821", "F822", "F823", "E902", "E999", "invalid-syntax", "SyntaxError") else "warning"
         diagnostics.append(diagnostic(item["id"], start["row"], start["column"], end["row"],
@@ -241,11 +266,11 @@ def analyze(payload):
     diagnostics = []
     notices = []
     for item in payload["sources"]:
-        source, skipped = prepare_source(item["id"], normalized(item["source"]))
-        sources.append({"id": item["id"], "source": source})
+        source, skipped, replaced = prepare_source(item["id"], normalized(item["source"]))
+        sources.append({"id": item["id"], "source": source, "replaced": replaced})
         diagnostics.extend(skipped)
     if diagnostics:
-        notices.append("IPython commands are skipped by static checks; cell-magic bodies are not checked.")
+        notices.append("Unsupported IPython commands are skipped by static checks.")
     syntax = syntax_diagnostics(sources)
     diagnostics.extend(syntax)
     tool_name = "Python syntax"
@@ -274,7 +299,7 @@ def format_source(payload):
         raise RuntimeError("Formatting requires Ruff in the selected Python environment. Install Ruff using Python Environment… to enable formatting.")
     source = payload["source"]
     is_notebook = payload.get("isNotebook", False)
-    prepared, skipped = prepare_source("format", normalized(source))
+    prepared, skipped, _ = prepare_source("format", normalized(source))
     if not is_notebook and (skipped or prepared != normalized(source)):
         raise RuntimeError("Format this cell after removing its IPython commands; Quanta preserves them unchanged.")
     filename = "__quanta__.ipynb" if is_notebook else "__quanta__.py"

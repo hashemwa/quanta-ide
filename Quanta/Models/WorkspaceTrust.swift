@@ -81,7 +81,7 @@ extension AppState {
             ?? PythonLocator.preferred(from: allowed)?.executable else { return }
         if kernel.isRunning {
             let directory = workspace?.rootURL ?? FileManager.default.homeDirectoryForCurrentUser
-            if kernel.workingDirectory.map(WorkspaceTrust.path) != WorkspaceTrust.path(directory)
+            if kernel.launchDirectory.map(WorkspaceTrust.path) != WorkspaceTrust.path(directory)
                 || kernel.executable != python {
                 kernelTransition = KernelTransition(workspace: workspace?.rootURL, python: python,
                                                     rememberInterpreter: false)
@@ -121,6 +121,6 @@ extension AppState {
 
     var kernelUsesDifferentDirectory: Bool {
         guard kernel.isRunning, let workspace else { return false }
-        return kernel.workingDirectory.map(WorkspaceTrust.path) != WorkspaceTrust.path(workspace.rootURL)
+        return kernel.launchDirectory.map(WorkspaceTrust.path) != WorkspaceTrust.path(workspace.rootURL)
     }
 }

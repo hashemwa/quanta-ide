@@ -128,6 +128,7 @@ final class FindState: ObservableObject {
     @Published var query = ""
     @Published var replacement = ""
     @Published var showReplace = false
+    @Published var options = WorkspaceSearchOptions()
     @Published var matches: [(cellID: UUID, range: NSRange)] = []
     @Published var currentIndex = 0
     @Published var focusRequest = 0

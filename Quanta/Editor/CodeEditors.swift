@@ -62,6 +62,7 @@ final class ScriptCanvas: NSObject, DocumentCanvas, NSTextViewDelegate {
         ruler = LineNumberRulerView(textView: textView, scrollView: scrollView)
         super.init()
         textView.isVerticallyResizable = true
+        textView.layoutManager?.allowsNonContiguousLayout = true
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.usesFindBar = true

@@ -314,6 +314,216 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(emitted[1]["text"], "True")
 
 
+class IPythonSyntaxTests(unittest.TestCase):
+    def assert_ok(self, messages):
+        self.assertFalse([m for m in messages if m.get("type") == "error"], messages)
+
+    def text(self, messages, identity, name="stdout"):
+        return "".join(m["text"] for m in outputs(messages, identity)
+                       if m.get("type") == "stream" and m.get("name") == name)
+
+    def test_time_reports_and_returns_expression_value(self):
+        messages = exchange(["%time total = sum(range(10))", "%time total * 2", "%%time\nvalue = 4\nvalue + 1"])
+        self.assert_ok(messages)
+        for identity in range(3):
+            self.assertRegex(self.text(messages, identity), r"CPU times: user .*, sys: .*, total: .*\nWall time: ")
+        self.assertEqual([m["text"] for m in outputs(messages, 1) if m.get("type") == "result"], ["90"])
+        self.assertEqual([m["text"] for m in outputs(messages, 2) if m.get("type") == "result"], ["5"])
+
+    def test_timeit_line_cell_and_result_object(self):
+        messages = exchange(["%timeit -n 10 -r 2 sum(range(10))",
+                             "%%timeit -n 5 -r 2 values = list(range(10))\nsum(values)",
+                             "result = %timeit -o -q -n 3 -r 2 1 + 1\n(result.loops, result.repeat, len(result.all_runs))"])
+        self.assert_ok(messages)
+        self.assertIn("per loop (mean ± std. dev. of 2 runs, 10 loops each)", self.text(messages, 0))
+        self.assertIn("5 loops each", self.text(messages, 1))
+        self.assertEqual(outputs(messages, 2)[-1]["text"], "(3, 2, 2)")
+
+    def test_shell_commands_stream_capture_and_expand_variables(self):
+        messages = exchange(["name = 'quanta'\n!echo hello {name} $name '$$HOME'",
+                             "lines = !printf 'a\\nb\\n'\n(lines, lines.n, type(lines).__name__)",
+                             "for item in ['x', 'y']:\n    !echo {item}",
+                             "!!echo direct"])
+        self.assert_ok(messages)
+        self.assertEqual(self.text(messages, 0), "hello quanta quanta $HOME\n")
+        self.assertEqual(outputs(messages, 1)[-1]["text"], "(['a', 'b'], 'a\\nb', 'SList')")
+        self.assertEqual(self.text(messages, 2), "x\ny\n")
+        self.assertEqual(outputs(messages, 3)[-1]["text"], "['direct']")
+
+    def test_cell_scripts_separate_streams_and_raise_on_failure(self):
+        messages = exchange(["%%bash\necho out\necho err 1>&2\nexit 3", "%%bash --no-raise-error\nexit 4"])
+        self.assertEqual(self.text(messages, 0), "out\n")
+        self.assertEqual(self.text(messages, 0, "stderr"), "err\n")
+        self.assertEqual(next(m for m in messages if m.get("type") == "error")["ename"], "CalledProcessError")
+        self.assertEqual([m["status"] for m in messages if m.get("type") == "done"], ["error", "ok"])
+
+    def test_help_shows_signature_docstring_and_source(self):
+        messages = exchange(["def documented(a, b=2):\n    \"\"\"Adds numbers.\"\"\"\n    return a + b",
+                             "documented?", "?documented", "documented??", "missing_name?"])
+        self.assert_ok(messages)
+        for identity in (1, 2):
+            self.assertIn("documented(a, b=2)", self.text(messages, identity))
+            self.assertIn("Adds numbers.", self.text(messages, identity))
+        self.assertIn("return a + b", self.text(messages, 3))
+        self.assertIn("Object `missing_name` not found.", self.text(messages, 4))
+
+    def test_directory_environment_and_namespace_magics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            messages = exchange([f"%cd {directory}", "%pwd", "%env QUANTA_TEST=1", "%env QUANTA_TEST",
+                                 "alpha = 1\nbeta = 'b'\n%who", "%who_ls str", "%reset -f\n%who"])
+            self.assert_ok(messages)
+            resolved = str(pathlib.Path(directory).resolve())
+            self.assertEqual(str(pathlib.Path(self.text(messages, 0).strip()).resolve()), resolved)
+            self.assertEqual(self.text(messages, 2), "env: QUANTA_TEST=1\n")
+            self.assertEqual(outputs(messages, 3)[-1]["text"], "'1'")
+            self.assertEqual(self.text(messages, 4), "alpha\tbeta\n")
+            self.assertEqual(outputs(messages, 5)[-1]["text"], "['beta']")
+            self.assertEqual(self.text(messages, 6), "Interactive namespace is empty.\n")
+
+    def test_precision_config_and_inline_matplotlib_are_accepted(self):
+        messages = exchange(["%precision 2\n3.14159",
+                             "%config InlineBackend.figure_format = 'retina'\n%matplotlib inline\n%precision\n2.5"])
+        self.assert_ok(messages)
+        self.assertEqual([m["text"] for m in outputs(messages) if m.get("type") == "result"], ["3.14", "2.5"])
+
+    def test_writefile_run_and_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "helper.py")
+            messages = exchange([f"%%writefile {path}\nimport sys\nARGS = sys.argv[1:]\nprint('ran', __name__)",
+                                 f"%run {path} one two\nARGS",
+                                 "%%capture captured\nprint('hidden')\ndisplay('shown later')",
+                                 "captured.stdout, len(captured.outputs)"])
+            self.assert_ok(messages)
+            self.assertEqual(self.text(messages, 0), f"Writing {path}\n")
+            self.assertEqual(self.text(messages, 1), "ran __main__\n")
+            self.assertEqual(outputs(messages, 1)[-1]["text"], "['one', 'two']")
+            self.assertEqual(outputs(messages, 2), [])
+            self.assertEqual(outputs(messages, 3)[-1]["text"], "('hidden\\n', 1)")
+
+    def test_autoreload_updates_functions_and_existing_instances(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module = pathlib.Path(directory, "reloaded_module.py")
+            module.write_text("def value():\n    return 1\nclass Item:\n    def label(self):\n        return 'old'\n")
+            messages = exchange([f"import sys\nsys.path.insert(0, {directory!r})\n%load_ext autoreload\n%autoreload 2",
+                                 "import reloaded_module\nfrom reloaded_module import value\nitem = reloaded_module.Item()\n(value(), item.label())",
+                                 f"open({str(module)!r}, 'w').write(\"def value():\\n    return 2\\nclass Item:\\n    def label(self):\\n        return 'new'\\n\")",
+                                 "(value(), item.label())"])
+            self.assert_ok(messages)
+            self.assertEqual(outputs(messages, 1)[-1]["text"], "(1, 'old')")
+            self.assertEqual(outputs(messages, 3)[-1]["text"], "(2, 'new')")
+
+    def test_magics_keep_traceback_lines_and_strings(self):
+        messages = exchange(["%time x = 1\n!true\nlabel = '%time !ls'\nraise ValueError(label)"])
+        error = next(m for m in messages if m.get("type") == "error")
+        self.assertEqual(error["evalue"], "%time !ls")
+        self.assertEqual(error["frames"][-1]["line"], 4)
+        self.assertNotIn("quanta_kernel", error["traceback"])
+
+    def test_notebooks_run_in_their_own_folders_and_remember_cd(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            def cell(identity, code, folder):
+                return {"op": "execute", "id": identity, "code": code,
+                        "notebook": os.path.join(folder, "analysis.ipynb"), "directory": folder}
+            wire = [cell("a", "import os\nos.getcwd()", first), cell("cd", "%cd -q ..\nos.getcwd()", first),
+                    cell("b", "os.getcwd()", second), cell("back", "os.getcwd()", first),
+                    {"op": "execute", "id": "console", "code": "os.getcwd()"}, {"op": "shutdown"}]
+            result = subprocess.run(kernel_command(), input="".join(json.dumps(m) + "\n" for m in wire),
+                                    capture_output=True, text=True, timeout=30)
+            values = {m["id"]: m["text"] for m in map(json.loads, filter(str.strip, result.stdout.splitlines()))
+                      if m.get("type") == "result"}
+            parent = os.path.dirname(first)
+            self.assertEqual(values["a"], repr(first))
+            self.assertEqual(values["cd"], repr(parent))
+            self.assertEqual(values["b"], repr(second))
+            self.assertEqual(values["back"], repr(parent))
+            self.assertEqual(values["console"], repr(parent))
+
+    def test_get_ipython_api_matches_converted_scripts(self):
+        messages = exchange(["get_ipython().run_line_magic('matplotlib', 'inline')\nget_ipython().system('echo converted')\nget_ipython().getoutput('echo captured')"])
+        self.assert_ok(messages)
+        self.assertEqual(self.text(messages, 0), "Using matplotlib backend: inline\nconverted\n")
+        self.assertEqual(outputs(messages, 0)[-1]["text"], "['captured']")
+
+    def test_unknown_magic_names_fail_before_the_cell_runs(self):
+        messages = exchange(["ran = True\n%definitely_unknown", "'ran' in globals()"])
+        self.assertEqual(next(m for m in messages if m.get("type") == "error")["ename"], "UnsupportedNotebookCommand")
+        self.assertEqual(outputs(messages, 1)[-1]["text"], "False")
+
+    def test_input_requests_wait_for_replies_and_defer_other_requests(self):
+        process = subprocess.Popen(kernel_command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, bufsize=1)
+        incoming = queue.Queue()
+        reader = threading.Thread(target=lambda: [incoming.put(json.loads(line)) for line in process.stdout if line.strip()],
+                                  daemon=True)
+        reader.start()
+
+        def send(message):
+            process.stdin.write(json.dumps(message) + "\n")
+            process.stdin.flush()
+
+        def until(predicate):
+            received = []
+            while not received or not predicate(received[-1]):
+                received.append(incoming.get(timeout=10))
+            return received
+
+        try:
+            until(lambda m: m.get("type") == "ready")
+            send({"op": "execute", "id": "off", "code": "input('x')"})
+            self.assertIn("needs a Quanta window", next(m for m in until(lambda m: m.get("type") == "done")
+                                                        if m.get("type") == "error")["evalue"])
+            send({"op": "config", "input_requests": True})
+            send({"op": "execute", "id": "ask", "code": "import getpass\nname = input('Name? ')\nsecret = getpass.getpass()\n(name, secret)"})
+            request = until(lambda m: m.get("type") == "input_request")[-1]
+            self.assertEqual((request["prompt"], request["password"]), ("Name? ", False))
+            send({"op": "vars", "id": "deferred"})
+            send({"op": "input_reply", "value": "Ada"})
+            second = until(lambda m: m.get("type") == "input_request")
+            self.assertTrue(second[-1]["password"])
+            send({"op": "input_reply", "value": "hunter2"})
+            finished = second + until(lambda m: m.get("type") == "done")
+            self.assertEqual(next(m for m in finished if m.get("type") == "result")["text"], "('Ada', 'hunter2')")
+            self.assertEqual("".join(m["text"] for m in finished if m.get("type") == "stream"), "Name? Ada\nPassword: \n")
+            self.assertEqual(until(lambda m: m.get("type") == "vars")[-1]["id"], "deferred")
+            send({"op": "execute", "id": "cancel", "code": "input()"})
+            until(lambda m: m.get("type") == "input_request")
+            send({"op": "input_reply", "interrupt": True})
+            cancelled = until(lambda m: m.get("type") == "done")
+            self.assertEqual(next(m for m in cancelled if m.get("type") == "error")["ename"], "KeyboardInterrupt")
+        finally:
+            process.kill()
+            process.wait(timeout=5)
+            reader.join(timeout=1)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
+
+    def test_interrupt_stops_shell_command(self):
+        process = subprocess.Popen(kernel_command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, bufsize=1)
+        incoming = queue.Queue()
+        reader = threading.Thread(target=lambda: [incoming.put(json.loads(line)) for line in process.stdout if line.strip()],
+                                  daemon=True)
+        reader.start()
+        try:
+            self.assertEqual(incoming.get(timeout=10)["type"], "ready")
+            process.stdin.write(json.dumps({"op": "execute", "id": "sleep", "code": "!echo started; sleep 30"}) + "\n")
+            process.stdin.flush()
+            self.assertEqual(incoming.get(timeout=10)["text"], "started\n")
+            started = time.monotonic()
+            process.send_signal(signal.SIGINT)
+            received = []
+            while not received or received[-1].get("type") != "done":
+                received.append(incoming.get(timeout=10))
+            self.assertLess(time.monotonic() - started, 5)
+            self.assertEqual(next(m["ename"] for m in received if m.get("type") == "error"), "KeyboardInterrupt")
+        finally:
+            process.kill()
+            process.wait(timeout=5)
+            reader.join(timeout=1)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="quanta-kernel-tests-") as cache:
         os.environ.setdefault("MPLCONFIGDIR", os.path.join(cache, "matplotlib"))

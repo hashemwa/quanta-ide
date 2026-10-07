@@ -48,6 +48,17 @@ struct FindBarView: View {
                     .frame(minWidth: DS.Layout.findFieldMinWidth, idealWidth: DS.Layout.findFieldIdealWidth, maxWidth: .infinity)
                     .onChange(of: find.query) { _, _ in app.findQueryChanged(in: document) }
 
+                IconButton("textformat", help: "Match Case", isActive: find.options.caseSensitive) {
+                    find.options.caseSensitive.toggle()
+                }
+                IconButton("textformat.abc", help: "Match Whole Word", isActive: find.options.wholeWord) {
+                    find.options.wholeWord.toggle()
+                }
+                IconButton("chevron.left.forwardslash.chevron.right", help: "Use Regular Expression",
+                           isActive: find.options.regularExpression) {
+                    find.options.regularExpression.toggle()
+                }
+
                 Text(countLabel)
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -89,6 +100,7 @@ struct FindBarView: View {
         .padding(.horizontal, DS.Space.bar)
         .background(.bar)
         .onExitCommand { app.closeFind(in: document) }
+        .onChange(of: find.options) { _, _ in app.findQueryChanged(in: document) }
     }
 
     private var countLabel: String {

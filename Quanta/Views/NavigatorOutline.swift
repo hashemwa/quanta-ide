@@ -44,6 +44,10 @@ struct NavigatorOutline: NSViewRepresentable {
         return scroll
     }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        proposal.fillingSize
+    }
+
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let outline = scroll.documentView as? NSOutlineView else { return }
         let coordinator = context.coordinator
@@ -65,6 +69,7 @@ struct NavigatorOutline: NSViewRepresentable {
             coordinator.tree = tree
             coordinator.filtering = filtering
             coordinator.items = [:]
+            coordinator.resolvedSelection = [:]
             coordinator.root = coordinator.makeItem(tree, parent: nil)
             outline.reloadData()
             if firstLoad {
@@ -78,9 +83,7 @@ struct NavigatorOutline: NSViewRepresentable {
             coordinator.refreshVisibleCells(outline)
         }
         let indexes = IndexSet(selection.compactMap { url in
-            guard let item = coordinator.items[url] ?? coordinator.items.values.first(where: {
-                $0.node.url.resolvingSymlinksInPath() == url.resolvingSymlinksInPath()
-            }) else { return nil }
+            guard let item = coordinator.item(for: url) else { return nil }
             let row = outline.row(forItem: item)
             return row >= 0 ? row : nil
         })
@@ -104,6 +107,7 @@ struct NavigatorOutline: NSViewRepresentable {
         var tree: FileNode?
         var root: Item?
         var items: [URL: Item] = [:]
+        var resolvedSelection: [URL: URL] = [:]
         var expanded: Set<URL> = []
         var filtering = false
         var updating = false
@@ -114,6 +118,15 @@ struct NavigatorOutline: NSViewRepresentable {
         var openFile: (URL) -> Void = { AppState.shared.openFile($0) }
 
         init(_ parent: NavigatorOutline) { self.parent = parent }
+
+        func item(for url: URL) -> Item? {
+            if let item = items[url] { return item }
+            if let resolved = resolvedSelection[url] { return items[resolved] }
+            let target = url.resolvingSymlinksInPath()
+            let match = items.values.first { $0.node.url.resolvingSymlinksInPath() == target }
+            resolvedSelection[url] = match?.node.url ?? url
+            return match
+        }
 
         func makeItem(_ node: FileNode, parent: Item?) -> Item {
             let item = Item(node, parent: parent)
@@ -151,9 +164,7 @@ struct NavigatorOutline: NSViewRepresentable {
         }
 
         func refreshVisibleCells(_ outline: NSOutlineView) {
-            let visible = outline.rows(in: outline.visibleRect)
-            guard visible.location != NSNotFound, visible.location < outline.numberOfRows else { return }
-            for row in visible.location..<min(visible.location + visible.length, outline.numberOfRows) {
+            for row in 0..<outline.numberOfRows {
                 guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? NavigatorCellView,
                       let item = outline.item(atRow: row) as? Item else { continue }
                 configure(cell, for: item)
@@ -170,6 +181,7 @@ struct NavigatorOutline: NSViewRepresentable {
 
         @objc func openClickedFile(_ outline: NSOutlineView) {
             guard !updating, outline.selectedRowIndexes.count == 1,
+                  outline.selectedRowIndexes.contains(outline.clickedRow),
                   let item = outline.item(atRow: outline.clickedRow) as? Item,
                   !item.node.isDirectory else { return }
             openFile(item.node.url)
@@ -248,6 +260,9 @@ struct NavigatorOutline: NSViewRepresentable {
             if targets.count == 1, let item = targets.first {
                 let node = item.node
                 if node.isDirectory {
+                    menu.addItem(ActionMenuItem("New Notebook…") { [app] in
+                        app.createFile(in: node.url, suggestedName: "Untitled.ipynb")
+                    })
                     menu.addItem(ActionMenuItem("New File…") { [app] in app.createFile(in: node.url) })
                     menu.addItem(ActionMenuItem("New Folder…") { [app] in app.createFolder(in: node.url) })
                     menu.addItem(ActionMenuItem("Paste") { [app] in app.pasteNodes(into: node.url) })
@@ -262,6 +277,9 @@ struct NavigatorOutline: NSViewRepresentable {
                     menu.addItem(ActionMenuItem("Rename…") { [app] in app.renameNode(node) })
                 }
             } else if targets.isEmpty {
+                menu.addItem(ActionMenuItem("New Notebook…") { [app] in
+                    app.createFile(in: rootURL, suggestedName: "Untitled.ipynb")
+                })
                 menu.addItem(ActionMenuItem("New File…") { [app] in app.createFile(in: rootURL) })
                 menu.addItem(ActionMenuItem("New Folder…") { [app] in app.createFolder(in: rootURL) })
                 menu.addItem(ActionMenuItem("Paste") { [app] in app.pasteNodes(into: rootURL) })

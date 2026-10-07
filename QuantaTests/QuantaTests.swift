@@ -258,14 +258,6 @@ final class CellOperationTests: XCTestCase {
 }
 
 final class ReviewRegressionTests: XCTestCase {
-    func testJSONTreeDistinguishesIntsFromBools() {
-        let parsed = try! JSONSerialization.jsonObject(with: Data(#"{"a":1,"b":0,"c":true,"d":false}"#.utf8)) as! [String: Any]
-        XCTAssertEqual(JSONNodeView.scalarText(parsed["a"]!), "1")
-        XCTAssertEqual(JSONNodeView.scalarText(parsed["b"]!), "0")
-        XCTAssertEqual(JSONNodeView.scalarText(parsed["c"]!), "True")
-        XCTAssertEqual(JSONNodeView.scalarText(parsed["d"]!), "False")
-    }
-
     func testTruncatedTSVMarksTheGap() {
         let payload = DataFramePayload(dict: [
             "columns": ["a"], "dtypes": ["int64"], "index": ["0", "1", "98", "99"],

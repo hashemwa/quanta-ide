@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import pathlib
+import pprint
 import queue
 import subprocess
 import sys
@@ -119,62 +120,94 @@ class InspectionTests(unittest.TestCase):
         self.assertEqual(results["wrong"]["type"], "dfsummary_error")
 
 
-class RichOutputTests(unittest.TestCase):
-    def test_plain_output_preference_switches_collections_without_losing_variables(self):
+class KeyCompletionTests(unittest.TestCase):
+    def test_subscript_keys_complete_inside_quotes(self):
         messages = exchange([
-            {"id": "enhanced", "op": "execute", "code": "values = {'items': list(range(60))}\nidentity = id(values)\nvalues"},
-            {"op": "config", "enhanced_data_outputs": False},
-            {"id": "plain", "op": "execute", "code": "display(values)\nvalues"},
-            {"op": "config", "enhanced_data_outputs": True},
-            {"id": "restored", "op": "execute", "code": "assert id(values) == identity\nvalues"},
+            {"id": "setup", "op": "execute", "code": "import os\nsettings = {'alpha': 1, 'beta': 2, 3: 4}\nclass Store:\n    def _ipython_key_completions_(self):\n        return ['north', 'south']\nstore = Store()"},
+            {"id": "dict", "op": "complete", "code": "settings['a", "cursor": 11},
+            {"id": "custom", "op": "complete", "code": "store[\"", "cursor": 7},
+            {"id": "plain", "op": "complete", "code": "sett", "cursor": 4},
         ])
-        self.assertTrue(any(m.get("id") == "enhanced" and m.get("type") == "jsontree" for m in messages))
-        plain = [m for m in messages if m.get("id") == "plain" and m.get("type") == "result"]
-        self.assertEqual(len(plain), 2)
-        self.assertEqual(plain[0]["output_type"], "display_data")
-        self.assertEqual(plain[1]["output_type"], "execute_result")
-        self.assertIn("'items': [0, 1, 2", plain[0]["text"])
-        self.assertTrue(any(m.get("id") == "restored" and m.get("type") == "jsontree" for m in messages))
+        replies = {m["id"]: m for m in messages if m.get("type") == "completions"}
+        self.assertEqual((replies["dict"]["matches"], replies["dict"]["start"], replies["dict"]["context"]), (["alpha"], 10, "key"))
+        self.assertEqual(replies["custom"]["matches"], ["north", "south"])
+        self.assertNotIn("context", replies["plain"])
+        self.assertIn("settings", replies["plain"]["matches"])
 
-    def test_plain_output_preference_keeps_explicit_html_rendering(self):
+    def test_dataframe_columns_complete_inside_quotes(self):
+        try:
+            import pandas
+        except ImportError:
+            self.skipTest("pandas is not installed in this interpreter")
         messages = exchange([
-            {"op": "config", "enhanced_data_outputs": False},
+            {"id": "setup", "op": "execute", "code": "import pandas as pd\ndf = pd.DataFrame({'price': [1], 'qty': [2]})"},
+            {"id": "columns", "op": "complete", "code": "df[\"p", "cursor": 5},
+        ])
+        reply = next(m for m in messages if m.get("type") == "completions")
+        self.assertEqual((reply["matches"], reply["start"], reply["end"]), (["price"], 4, 5))
+
+
+class RichOutputTests(unittest.TestCase):
+    def test_collections_print_as_indented_text_in_insertion_order(self):
+        messages = exchange([
+            {"id": "long", "op": "execute", "code": "values = {'zeta': list(range(30)), 'alpha': (1, 2)}\nvalues"},
+            {"id": "shown", "op": "execute", "code": "display(values)"},
+            {"id": "short", "op": "execute", "code": "{'b': 1, 'a': 2}"},
+        ])
+        results = {m["id"]: m for m in messages if m.get("type") == "result"}
+        self.assertFalse(any(m.get("type") in ("error", "jsontree") for m in messages))
+        expected = pprint.pformat({"zeta": list(range(30)), "alpha": (1, 2)}, width=79, sort_dicts=False)
+        self.assertEqual(results["long"]["text"], expected)
+        self.assertLess(expected.index("'zeta'"), expected.index("'alpha'"))
+        self.assertIn("\n", expected)
+        self.assertEqual(results["long"]["output_type"], "execute_result")
+        self.assertEqual(results["shown"]["text"], expected)
+        self.assertEqual(results["shown"]["output_type"], "display_data")
+        self.assertEqual(results["short"]["text"], "{'b': 1, 'a': 2}")
+
+    def test_large_collections_skip_pretty_printing(self):
+        messages = exchange([
+            {"id": "large", "op": "execute", "code": "import pprint\ncalls = []\noriginal = pprint.pformat\npprint.pformat = lambda *args, **kwargs: calls.append(1) or original(*args, **kwargs)\nlist(range(100000))"},
+            {"id": "count", "op": "execute", "code": "pprint.pformat = original\nlen(calls)"},
+        ])
+        results = {m["id"]: m["text"] for m in messages if m.get("type") == "result"}
+        self.assertTrue(results["large"].startswith("[0, 1, 2, 3"))
+        self.assertEqual(results["count"], "0")
+
+    def test_explicit_html_keeps_rendering(self):
+        messages = exchange([
             {"id": "html", "op": "execute", "code": "class Rich:\n    def _repr_html_(self):\n        return '<b>Formatted display</b>'\ndisplay(Rich())"},
         ])
         rich = next(m for m in messages if m.get("type") == "rich")
         self.assertEqual(rich["mime_bundle"]["text/html"], "<b>Formatted display</b>")
         self.assertEqual(rich["output_type"], "display_data")
 
-    def test_plain_model_result_does_not_inspect_parameters(self):
+    def test_model_result_prints_repr_without_inspecting_parameters(self):
         code = "class Model:\n    __module__ = 'sklearn.test'\n    def get_params(self):\n        raise AssertionError('parameter introspection should be skipped')\n    def __repr__(self):\n        return 'Model(alpha=0.5)'\nModel()"
-        messages = exchange([{"op": "config", "enhanced_data_outputs": False}, {"id": "model", "op": "execute", "code": code}])
-        self.assertFalse(any(m.get("type") == "error" for m in messages))
+        messages = exchange([{"id": "model", "op": "execute", "code": code}])
+        self.assertFalse(any(m.get("type") in ("error", "objectcard") for m in messages))
         self.assertEqual(next(m["text"] for m in messages if m.get("type") == "result"), "Model(alpha=0.5)")
 
-    def test_plain_array_result_skips_statistical_preview_work(self):
+    def test_array_result_prints_repr_without_statistics(self):
         try:
             import numpy
         except ImportError:
             self.skipTest("numpy is not installed")
         code = "import numpy as np\nvalues = np.arange(1000000)\ndef unavailable(*args, **kwargs):\n    raise AssertionError('preview statistics should be skipped')\nnp.nanmin = unavailable\nvalues"
-        messages = exchange([{"op": "config", "enhanced_data_outputs": False}, {"id": "array", "op": "execute", "code": code}])
+        messages = exchange([{"id": "array", "op": "execute", "code": code}])
         self.assertFalse(any(m.get("type") in ("error", "ndarray") for m in messages))
         self.assertIn("array([", next(m["text"] for m in messages if m.get("type") == "result"))
 
-    def test_plain_dataframe_result_does_not_emit_custom_table(self):
+    def test_dataframe_result_emits_table(self):
         try:
             import pandas
         except ImportError:
             self.skipTest("pandas is not installed")
         messages = exchange([
-            {"op": "config", "enhanced_data_outputs": False},
-            {"id": "plain", "op": "execute", "code": "import pandas as pd\nframe = pd.DataFrame({'reading': [10, 20]})\nframe"},
-            {"op": "config", "enhanced_data_outputs": True},
-            {"id": "enhanced", "op": "execute", "code": "frame"},
+            {"id": "frame", "op": "execute", "code": "import pandas as pd\nframe = pd.DataFrame({'reading': [10, 20]})\nframe"},
         ])
-        plain = next(m for m in messages if m.get("id") == "plain" and m.get("type") == "result")
-        self.assertIn("reading", plain["text"])
-        self.assertTrue(any(m.get("id") == "enhanced" and m.get("type") == "dataframe" for m in messages))
+        table = next(m for m in messages if m.get("id") == "frame" and m.get("type") == "dataframe")
+        self.assertIn("reading", table["payload"]["columns"])
 
     def test_mime_bundle_and_metadata_are_preserved(self):
         messages = exchange([{"id": "rich", "op": "execute", "code": "class Rich:\n    def _repr_mimebundle_(self):\n        return ({'text/html': '<b>hello</b>', 'application/json': {'x': [1, 2]}, 'application/vnd.example+json': {'keep': True}}, {'text/html': {'isolated': True}})\nRich()"}])
@@ -351,10 +384,8 @@ class NotebookCompatTests(unittest.TestCase):
         self.assertFalse(any(m.get("type") == "error" for m in messages))
 
     def test_unsupported_commands_fail_before_any_cell_code_runs(self):
-        commands = ["%matplotlib notebook", "%matplotlib widget", "%config InlineBackend.figure_format = 'svg'",
-                    "%precision 3", "%pylab inline", "%gui qt", "%automagic", "%timeit 1 + 1",
-                    "%pip install pandas", "%conda install pandas", "!echo hello", "%%bash\necho hello",
-                    "files = !ls", "duration = %time 1 + 1"]
+        commands = ["%matplotlib notebook", "%matplotlib widget", "%pylab inline", "%gui qt",
+                    "%automagic", "%nonexistent 1", "result = %nonexistent"]
         for command in commands:
             with self.subTest(command=command):
                 messages = exchange([
@@ -419,7 +450,7 @@ class NotebookCompatTests(unittest.TestCase):
 
     def test_unknown_magic_still_fails(self):
         messages = exchange([
-            {"id": "time", "op": "execute", "code": "%time x = 1\n"},
+            {"id": "time", "op": "execute", "code": "%nonexistent x = 1\n"},
         ])
         errors = [m for m in messages if m.get("type") == "error"]
         self.assertEqual(errors[0]["ename"], "UnsupportedNotebookCommand")

@@ -19,11 +19,15 @@ overrides are not yet represented by the analysis helper's synthetic filenames.
 Notebook syntax checks keep cell boundaries and carry compiler flags between cells.
 Ruff receives notebook code cells together so a name defined in one cell can be used in
 another. This is a check of the written notebook, not a guarantee about its execution
-order or live variables. Unsupported IPython commands receive explicit diagnostics.
+order or live variables. Unsupported IPython commands receive explicit diagnostics; the bodies of `%%time`, `%%timeit`, `%%capture` and `%%prun` cells are checked as Python.
 
 Completion offers names written in code cells and Python built-ins before execution,
 including while the kernel is busy or stopped. The idle live kernel adds member
-completions and call documentation for objects that already exist. Source-name
+completions and call documentation for objects that already exist. Typing an opening
+quote after a subscript, as in `df["` or `settings['a`, lists DataFrame columns, dictionary
+and mapping keys, structured-array fields, and `_ipython_key_completions_()` results.
+Supported IPython magics, `!` shell commands and `obj?` help lines are accepted by the
+static checks; only unsupported magics are reported. Source-name
 suggestions are lexical: they do not resolve types, imports, scopes, or definitions.
 Large-source scanning, analysis input/output, and process time are bounded.
 

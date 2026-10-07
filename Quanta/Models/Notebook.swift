@@ -263,12 +263,6 @@ final class Notebook: ObservableObject {
                     "traceback": traceback.isEmpty ? [] : traceback.components(separatedBy: "\n")]
         case .dataFrame(let payload):
             return textResult(payload.text, executionCount: executionCount)
-        case .ndarray(let payload):
-            return textResult(payload.text, executionCount: executionCount)
-        case .jsonTree(let payload):
-            return textResult(payload.text, executionCount: executionCount)
-        case .objectCard(let payload):
-            return textResult(payload.text, executionCount: executionCount)
         case .rich(let bundle):
             return RichOutput.raw(bundle)
         case .unsupported(let mime):

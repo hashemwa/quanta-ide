@@ -131,12 +131,9 @@ final class NotebookAuditTests: XCTestCase {
         let stream = CellOutput(kind: .stream(name: "stdout", text: "\u{1B}[38;2;18;52;86mcolored output\u{1B}[0m\n"))
         let latexBundle = ["text/latex": #"\begin{pmatrix}1&2\\3&4\end{pmatrix}"#]
         let latex = CellOutput(kind: RichOutput.kind(latexBundle), raw: RichOutput.raw(latexBundle))
-        let array = try XCTUnwrap(NDArrayPayload(dict: ["shape": [5], "dtype": "float64", "stats": ["min": 0, "max": 4, "mean": 2],
-                                                      "series": [0, 3, 1, 4, 2], "text": "array([0., 3., 1., 4., 2.])"]))
-        let card = try XCTUnwrap(ObjectCardPayload(dict: ["title": "ExampleModel", "subtitle": "Model parameters", "fields": ["alpha": "0.5"],
-                                                        "badges": ["fitted"], "text": "ExampleModel(alpha=0.5)"]))
+        let result = CellOutput(kind: .executeResult(text: "{'model': 'ExampleModel',\n 'alpha': 0.5}"))
         let code = NotebookCell(type: .code, source: "import math\nvalue = 42\nprint(f'result: {value}')",
-                                outputs: [stream, latex, CellOutput(kind: .ndarray(array)), CellOutput(kind: .objectCard(card))])
+                                outputs: [stream, latex, result])
         let notebook = Notebook(cells: [markdown, code], metadata: [:])
         let html = NotebookExporter.html(from: notebook, title: "Export audit")
         try html.write(to: directory.appendingPathComponent("export.html"), atomically: true, encoding: .utf8)
@@ -182,18 +179,10 @@ final class NotebookAuditTests: XCTestCase {
             let text = pdf.page(at: index)?.string ?? ""
             if text.contains("row ") { XCTAssertTrue(text.contains("Name")) }
         }
-        XCTAssertTrue(pdf.string?.contains("ndarray") == true)
-        XCTAssertTrue(pdf.string?.contains("ExampleModel") == true)
+        XCTAssertTrue(pdf.string?.contains("'alpha': 0.5") == true)
         let wideSelection = try XCTUnwrap(pdf.findString("WIDEEND", withOptions: []).first)
         let widePage = try XCTUnwrap(wideSelection.pages.first)
         XCTAssertLessThanOrEqual(wideSelection.bounds(for: widePage).maxX, 577)
-        for index in 0..<pdf.pageCount {
-            let text = pdf.page(at: index)?.string ?? ""
-            if text.contains("ExampleModel") {
-                XCTAssertTrue(text.contains("Model parameters"))
-                XCTAssertTrue(text.contains("ExampleModel(alpha=0.5)"))
-            }
-        }
     }
 
     func testMarkdownEditorUsesMarkdownColorsAndDoesNotRequestPythonCompletions() throws {
@@ -318,37 +307,6 @@ final class NotebookAuditTests: XCTestCase {
         for page in pages { XCTAssertLessThanOrEqual(page.rect.height + (page.header?.height ?? 0), 960) }
         for (first, second) in zip(pages, pages.dropFirst()) { XCTAssertEqual(first.rect.maxY, second.rect.minY) }
         XCTAssertEqual(pages.last?.rect.maxY, 2500)
-    }
-
-    func testArraySparklinesHandleExtremeNumbersAndBoundLargeSavedPreviews() {
-        let points = SparklineView.normalizedPoints([-1e308, nil, .infinity, 1e308, .nan])
-        XCTAssertNil(points[1])
-        XCTAssertNil(points[2])
-        XCTAssertNil(points[4])
-        for point in points.compactMap({ $0 }) {
-            XCTAssertTrue(point.x.isFinite && point.y.isFinite)
-            XCTAssertTrue((0...1).contains(point.x) && (0...1).contains(point.y))
-        }
-        let large = (0..<20_000).map { Optional(Double($0)) }
-        let sampled = SparklineView.normalizedPoints(large)
-        XCTAssertLessThanOrEqual(sampled.count, 512)
-        XCTAssertEqual(sampled.first??.x, 0)
-        XCTAssertEqual(sampled.last??.x, 1)
-    }
-
-    func testArrayAndObjectExportKeepsStructuredDetailsAndEscapesSource() throws {
-        let array = try XCTUnwrap(NDArrayPayload(dict: ["shape": [2, 2], "dtype": "float64", "grid": [[0, 1], [0.5, 0.75]],
-                                                      "stats": ["mean": 0.5], "text": "<script>array</script>"]))
-        let card = try XCTUnwrap(ObjectCardPayload(dict: ["title": "<Model>", "fields": ["alpha": "<value>"], "badges": ["fitted"]]))
-        let notebook = Notebook(cells: [NotebookCell(type: .code, outputs: [CellOutput(kind: .ndarray(array)), CellOutput(kind: .objectCard(card))])], metadata: [:])
-        let html = NotebookExporter.html(from: notebook, title: "Structured outputs")
-        XCTAssertTrue(html.contains("ndarray 2 × 2"))
-        XCTAssertTrue(html.contains("mean 0.500"))
-        XCTAssertTrue(html.contains("Array heatmap"))
-        XCTAssertTrue(html.contains("&lt;script&gt;array&lt;/script&gt;"))
-        XCTAssertTrue(html.contains("&lt;Model&gt;"))
-        XCTAssertTrue(html.contains("<dt>alpha</dt><dd>&lt;value&gt;</dd>"))
-        XCTAssertFalse(html.contains("<script>array</script>"))
     }
 
     private final class ClickedOutline: NSOutlineView {

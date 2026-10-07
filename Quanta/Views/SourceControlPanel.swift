@@ -472,7 +472,7 @@ private struct ChangeSectionHeader<Actions: View>: View {
                 .opacity(hovering ? 1 : 0)
                 .allowsHitTesting(hovering)
                 .disabled(git.isBusy)
-            Pill("\(count)", tone: .strong)
+            Pill("\(count)")
                 .fixedSize()
                 .accessibilityHidden(true)
         }

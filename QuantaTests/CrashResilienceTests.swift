@@ -71,30 +71,6 @@ final class CrashResilienceTests: XCTestCase {
         XCTAssertEqual(payload.originalValue(row: 0, column: 1), "42")
     }
 
-    func testSparseHeatmapDoesNotExpandIntoAGigabyteBitmap() throws {
-        var grid = Array(repeating: [Double?](), count: 20_000)
-        grid[0] = Array(repeating: 0.5, count: 20_000)
-        let image = try XCTUnwrap(NDArrayView.heatmapImage(grid))
-        let bitmap = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
-        XCTAssertLessThanOrEqual(bitmap.width, 512)
-        XCTAssertLessThanOrEqual(bitmap.height, 512)
-        XCTAssertLessThanOrEqual(bitmap.bytesPerRow * bitmap.height, 4 * 1024 * 1024)
-    }
-
-    func testHeatmapTreatsNonfiniteAndMissingValuesAsTransparent() throws {
-        let image = try XCTUnwrap(NDArrayView.heatmapImage([
-            [0, nil, 1], [.nan], [.infinity, 0.5],
-        ]))
-        let cgImage = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
-        let bitmap = NSBitmapImageRep(cgImage: cgImage)
-        XCTAssertEqual(bitmap.pixelsWide, 3)
-        XCTAssertEqual(bitmap.pixelsHigh, 3)
-        for (x, y) in [(1, 0), (0, 1), (2, 1), (0, 2)] {
-            XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: x, y: y)).alphaComponent, 0, accuracy: 0.001)
-        }
-        XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 1, y: 2)).alphaComponent, 1, accuracy: 0.001)
-    }
-
     func testKernelFramingDropsOversizedUnterminatedOutputAndResumes() {
         let framer = KernelSession.LineFramer(maximumLineBytes: 128)
         var notices: [String] = []
