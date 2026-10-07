@@ -30,6 +30,7 @@ final class KernelSession {
     private(set) var readyInfo: [String: Any]?
     private(set) var executable: String?
     private(set) var workingDirectory: URL?
+    private(set) var launchDirectory: URL?
 
     private var process: Process?
     private var stdinHandle: FileHandle?
@@ -53,6 +54,7 @@ final class KernelSession {
         readyInfo = nil
         executable = python
         self.workingDirectory = workingDirectory
+        launchDirectory = workingDirectory
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: python)

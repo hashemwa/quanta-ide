@@ -524,7 +524,7 @@ struct KernelStatusMenu: View {
 
     private var directorySuffix: String {
         guard app.kernelUsesDifferentDirectory else { return "" }
-        return " · Session: \(app.kernel.workingDirectory?.lastPathComponent ?? "Unknown")"
+        return " · Session: \(app.kernel.launchDirectory?.lastPathComponent ?? "Unknown")"
     }
 
     private func rowTitle(_ env: PythonEnvironment) -> String {

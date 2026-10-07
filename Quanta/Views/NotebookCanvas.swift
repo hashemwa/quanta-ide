@@ -121,6 +121,7 @@ final class NotebookCanvas: DocumentCanvas {
                 self.scheduleViewportUpdate()
             }
         }
+        scrollView.onLiveResizeEnd = { [weak self] in self?.scheduleLayout() }
         self.scrollView = scrollView
         self.contentView = contentView
         installToolbar(in: contentView, scrollView: scrollView)
@@ -664,6 +665,12 @@ final class NotebookCanvas: DocumentCanvas {
 
 private final class NotebookNativeScrollView: NSScrollView {
     var onViewportChange: ((NSSize) -> Void)?
+    var onLiveResizeEnd: (() -> Void)?
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        onLiveResizeEnd?()
+    }
 
     override func layout() {
         super.layout()

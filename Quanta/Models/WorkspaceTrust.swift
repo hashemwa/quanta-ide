@@ -8,12 +8,6 @@ enum WorkspaceTrust {
         url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
-    static func isWithin(_ directory: URL, root: URL) -> Bool {
-        let child = path(directory)
-        let parent = path(root)
-        return child == parent || child.hasPrefix(parent.hasSuffix("/") ? parent : parent + "/")
-    }
-
     static func contains(_ url: URL, defaults: UserDefaults = QuantaDefaults.store) -> Bool {
         (defaults.stringArray(forKey: workspacesKey) ?? []).contains(path(url))
     }
@@ -87,7 +81,7 @@ extension AppState {
             ?? PythonLocator.preferred(from: allowed)?.executable else { return }
         if kernel.isRunning {
             let directory = workspace?.rootURL ?? FileManager.default.homeDirectoryForCurrentUser
-            if !(kernel.workingDirectory.map { WorkspaceTrust.isWithin($0, root: directory) } ?? false)
+            if kernel.launchDirectory.map(WorkspaceTrust.path) != WorkspaceTrust.path(directory)
                 || kernel.executable != python {
                 kernelTransition = KernelTransition(workspace: workspace?.rootURL, python: python,
                                                     rememberInterpreter: false)
@@ -127,6 +121,6 @@ extension AppState {
 
     var kernelUsesDifferentDirectory: Bool {
         guard kernel.isRunning, let workspace else { return false }
-        return !(kernel.workingDirectory.map { WorkspaceTrust.isWithin($0, root: workspace.rootURL) } ?? false)
+        return kernel.launchDirectory.map(WorkspaceTrust.path) != WorkspaceTrust.path(workspace.rootURL)
     }
 }

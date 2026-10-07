@@ -410,14 +410,18 @@ final class AppState: ObservableObject {
     }
 
     func interruptKernel() {
+        cancelPendingRuns()
+        kernel.interrupt()
+    }
+
+    private func cancelPendingRuns() {
+        cancelQueuedCellRuns()
         if let id = runningChainDocumentID,
            let document = openDocuments.first(where: { $0.id == id }) {
             endRunChain(in: document)
         }
         pausedRunDocumentID = nil
         pausedRunCellIDs = []
-        cancelQueuedCellRuns()
-        kernel.interrupt()
     }
 
     func selectPython(_ path: String) {
@@ -466,7 +470,12 @@ final class AppState: ObservableObject {
         let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard let self, self.inputAlert === alert else { return }
             self.inputAlert = nil
-            self.kernel.replyToInput(response == .alertFirstButtonReturn ? field.stringValue : nil)
+            if response == .alertFirstButtonReturn {
+                self.kernel.replyToInput(field.stringValue)
+            } else {
+                self.cancelPendingRuns()
+                self.kernel.replyToInput(nil)
+            }
         }
         if let window = NSApp.mainWindow ?? NSApp.keyWindow {
             alert.beginSheetModal(for: window, completionHandler: finish)
@@ -1107,12 +1116,21 @@ final class AppState: ObservableObject {
             completion?(false)
             return
         }
-        guard !cell.isRunning, !queuedCellRuns.contains(where: { $0.cell === cell }) else {
+        guard !cell.isRunning else {
             completion?(false)
             return
         }
         if document.id == activeDocumentID { selectedCellID = cell.id }
-        if cellRunInFlight {
+        if let index = queuedCellRuns.firstIndex(where: { $0.cell === cell }) {
+            let earlier = queuedCellRuns[index]
+            if let completion {
+                queuedCellRuns[index] = QueuedCellRun(cell: cell, document: document, documentID: document.id,
+                                                      completion: { ok in
+                                                          earlier.completion?(ok)
+                                                          completion(ok)
+                                                      })
+            }
+        } else if cellRunInFlight {
             cell.isQueued = true
             queuedCellRuns.append(QueuedCellRun(cell: cell, document: document, documentID: document.id,
                                                 completion: completion))
@@ -1433,7 +1451,12 @@ final class AppState: ObservableObject {
             runningChainCellIDs = []
             runningChainIndex = 0
         }
-        document.notebook?.cells.forEach { $0.isQueued = false }
+        let waiting = waitingCellIDs
+        document.notebook?.cells.forEach { $0.isQueued = waiting.contains($0.id) }
+    }
+
+    private var waitingCellIDs: Set<UUID> {
+        Set(queuedCellRuns.compactMap { $0.cell?.id })
     }
 
     private func runNextQueuedCell(in document: Document) {
@@ -1483,7 +1506,8 @@ final class AppState: ObservableObject {
         pausedRunDocumentID = nil
         pausedRunCellIDs = []
         let queued = Set(runningChainCellIDs)
-        notebook.cells.forEach { $0.isQueued = queued.contains($0.id) }
+        let waiting = waitingCellIDs
+        notebook.cells.forEach { $0.isQueued = queued.contains($0.id) || waiting.contains($0.id) }
         runNextQueuedCell(in: document)
     }
 
@@ -1516,7 +1540,8 @@ final class AppState: ObservableObject {
         pausedRunDocumentID = nil
         pausedRunCellIDs = []
         let queued = Set(runningChainCellIDs)
-        document.notebook?.cells.forEach { $0.isQueued = queued.contains($0.id) }
+        let waiting = waitingCellIDs
+        document.notebook?.cells.forEach { $0.isQueued = queued.contains($0.id) || waiting.contains($0.id) }
         runNextQueuedCell(in: document)
     }
 
