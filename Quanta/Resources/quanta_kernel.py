@@ -3,6 +3,7 @@ import ast
 import asyncio
 import base64
 import builtins
+import codecs
 import codeop
 import datetime
 import functools
@@ -10,6 +11,8 @@ import importlib.machinery
 import inspect
 import io
 import html as html_escape
+import importlib
+import importlib.util
 import json
 import linecache
 import math
@@ -17,7 +20,11 @@ import numbers
 import os
 import re
 import reprlib
+import selectors
+import shlex
+import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -98,6 +105,10 @@ def emit(obj):
             obj.setdefault("output_type", "display_data")
         if obj.get("type") == "result":
             obj.setdefault("mime_bundle", {"text/plain": obj["text"]})
+    if _capture_stack and obj.get("id") == _current_id and (
+            obj.get("type") in _DISPLAY_TYPES or obj.get("type") == "clear_output"):
+        _capture_stack[-1].append(obj)
+        return
     with _lock:
         sys.__stdout__.write("\n" + json.dumps(obj) + "\n")
         sys.__stdout__.flush()
@@ -176,10 +187,62 @@ def _flush_streams_periodically():
         stdout_writer.flush()
         stderr_writer.flush()
 
-def _no_input(prompt=""):
-    raise RuntimeError("input() is not supported in Quanta yet")
+_input_requests = False
+_deferred_messages = []
 
-builtins.input = _no_input
+
+def _read_protocol_message():
+    while True:
+        line = _protocol_in.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(message, dict):
+            return message
+
+
+def _next_protocol_message():
+    if _deferred_messages:
+        return _deferred_messages.pop(0)
+    return _read_protocol_message()
+
+
+def _request_input(prompt="", password=False):
+    if not _input_requests or _current_id is None:
+        raise RuntimeError("input() needs a Quanta window to answer it; assign the value in code instead")
+    prompt = "" if prompt is None else str(prompt)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    emit({"id": _current_id, "type": "input_request", "prompt": _clean(prompt), "password": bool(password)})
+    while True:
+        message = _read_protocol_message()
+        if message is None:
+            raise EOFError("Quanta closed the input request")
+        if message.get("op") == "input_reply":
+            break
+        _deferred_messages.append(message)
+    if message.get("interrupt"):
+        raise KeyboardInterrupt
+    value = str(message.get("value", ""))
+    sys.stdout.write(prompt + ("" if password else value) + "\n")
+    return value
+
+
+def _input(prompt=""):
+    return _request_input(prompt)
+
+
+def _getpass(prompt="Password: ", stream=None):
+    return _request_input(prompt, password=True)
+
+
+builtins.input = _input
 
 def _no_exit(code=None):
     raise SystemExit(code)
@@ -512,6 +575,12 @@ class _PyplotShowHook:
 
 sys.meta_path.insert(0, _PyplotShowHook())
 
+try:
+    import getpass as _getpass_module
+    _getpass_module.getpass = _getpass
+except Exception:
+    pass
+
 def _is_matplotlib_result(obj):
     if "matplotlib" not in sys.modules:
         return False
@@ -814,7 +883,7 @@ def _uses_enhanced_data_output(obj):
 
 def _emit_plain_result(obj):
     try:
-        r = repr(obj)
+        r = _float_format % obj if _float_format is not None and isinstance(obj, float) else repr(obj)
     except Exception as e:
         r = "<repr failed: %s>" % e
     r = _clean(r)
@@ -844,8 +913,6 @@ def display(*objects):
 def clear_output(wait=False):
     emit({"id": _current_id, "type": "clear_output", "wait": bool(wait)})
 
-user_ns.update({"display": display, "clear_output": clear_output})
-
 def _error_report(e):
     try:
         ename = type(e).__name__
@@ -866,11 +933,21 @@ def _error_report(e):
     return {"ename": ename, "evalue": evalue, "traceback": tb, "frames": frames}
 
 def _user_traceback(e):
-    tb = e.__traceback__
+    if isinstance(e, UsageError):
+        return _clean("UsageError: %s\n" % e)
     this = os.path.abspath(__file__)
-    while tb is not None and os.path.abspath(tb.tb_frame.f_code.co_filename) == this:
-        tb = tb.tb_next
-    return _clean("".join(traceback.format_exception(type(e), e, tb)))
+    report = traceback.TracebackException(type(e), e, e.__traceback__)
+    pending = [report]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        current.stack = traceback.StackSummary.from_list(
+            [frame for frame in current.stack if os.path.abspath(frame.filename) != this])
+        pending.extend(item for item in (current.__cause__, current.__context__) if item is not None)
+    return _clean("".join(report.format()))
 
 def _traceback_frames(e):
     frames = []
@@ -892,9 +969,6 @@ def _traceback_frames(e):
         tb = tb.tb_next
     return frames
 
-_NOTEBOOK_COMMAND = re.compile(
-    r"^[ \t]*(?:[A-Za-z_]\w*(?:[ \t]*,[ \t]*[A-Za-z_]\w*)*[ \t]*=[ \t]*)?(%{1,2}[A-Za-z_]\w*|!!?)"
-)
 _INLINE_MATPLOTLIB = re.compile(r"^[ \t]*%matplotlib[ \t]+inline[ \t]*(?:#[^\r\n]*)?[\r\n]*$")
 
 
@@ -927,28 +1001,15 @@ def _parse_notebook_code(code, filename):
     for i, line in enumerate(lines):
         if i + 1 not in protected and _INLINE_MATPLOTLIB.fullmatch(line):
             lines[i] = "\n" if line.endswith("\n") else ""
+    source = "".join(lines)
+    flags = ast.PyCF_ONLY_AST | _compiler.flags
     try:
-        return compile("".join(lines), filename, "exec",
-                       flags=ast.PyCF_ONLY_AST | _compiler.flags, dont_inherit=True)
-    except SyntaxError as error:
-        for i, line in enumerate(lines):
-            command = _NOTEBOOK_COMMAND.match(line)
-            if command is None or i + 1 in protected or i + 1 != error.lineno:
-                continue
-            name = command.group(1)
-            if name == "%pip" or name == "%conda":
-                advice = "Install packages in the selected environment using the terminal."
-            elif name.startswith("!"):
-                advice = "Run shell commands in the terminal or use Python's subprocess module."
-            elif name == "%matplotlib":
-                advice = "Quanta supports inline plots; use %matplotlib inline or ordinary matplotlib code."
-            else:
-                advice = "Use ordinary Python, or run this notebook with an IPython kernel in Jupyter."
-            raise UnsupportedNotebookCommand(
-                f"{name} is not supported by Quanta's Python runner. {advice}",
-                (filename, i + 1, command.start(1) + 1, line),
-            ) from None
-        raise
+        return compile(source, filename, "exec", flags=flags, dont_inherit=True), source
+    except SyntaxError:
+        transformed = _transform_ipython(source, filename)
+        if transformed is None:
+            raise
+    return compile(transformed, filename, "exec", flags=flags, dont_inherit=True), transformed
 
 
 def _suppresses_result(code):
@@ -1043,8 +1104,1273 @@ def _shutdown_async_loop():
         asyncio.set_event_loop(None)
 
 
+class UsageError(Exception):
+    pass
+
+
+class SList(list):
+    @property
+    def s(self):
+        return " ".join(self)
+
+    @property
+    def n(self):
+        return "\n".join(self)
+
+    @property
+    def l(self):
+        return list(self)
+
+    def grep(self, pattern, prune=False):
+        match = re.compile(pattern, re.IGNORECASE).search if isinstance(pattern, str) else pattern
+        return SList(item for item in self if bool(match(item)) != bool(prune))
+
+    def fields(self, *indices):
+        rows = [line.split() for line in self]
+        if not indices:
+            return SList(" ".join(row) for row in rows)
+        return SList(" ".join(row[i] for i in indices if -len(row) <= i < len(row)) for row in rows)
+
+
+class CapturedIO:
+    def __init__(self, stdout, stderr, outputs):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.outputs = outputs
+
+    def show(self):
+        if self.stdout:
+            sys.stdout.write(self.stdout)
+        if self.stderr:
+            sys.stderr.write(self.stderr)
+        for output in self.outputs:
+            replay = dict(output)
+            replay["id"] = _current_id
+            emit(replay)
+
+    __call__ = show
+
+
+class TimeitResult:
+    def __init__(self, loops, repeat, best, worst, all_runs, precision):
+        self.loops = loops
+        self.repeat = repeat
+        self.best = best
+        self.worst = worst
+        self.all_runs = all_runs
+        self.timings = [run / loops for run in all_runs]
+        self.average = sum(self.timings) / len(self.timings)
+        self.stdev = (sum((t - self.average) ** 2 for t in self.timings) / len(self.timings)) ** 0.5
+        self._precision = precision
+
+    def __str__(self):
+        runs = "s" if self.repeat != 1 else ""
+        loops = "s" if self.loops != 1 else ""
+        return "%s ± %s per loop (mean ± std. dev. of %d run%s, %s loop%s each)" % (
+            _format_time(self.average, self._precision), _format_time(self.stdev, self._precision),
+            self.repeat, runs, "{:,}".format(self.loops), loops)
+
+    def __repr__(self):
+        return "<TimeitResult : %s>" % self
+
+
+_line_magics = {}
+_cell_magics = {}
+_cell_body_offset = 0
+_current_filename = None
+_previous_directory = None
+_notebook_directories = {}
+_float_format = None
+_capture_stack = []
+_autoreload_mode = 0
+_autoreload_explicit = set()
+_autoreload_skipped = set()
+_module_mtimes = {}
+_UNSUPPORTED_MATPLOTLIB = frozenset(("notebook", "widget", "ipympl", "qt", "qt5", "qt6", "tk",
+                                     "osx", "macosx", "gtk", "gtk3", "gtk4", "wx", "nbagg"))
+
+
+def _line_magic(*names):
+    def register(function):
+        for name in names:
+            _line_magics[name] = function
+        return function
+    return register
+
+
+def _cell_magic(*names):
+    def register(function):
+        for name in names:
+            _cell_magics[name] = function
+        return function
+    return register
+
+
+def _namespaces(frame):
+    if frame is None:
+        return user_ns, user_ns
+    return frame.f_globals, frame.f_locals
+
+
+def _at_top_level(frame):
+    return frame is None or (frame.f_globals is user_ns and frame.f_code.co_name == "<module>")
+
+
+_EXPANSION = re.compile(r"\$\$|\{\{|\}\}|\$([A-Za-z_]\w*)|\{([^{}]+)\}")
+
+
+def _expand(text, frame):
+    globals_ns, locals_ns = _namespaces(frame)
+
+    def replace(match):
+        token = match.group(0)
+        if token == "$$":
+            return "$"
+        if token == "{{":
+            return "{"
+        if token == "}}":
+            return "}"
+        try:
+            return str(eval(match.group(1) or match.group(2), globals_ns, locals_ns))
+        except Exception:
+            return token
+
+    return _EXPANSION.sub(replace, text)
+
+
+def _format_time(seconds, precision=3):
+    if seconds >= 60:
+        minutes, remainder = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        parts = [("%d%s" % (value, unit)) for value, unit in
+                 ((hours, "h"), (minutes, "min"), (round(remainder), "s")) if int(value)]
+        return " ".join(parts) or "0s"
+    units = ["s", "ms", "µs", "ns"]
+    scaling = [1, 1e3, 1e6, 1e9]
+    order = min(-int(math.floor(math.log10(seconds)) // 3), 3) if seconds > 0 else 3
+    return "%.*g %s" % (precision, seconds * scaling[order], units[order])
+
+
+def _process_environment():
+    environment = dict(os.environ)
+    environment.setdefault("PAGER", "cat")
+    environment.setdefault("GIT_PAGER", "cat")
+    interpreter_directory = os.path.dirname(sys.executable)
+    path = environment.get("PATH", "")
+    if interpreter_directory and interpreter_directory not in path.split(os.pathsep):
+        environment["PATH"] = interpreter_directory + (os.pathsep + path if path else "")
+    return environment
+
+
+def _stop_process(process):
+    for signal_number, wait in ((signal.SIGINT, 1.0), (signal.SIGTERM, 1.0), (signal.SIGKILL, None)):
+        if process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signal_number)
+        except (ProcessLookupError, PermissionError):
+            return
+        if wait is not None:
+            try:
+                process.wait(wait)
+            except subprocess.TimeoutExpired:
+                continue
+    try:
+        process.wait(1)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _feed_input(pipe, text):
+    try:
+        pipe.write(text.encode("utf-8"))
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        try:
+            pipe.close()
+        except OSError:
+            pass
+
+
+def _run_process(arguments, shell=False, merge=True, input_text=None, capture=False):
+    sys.stdout.flush()
+    sys.stderr.flush()
+    process = subprocess.Popen(
+        arguments, shell=shell,
+        stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merge else subprocess.PIPE,
+        cwd=execution_directory(), env=_process_environment(), start_new_session=True)
+    if input_text is not None:
+        threading.Thread(target=_feed_input, args=(process.stdin, input_text), daemon=True).start()
+    captured = []
+    targets = {process.stdout: sys.stdout}
+    if not merge:
+        targets[process.stderr] = sys.stderr
+    decoders = {pipe: codecs.getincrementaldecoder("utf-8")("replace") for pipe in targets}
+    selector = selectors.DefaultSelector()
+    try:
+        for pipe in targets:
+            selector.register(pipe, selectors.EVENT_READ)
+        while selector.get_map():
+            for key, _ in selector.select():
+                chunk = os.read(key.fd, 65536)
+                if chunk:
+                    text = decoders[key.fileobj].decode(chunk)
+                else:
+                    selector.unregister(key.fileobj)
+                    text = decoders[key.fileobj].decode(b"", final=True)
+                if not text:
+                    continue
+                if capture:
+                    captured.append(text)
+                else:
+                    targets[key.fileobj].write(text)
+        code = process.wait()
+    except BaseException:
+        _stop_process(process)
+        raise
+    finally:
+        selector.close()
+        for pipe in targets:
+            try:
+                pipe.close()
+            except OSError:
+                pass
+    user_ns["_exit_code"] = code
+    return ("".join(captured), code) if capture else code
+
+
+def _system(command):
+    _run_process(command, shell=True)
+
+
+def _getoutput(command):
+    text, _ = _run_process(command, shell=True, capture=True)
+    return SList(text.splitlines())
+
+
+def _compile_block(source, offset=0, filename=None):
+    name = filename or _current_filename or "<magic>"
+    padded = "\n" * offset + source
+    if filename is not None:
+        linecache.cache[filename] = (len(padded), None, padded.splitlines(True), filename)
+    tree, prepared = _parse_notebook_code(padded, name)
+    last_expr = None
+    if tree.body and isinstance(tree.body[-1], ast.Expr) and not _suppresses_result(prepared):
+        last_expr = ast.Expression(tree.body.pop().value)
+        ast.fix_missing_locations(last_expr)
+    compiled = _compiler(tree, name, "exec") if tree.body else None
+    compiled_expr = _compiler(last_expr, name, "eval") if last_expr is not None else None
+    return compiled, compiled_expr
+
+
+def _evaluate_block(compiled, compiled_expr, frame):
+    if _at_top_level(frame):
+        return _evaluate_cell(compiled, compiled_expr)
+    globals_ns, locals_ns = _namespaces(frame)
+    if compiled is not None:
+        exec(compiled, globals_ns, locals_ns)
+    return eval(compiled_expr, globals_ns, locals_ns) if compiled_expr is not None else None
+
+
+def _magic_source(line, cell):
+    if cell is not None:
+        return _compile_block(cell, _cell_body_offset)
+    return _compile_block(line, 0, "<timed exec>")
+
+
+@_line_magic("time")
+def _magic_time(line, frame, cell=None):
+    compiled, compiled_expr = _magic_source(line, cell)
+    start = os.times()
+    wall = time.perf_counter()
+    result = _evaluate_block(compiled, compiled_expr, frame)
+    wall = time.perf_counter() - wall
+    end = os.times()
+    user = end.user - start.user
+    system = end.system - start.system
+    sys.stdout.write("CPU times: user %s, sys: %s, total: %s\nWall time: %s\n" % (
+        _format_time(user), _format_time(system), _format_time(user + system), _format_time(wall)))
+    return result
+
+
+_cell_magics["time"] = lambda line, cell, frame: _magic_time(line, frame, cell)
+
+
+_TIMEIT_OPTION = re.compile(r"\s*-(?:([nrp])\s*(\d+)|([qo]))(?=\s|$)")
+
+
+def _timeit_options(line):
+    options = {}
+    position = 0
+    while True:
+        match = _TIMEIT_OPTION.match(line, position)
+        if match is None:
+            break
+        if match.group(1):
+            options[match.group(1)] = int(match.group(2))
+        else:
+            options[match.group(3)] = True
+        position = match.end()
+    return options, line[position:].strip()
+
+
+@_line_magic("timeit")
+def _magic_timeit(line, frame, cell=None):
+    import timeit
+    options, rest = _timeit_options(line)
+    statement, setup = (cell, rest or "pass") if cell is not None else (rest, "pass")
+    if not statement.strip():
+        raise UsageError("%timeit needs a statement to time")
+    globals_ns, locals_ns = _namespaces(frame)
+    namespace = globals_ns if locals_ns is globals_ns else dict(globals_ns, **dict(locals_ns))
+    timer = timeit.Timer(statement, setup, timer=time.perf_counter, globals=namespace)
+    repeat = max(1, options.get("r", 7))
+    precision = max(1, options.get("p", 3))
+    number = options.get("n", 0)
+    if number <= 0:
+        for exponent in range(10):
+            number = 10 ** exponent
+            if timer.timeit(number) >= 0.2:
+                break
+    runs = timer.repeat(repeat, number)
+    result = TimeitResult(number, repeat, min(runs) / number, max(runs) / number, runs, precision)
+    if not options.get("q"):
+        sys.stdout.write(str(result) + "\n")
+    return result if options.get("o") else None
+
+
+_cell_magics["timeit"] = lambda line, cell, frame: _magic_timeit(line, frame, cell)
+
+
+@_line_magic("prun")
+def _magic_prun(line, frame, cell=None):
+    import cProfile
+    import pstats
+    sort = "tottime"
+    limit = 30
+    tokens = line.split()
+    rest = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in ("-s", "-l") and index + 1 < len(tokens):
+            if token == "-s":
+                sort = tokens[index + 1]
+            elif tokens[index + 1].isdigit():
+                limit = int(tokens[index + 1])
+            index += 2
+            continue
+        if token == "-q":
+            index += 1
+            continue
+        rest = tokens[index:]
+        break
+    source = cell if cell is not None else line[line.find(rest[0]):] if rest else ""
+    if not source.strip():
+        raise UsageError("%prun needs a statement to profile")
+    if cell is not None:
+        compiled, compiled_expr = _compile_block(cell, _cell_body_offset)
+    else:
+        compiled, compiled_expr = _compile_block(source, 0, "<profiled exec>")
+    globals_ns, locals_ns = _namespaces(frame)
+    profiler = cProfile.Profile()
+    profiler.enable()
+    try:
+        if compiled is not None:
+            exec(compiled, globals_ns, locals_ns)
+        result = eval(compiled_expr, globals_ns, locals_ns) if compiled_expr is not None else None
+    finally:
+        profiler.disable()
+    stats = pstats.Stats(profiler, stream=sys.stdout)
+    stats.sort_stats({"time": "tottime", "cumulative": "cumtime"}.get(sort, sort)).print_stats(limit)
+    return result
+
+
+_cell_magics["prun"] = lambda line, cell, frame: _magic_prun(line, frame, cell)
+
+
+def _install_note(arguments):
+    if arguments and arguments[0] in ("install", "uninstall", "remove", "update", "upgrade"):
+        importlib.invalidate_caches()
+        sys.stdout.write("Note: you may need to restart the kernel to use updated packages.\n")
+
+
+@_line_magic("pip")
+def _magic_pip(line, frame):
+    arguments = shlex.split(_expand(line, frame))
+    if arguments and arguments[0] == "uninstall" and not {"-y", "--yes"} & set(arguments):
+        arguments.insert(1, "--yes")
+    _run_process([sys.executable, "-m", "pip"] + arguments)
+    _install_note(arguments)
+
+
+def _conda_executable():
+    for variable in ("CONDA_EXE", "MAMBA_EXE"):
+        candidate = os.environ.get(variable)
+        if candidate and os.path.exists(candidate):
+            return candidate
+    roots = [sys.prefix, os.path.dirname(os.path.dirname(sys.prefix))]
+    for root in roots:
+        for relative in ("bin/mamba", "bin/conda", "condabin/conda"):
+            candidate = os.path.join(root, relative)
+            if os.path.exists(candidate):
+                return candidate
+    return shutil.which("mamba") or shutil.which("conda")
+
+
+@_line_magic("conda", "mamba")
+def _magic_conda(line, frame):
+    executable = _conda_executable()
+    if executable is None:
+        raise UsageError("conda was not found for this interpreter. Use %pip or the Python Environment window.")
+    arguments = shlex.split(_expand(line, frame))
+    if arguments and arguments[0] in ("install", "remove", "uninstall", "update", "upgrade"):
+        if not {"-p", "--prefix", "-n", "--name"} & set(arguments):
+            arguments[1:1] = ["--prefix", sys.prefix]
+        if not {"-y", "--yes"} & set(arguments):
+            arguments.insert(1, "--yes")
+    _run_process([executable] + arguments)
+    _install_note(arguments)
+
+
+@_line_magic("cd")
+def _magic_cd(line, frame):
+    global _previous_directory
+    text = _expand(line, frame).strip()
+    quiet = False
+    if text == "-q" or text.startswith("-q "):
+        quiet = True
+        text = text[2:].strip()
+    if not text:
+        target = os.path.expanduser("~")
+    elif text == "-":
+        if _previous_directory is None:
+            raise UsageError("cd -: no previous directory")
+        target = _previous_directory
+    else:
+        parts = shlex.split(text)
+        target = os.path.expanduser(parts[0] if parts else text)
+    current = execution_directory()
+    os.chdir(target)
+    _previous_directory = current
+    if not quiet:
+        sys.stdout.write(os.getcwd() + "\n")
+
+
+@_line_magic("pwd")
+def _magic_pwd(line, frame):
+    return os.getcwd()
+
+
+def _alias(command):
+    def run(line, frame):
+        expanded = _expand(line, frame).strip()
+        _system(command + (" " + expanded if expanded else ""))
+    return run
+
+
+for _alias_name, _alias_command in (("ls", "ls"), ("ll", "ls -F -l"), ("cat", "cat"), ("cp", "cp"),
+                                    ("mv", "mv"), ("rm", "rm"), ("rmdir", "rmdir"), ("mkdir", "mkdir")):
+    _line_magics[_alias_name] = _alias(_alias_command)
+
+
+@_line_magic("sx", "system")
+def _magic_sx(line, frame):
+    return _getoutput(_expand(line, frame))
+
+
+@_line_magic("env")
+def _magic_env(line, frame):
+    text = _expand(line, frame).strip()
+    if not text:
+        return dict(os.environ)
+    if "=" in text:
+        name, value = text.split("=", 1)
+    elif " " in text:
+        name, value = text.split(None, 1)
+    else:
+        if text not in os.environ:
+            raise UsageError("Environment does not have key: %s" % text)
+        return os.environ[text]
+    name = name.strip()
+    value = value.strip()
+    os.environ[name] = value
+    sys.stdout.write("env: %s=%s\n" % (name, value))
+
+
+@_line_magic("set_env")
+def _magic_set_env(line, frame):
+    parts = _expand(line, frame).strip().replace("=", " ", 1).split(None, 1)
+    if len(parts) != 2:
+        raise UsageError("Usage: %set_env NAME VALUE")
+    os.environ[parts[0]] = parts[1]
+    sys.stdout.write("env: %s=%s\n" % (parts[0], parts[1]))
+
+
+def _is_helper(name, value):
+    return _helpers.get(name, _helpers) is value
+
+
+def _interactive_names(type_names=()):
+    names = []
+    for name, value in list(user_ns.items()):
+        if not isinstance(name, str) or name.startswith("_") or name in ("In", "Out") or _is_helper(name, value):
+            continue
+        if type_names and type(value).__name__ not in type_names:
+            continue
+        names.append(name)
+    return sorted(names, key=str.lower)
+
+
+@_line_magic("who")
+def _magic_who(line, frame):
+    names = _interactive_names(tuple(line.split()))
+    if not names:
+        sys.stdout.write("Interactive namespace is empty.\n")
+        return
+    sys.stdout.write("\t".join(names) + "\n")
+
+
+@_line_magic("who_ls")
+def _magic_who_ls(line, frame):
+    return _interactive_names(tuple(line.split()))
+
+
+@_line_magic("whos")
+def _magic_whos(line, frame):
+    names = _interactive_names(tuple(line.split()))
+    if not names:
+        sys.stdout.write("Interactive namespace is empty.\n")
+        return
+    rows = [(name, type(user_ns[name]).__name__, safe_repr(user_ns[name], limit=60, short=True)) for name in names]
+    name_width = max(len("Variable"), *(len(row[0]) for row in rows)) + 3
+    type_width = max(len("Type"), *(len(row[1]) for row in rows)) + 3
+    lines = ["Variable".ljust(name_width) + "Type".ljust(type_width) + "Data/Info",
+             "-" * (name_width + type_width + 9)]
+    lines.extend(name.ljust(name_width) + kind.ljust(type_width) + info for name, kind, info in rows)
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def _clear_namespace(matches):
+    for name in list(user_ns):
+        if not isinstance(name, str) or name in ("__name__", "__builtins__"):
+            continue
+        if _is_helper(name, user_ns[name]) or not matches(name):
+            continue
+        del user_ns[name]
+
+
+@_line_magic("reset")
+def _magic_reset(line, frame):
+    if "-f" not in line.split():
+        raise UsageError("Quanta cannot ask for confirmation; use %reset -f to delete all variables.")
+    _clear_namespace(lambda name: True)
+
+
+@_line_magic("reset_selective")
+def _magic_reset_selective(line, frame):
+    arguments = [part for part in line.split() if part != "-f"]
+    if "-f" not in line.split() or not arguments:
+        raise UsageError("Use %reset_selective -f pattern.")
+    pattern = re.compile(arguments[0])
+    _clear_namespace(lambda name: pattern.search(name) is not None)
+
+
+@_line_magic("xdel")
+def _magic_xdel(line, frame):
+    for name in line.split():
+        if name not in user_ns:
+            raise UsageError("name '%s' is not defined" % name)
+        del user_ns[name]
+
+
+@_line_magic("precision")
+def _magic_precision(line, frame):
+    global _float_format
+    text = line.strip()
+    numpy = sys.modules.get("numpy")
+    if not text:
+        _float_format = None
+        if numpy is not None:
+            numpy.set_printoptions(precision=8)
+        return "%r"
+    if text.isdigit():
+        _float_format = "%%.%df" % int(text)
+        if numpy is not None:
+            numpy.set_printoptions(precision=int(text))
+        return _float_format
+    try:
+        text % math.pi
+    except Exception:
+        raise UsageError("Invalid format: %s" % text) from None
+    _float_format = text
+    return _float_format
+
+
+_ACCEPTED_CONFIG = frozenset(("InlineBackend", "Completer", "IPCompleter", "InteractiveShell",
+                              "ZMQInteractiveShell", "HistoryManager", "IPKernelApp", "Application"))
+
+
+@_line_magic("config")
+def _magic_config(line, frame):
+    target = line.split("=", 1)[0].strip().split(".")[0]
+    if not target:
+        sys.stdout.write("Quanta accepts InlineBackend and Completer settings for compatibility.\n")
+    elif target not in _ACCEPTED_CONFIG:
+        sys.stderr.write("%%config %s has no effect in Quanta.\n" % target)
+
+
+@_line_magic("matplotlib")
+def _magic_matplotlib(line, frame):
+    sys.stdout.write("Using matplotlib backend: inline\n")
+
+
+@_line_magic("xmode", "colors", "unload_ext", "aimport_off")
+def _magic_ignored(line, frame):
+    return None
+
+
+@_line_magic("clear")
+def _magic_clear(line, frame):
+    clear_output()
+
+
+@_line_magic("pinfo")
+def _magic_pinfo(line, frame):
+    _show_help(line.strip(), frame, False)
+
+
+@_line_magic("pinfo2")
+def _magic_pinfo2(line, frame):
+    _show_help(line.strip(), frame, True)
+
+
+def _show_help(expression, frame, detailed):
+    globals_ns, locals_ns = _namespaces(frame)
+    try:
+        value = eval(expression, globals_ns, locals_ns)
+    except Exception:
+        sys.stdout.write("Object `%s` not found.\n" % expression)
+        return
+    fields = []
+    if callable(value):
+        try:
+            fields.append(("Signature", expression.rsplit(".", 1)[-1] + str(inspect.signature(value))))
+        except (TypeError, ValueError):
+            pass
+    fields.append(("Type", type(value).__name__))
+    if not isinstance(value, (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, type)):
+        fields.append(("String form", safe_repr(value, limit=200)))
+        try:
+            fields.append(("Length", str(len(value))))
+        except Exception:
+            pass
+    try:
+        fields.append(("File", inspect.getsourcefile(value) or inspect.getfile(value)))
+    except (TypeError, OSError):
+        pass
+    source = None
+    if detailed:
+        try:
+            source = inspect.getsource(value)
+        except (TypeError, OSError):
+            source = None
+    if source is not None:
+        fields.append(("Source", source.rstrip("\n")))
+    else:
+        fields.append(("Docstring", inspect.getdoc(value) or "<no docstring>"))
+    lines = []
+    for label, text in fields:
+        heading = "\x1b[31m%s:\x1b[0m" % label
+        if "\n" in text or label in ("Docstring", "Source"):
+            lines.append(heading + "\n" + text)
+        else:
+            lines.append(heading + " " * max(1, 14 - len(label)) + text)
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def _module_source(module):
+    path = getattr(module, "__file__", None)
+    if not isinstance(path, str) or not path.endswith(".py"):
+        return None
+    if "site-packages" in path or "dist-packages" in path:
+        return None
+    if path.startswith(_standard_library):
+        return None
+    return path
+
+
+_standard_library = os.path.dirname(os.__file__) + os.sep
+
+
+def _record_module_times():
+    for name, module in list(sys.modules.items()):
+        if name in _module_mtimes or name == "__main__":
+            continue
+        path = _module_source(module)
+        if path is None:
+            continue
+        try:
+            _module_mtimes[name] = os.stat(path).st_mtime
+        except OSError:
+            continue
+
+
+def _update_function(old, new):
+    for attribute in ("__code__", "__defaults__", "__kwdefaults__", "__doc__", "__annotations__"):
+        try:
+            setattr(old, attribute, getattr(new, attribute))
+        except (AttributeError, TypeError, ValueError):
+            pass
+    try:
+        old.__dict__.update(new.__dict__)
+    except (AttributeError, TypeError):
+        pass
+
+
+def _update_class(old, new, seen):
+    for key in list(old.__dict__):
+        if key not in new.__dict__ and key not in ("__dict__", "__weakref__"):
+            try:
+                delattr(old, key)
+            except (AttributeError, TypeError):
+                pass
+    for key, value in list(new.__dict__.items()):
+        if key in ("__dict__", "__weakref__", "__doc__"):
+            continue
+        current = old.__dict__.get(key)
+        if current is not None and _update_object(current, value, seen):
+            continue
+        try:
+            setattr(old, key, value)
+        except (AttributeError, TypeError):
+            pass
+
+
+def _update_object(old, new, seen):
+    if id(old) in seen:
+        return True
+    seen.add(id(old))
+    if isinstance(old, types.FunctionType) and isinstance(new, types.FunctionType):
+        _update_function(old, new)
+        return True
+    if isinstance(old, (classmethod, staticmethod)) and isinstance(new, type(old)):
+        return _update_object(old.__func__, new.__func__, seen)
+    if isinstance(old, property) and isinstance(new, property):
+        for accessor in ("fget", "fset", "fdel"):
+            before, after = getattr(old, accessor), getattr(new, accessor)
+            if before is not None and after is not None:
+                _update_object(before, after, seen)
+        return False
+    if isinstance(old, type) and isinstance(new, type):
+        _update_class(old, new, seen)
+        return True
+    return False
+
+
+def _reload_module(name, module, path):
+    try:
+        os.remove(importlib.util.cache_from_source(path))
+    except (OSError, NotImplementedError, ValueError):
+        pass
+    previous = dict(module.__dict__)
+    importlib.reload(module)
+    seen = set()
+    for key, old in previous.items():
+        new = module.__dict__.get(key)
+        if new is None or new is old:
+            continue
+        if getattr(old, "__module__", None) == name or isinstance(old, types.FunctionType):
+            _update_object(old, new, seen)
+
+
+def _autoreload(force=False):
+    if not force and _autoreload_mode == 0:
+        return
+    for name, module in list(sys.modules.items()):
+        if name == "__main__" or name in _autoreload_skipped:
+            continue
+        if _autoreload_mode == 1 and not force and name not in _autoreload_explicit:
+            continue
+        path = _module_source(module)
+        if path is None:
+            continue
+        try:
+            modified = os.stat(path).st_mtime
+        except OSError:
+            continue
+        previous = _module_mtimes.get(name)
+        _module_mtimes[name] = modified
+        if previous is None or previous == modified:
+            continue
+        try:
+            _reload_module(name, module, path)
+        except BaseException as error:
+            if isinstance(error, KeyboardInterrupt):
+                raise
+            sys.stderr.write("[autoreload of %s failed]\n%s" % (
+                name, _clean("".join(traceback.format_exception_only(type(error), error)))))
+
+
+_AUTORELOAD_MODES = {"0": 0, "off": 0, "1": 1, "explicit": 1, "2": 2, "all": 2, "3": 2, "complete": 2}
+
+
+@_line_magic("autoreload")
+def _magic_autoreload(line, frame):
+    global _autoreload_mode
+    words = [word for word in line.split() if not word.startswith("-")]
+    if not words or words[0] == "now":
+        _record_module_times()
+        _autoreload(force=True)
+        return
+    if words[0] not in _AUTORELOAD_MODES:
+        raise UsageError("Unknown %%autoreload mode: %s" % words[0])
+    _autoreload_mode = _AUTORELOAD_MODES[words[0]]
+    _record_module_times()
+
+
+@_line_magic("aimport")
+def _magic_aimport(line, frame):
+    names = [part.strip() for part in line.replace(",", " ").split() if part.strip()]
+    if not names:
+        sys.stdout.write("Modules to reload:\n%s\n\nModules to skip:\n%s\n" % (
+            " ".join(sorted(_autoreload_explicit)), " ".join(sorted(_autoreload_skipped))))
+        return
+    for name in names:
+        if name.startswith("-"):
+            _autoreload_skipped.add(name[1:])
+            _autoreload_explicit.discard(name[1:])
+            continue
+        module = importlib.import_module(name)
+        _autoreload_explicit.add(name)
+        _autoreload_skipped.discard(name)
+        user_ns[name.split(".")[0]] = sys.modules[name.split(".")[0]] if "." in name else module
+    _record_module_times()
+
+
+def _load_dotenv(line, frame):
+    try:
+        from dotenv import find_dotenv, load_dotenv
+    except ImportError:
+        raise ModuleNotFoundError("%dotenv needs the python-dotenv package in the selected environment") from None
+    arguments = shlex.split(_expand(line, frame))
+    override = "-o" in arguments or "--override" in arguments
+    paths = [argument for argument in arguments if not argument.startswith("-")]
+    path = os.path.expanduser(paths[0]) if paths else find_dotenv(usecwd=True)
+    load_dotenv(path, override=override)
+
+
+@_line_magic("load_ext", "reload_ext")
+def _magic_load_ext(line, frame):
+    for name in line.split():
+        if name == "autoreload":
+            _record_module_times()
+            continue
+        if name == "dotenv":
+            _line_magics["dotenv"] = _load_dotenv
+            continue
+        module = importlib.import_module(name)
+        loader = getattr(module, "load_ipython_extension", None)
+        if not callable(loader):
+            sys.stderr.write("The %s module is not an IPython extension.\n" % name)
+            continue
+        try:
+            loader(_shell)
+        except Exception as error:
+            sys.stderr.write("Quanta could not load the IPython extension %s: %s\n" % (name, _clean(str(error))))
+
+
+@_line_magic("dotenv")
+def _magic_dotenv(line, frame):
+    _load_dotenv(line, frame)
+
+
+def _read_notebook_sources(path):
+    with open(path, encoding="utf-8") as handle:
+        notebook = json.load(handle)
+    sources = []
+    for cell in notebook.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        source = cell.get("source", "")
+        sources.append("".join(source) if isinstance(source, list) else str(source))
+    return sources
+
+
+@_line_magic("run")
+def _magic_run(line, frame):
+    arguments = shlex.split(_expand(line, frame))
+    interactive = False
+    as_main = True
+    timed = False
+    module_name = None
+    while arguments and arguments[0].startswith("-"):
+        option = arguments.pop(0)
+        if option == "-i":
+            interactive = True
+        elif option == "-n":
+            as_main = False
+        elif option == "-t":
+            timed = True
+        elif option == "-m" and arguments:
+            module_name = arguments.pop(0)
+            break
+        else:
+            raise UsageError("%%run option %s is not supported" % option)
+    start = time.perf_counter()
+    saved_argv = sys.argv
+    if module_name is not None:
+        import runpy
+        sys.argv = [module_name] + arguments
+        try:
+            namespace = runpy.run_module(module_name, run_name="__main__" if as_main else module_name,
+                                         alter_sys=True)
+        except SystemExit as error:
+            if error.code not in (None, 0):
+                raise
+            namespace = {}
+        finally:
+            sys.argv = saved_argv
+        user_ns.update({k: v for k, v in namespace.items() if not k.startswith("__")})
+    else:
+        if not arguments:
+            raise UsageError("%run needs a file name")
+        path = os.path.expanduser(arguments[0])
+        if not os.path.exists(path) and os.path.exists(path + ".py"):
+            path += ".py"
+        path = os.path.abspath(path)
+        if path.endswith(".ipynb"):
+            sources = [(source, "%s [cell %d]" % (path, index + 1))
+                       for index, source in enumerate(_read_notebook_sources(path))]
+        else:
+            with open(path, encoding="utf-8") as handle:
+                sources = [(handle.read(), path)]
+        if interactive:
+            namespace = user_ns
+        else:
+            namespace = {"__name__": "__main__" if as_main else os.path.splitext(os.path.basename(path))[0],
+                         "__builtins__": builtins}
+            namespace.update(_helpers)
+        namespace["__file__"] = path
+        directory = os.path.dirname(path)
+        added = directory not in sys.path
+        if added:
+            sys.path.insert(0, directory)
+        sys.argv = [path] + arguments[1:]
+        try:
+            for source, filename in sources:
+                linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+                tree, _ = _parse_notebook_code(source, filename)
+                exec(_compiler(tree, filename, "exec"), namespace)
+        except SystemExit as error:
+            if error.code not in (None, 0):
+                raise
+        finally:
+            sys.argv = saved_argv
+            if added and directory in sys.path:
+                sys.path.remove(directory)
+        if not interactive:
+            user_ns.update({k: v for k, v in namespace.items()
+                            if not k.startswith("__") and not _is_helper(k, v)})
+    if timed:
+        sys.stdout.write("Wall time: %s\n" % _format_time(time.perf_counter() - start))
+
+
+@_line_magic("lsmagic")
+def _magic_lsmagic(line, frame):
+    sys.stdout.write("Available line magics:\n%s\n\nAvailable cell magics:\n%s\n" % (
+        "  ".join("%" + name for name in sorted(_line_magics)),
+        "  ".join("%%" + name for name in sorted(_cell_magics))))
+
+
+@_cell_magic("writefile", "file")
+def _magic_writefile(line, cell, frame):
+    arguments = shlex.split(_expand(line, frame))
+    append = "-a" in arguments or "--append" in arguments
+    names = [argument for argument in arguments if argument not in ("-a", "--append")]
+    if not names:
+        raise UsageError("%%writefile needs a file name")
+    path = os.path.expanduser(names[0])
+    if append:
+        sys.stdout.write("Appending to %s\n" % path)
+    else:
+        sys.stdout.write(("Overwriting %s\n" if os.path.exists(path) else "Writing %s\n") % path)
+    with open(path, "a" if append else "w", encoding="utf-8") as handle:
+        handle.write(cell)
+
+
+@_cell_magic("capture")
+def _magic_capture(line, cell, frame):
+    words = line.split()
+    names = [word for word in words if not word.startswith("-")]
+    stdout = io.StringIO() if "--no-stdout" not in words else None
+    stderr = io.StringIO() if "--no-stderr" not in words else None
+    outputs = []
+    saved = sys.stdout, sys.stderr
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if stdout is not None:
+        sys.stdout = stdout
+    if stderr is not None:
+        sys.stderr = stderr
+    capturing = "--no-display" not in words
+    if capturing:
+        _capture_stack.append(outputs)
+    try:
+        compiled, compiled_expr = _compile_block(cell, _cell_body_offset)
+        result = _evaluate_block(compiled, compiled_expr, frame)
+        if result is not None:
+            display(result)
+        emit_figures()
+    finally:
+        if capturing:
+            _capture_stack.pop()
+        sys.stdout, sys.stderr = saved
+    captured = CapturedIO(stdout.getvalue() if stdout is not None else "",
+                          stderr.getvalue() if stderr is not None else "", outputs)
+    if names:
+        _namespaces(frame)[1][names[0]] = captured
+        if not _at_top_level(frame):
+            user_ns[names[0]] = captured
+
+
+def _script_magic(program):
+    def run(line, cell, frame):
+        arguments = shlex.split(_expand(line, frame))
+        raise_error = "--no-raise-error" not in arguments
+        arguments = [argument for argument in arguments if argument != "--no-raise-error"]
+        if program is None:
+            if not arguments:
+                raise UsageError("%%script needs a program name")
+            command = arguments
+        else:
+            command = list(program) + arguments
+        code = _run_process(command, merge=False, input_text=cell)
+        if code and raise_error:
+            raise subprocess.CalledProcessError(code, command[0])
+    return run
+
+
+for _script_name, _script_program in (("bash", ["bash"]), ("sh", ["sh"]), ("zsh", ["zsh"]),
+                                      ("python", [sys.executable]), ("python3", [sys.executable]),
+                                      ("perl", ["perl"]), ("ruby", ["ruby"]), ("script", None)):
+    _cell_magics[_script_name] = _script_magic(_script_program)
+
+
+def _rich_cell(mime):
+    def run(line, cell, frame):
+        global _display_depth
+        _display_depth += 1
+        try:
+            emit({"id": _current_id, "type": "rich",
+                  "mime_bundle": {mime: cell, "text/plain": cell}, "metadata": {}})
+        finally:
+            _display_depth -= 1
+    return run
+
+
+for _rich_name, _rich_mime in (("html", "text/html"), ("markdown", "text/markdown"),
+                               ("latex", "text/latex"), ("svg", "image/svg+xml")):
+    _cell_magics[_rich_name] = _rich_cell(_rich_mime)
+
+
+class QuantaShell:
+    def __init__(self):
+        self.user_ns = user_ns
+        self.config = {}
+
+    def run_line_magic(self, magic_name, line, _stack_depth=1):
+        function = _line_magics.get(magic_name)
+        if function is None:
+            raise UsageError("Line magic function `%%%s` not found." % magic_name)
+        return function(line, sys._getframe(_stack_depth))
+
+    def run_cell_magic(self, magic_name, line, cell):
+        function = _cell_magics.get(magic_name)
+        if function is None:
+            raise UsageError("Cell magic `%%%%%s` not found." % magic_name)
+        return function(line, cell, sys._getframe(1))
+
+    def magic(self, line):
+        name, _, arguments = line.lstrip("%").partition(" ")
+        return self.run_line_magic(name, arguments, _stack_depth=2)
+
+    def system(self, command):
+        _system(_expand(command, sys._getframe(1)))
+
+    def getoutput(self, command, split=True):
+        output = _getoutput(_expand(command, sys._getframe(1)))
+        return output if split else output.n
+
+    def ev(self, expression):
+        return eval(expression, user_ns)
+
+    def ex(self, command):
+        exec(command, user_ns)
+
+    def push(self, variables, interactive=True):
+        if isinstance(variables, dict):
+            user_ns.update(variables)
+        else:
+            caller = sys._getframe(1)
+            names = variables.split() if isinstance(variables, str) else variables
+            for name in names:
+                user_ns[name] = eval(name, caller.f_globals, caller.f_locals)
+
+    def register_magic_function(self, function, magic_kind="line", magic_name=None):
+        name = magic_name or function.__name__
+        if magic_kind in ("line", "line_cell"):
+            _line_magics[name] = lambda line, frame: function(line)
+        if magic_kind in ("cell", "line_cell"):
+            _cell_magics[name] = lambda line, cell, frame: function(line, cell)
+
+    def register_magics(self, *magics):
+        raise UsageError("IPython magic classes are not supported by Quanta")
+
+    def __repr__(self):
+        return "<QuantaShell>"
+
+
+_shell = QuantaShell()
+
+
+def get_ipython():
+    return _shell
+
+
+_helpers = {"display": display, "clear_output": clear_output, "get_ipython": get_ipython}
+user_ns.update(_helpers)
+
+
+_HELP_LINE = re.compile(r"([ \t]*)(\?{1,2})?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(\?{1,2})?[ \t]*")
+_COMMAND_LINE = re.compile(
+    r"([ \t]*)(?:([A-Za-z_][\w.]*(?:[ \t]*,[ \t]*[A-Za-z_][\w.]*)*)[ \t]*=[ \t]*)?(!.*|%[A-Za-z_].*)")
+_MAGIC_NAME = re.compile(r"%([A-Za-z_][\w.]*)[ \t]*(.*)")
+
+
+def _unsupported_command(name, filename, row, column, line):
+    if name.startswith("%matplotlib"):
+        advice = "Quanta supports inline plots; use %matplotlib inline or ordinary matplotlib code."
+    else:
+        advice = "Use ordinary Python, or run this notebook with an IPython kernel in Jupyter."
+    return UnsupportedNotebookCommand(
+        f"{name} is not supported by Quanta's Python runner. {advice}", (filename, row, column, line))
+
+
+def _magic_call(method, *arguments):
+    return "get_ipython().%s(%s)" % (method, ", ".join(repr(argument) for argument in arguments))
+
+
+def _transform_line(line, row, filename, check):
+    text = line.rstrip("\r\n")
+    ending = line[len(text):]
+    help_match = _HELP_LINE.fullmatch(text)
+    if help_match is not None and (help_match.group(2) or help_match.group(4)):
+        marks = (help_match.group(2) or "") + (help_match.group(4) or "")
+        name = "pinfo2" if "??" in marks else "pinfo"
+        return help_match.group(1) + _magic_call("run_line_magic", name, help_match.group(3)) + ending
+    match = _COMMAND_LINE.fullmatch(text)
+    if match is None:
+        return None
+    indent, target, rest = match.groups()
+    prefix = indent + (target.strip() + " = " if target else "")
+    if rest.startswith("!!"):
+        call = _magic_call("getoutput", rest[2:].strip())
+    elif rest.startswith("!"):
+        call = _magic_call("getoutput" if target else "system", rest[1:].strip())
+    else:
+        magic = _MAGIC_NAME.fullmatch(rest)
+        if magic is None:
+            return None
+        name, arguments = magic.group(1), magic.group(2).rstrip()
+        if check and name not in _line_magics:
+            raise _unsupported_command("%" + name, filename, row, len(indent) + 1, line)
+        if name == "matplotlib" and arguments.split()[:1] and arguments.split()[0] in _UNSUPPORTED_MATPLOTLIB:
+            raise _unsupported_command("%matplotlib " + arguments.split()[0], filename, row, len(indent) + 1, line)
+        call = _magic_call("run_line_magic", name, arguments)
+    return prefix + call + ending
+
+
+def _scan_line(line, depth, quote):
+    index = 0
+    length = len(line)
+    commented = False
+    while index < length:
+        character = line[index]
+        if quote is not None:
+            if character == "\\":
+                index += 2
+                continue
+            if line.startswith(quote, index):
+                index += len(quote)
+                quote = None
+                continue
+            index += 1
+            continue
+        if character == "#":
+            commented = True
+            break
+        if character in "\"'":
+            quote = line[index:index + 3] if line[index:index + 3] in ('"""', "'''") else character
+            index += len(quote)
+            continue
+        if character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth = max(0, depth - 1)
+        index += 1
+    body = line.rstrip("\r\n")
+    continued = not commented and body.endswith("\\") and not body.endswith("\\\\")
+    if quote is not None and len(quote) == 1 and not continued:
+        quote = None
+    return depth, quote, continued
+
+
+def _transform_ipython(code, filename):
+    global _cell_body_offset
+    lines = code.splitlines(True)
+    check = "load_ext" not in code and "register_magic_function" not in code
+    first = next((index for index, line in enumerate(lines) if line.strip()), None)
+    if first is not None and lines[first].startswith("%%"):
+        header = lines[first].rstrip("\r\n")[2:]
+        parts = header.split(None, 1)
+        name = parts[0] if parts else ""
+        if check and name not in _cell_magics:
+            raise _unsupported_command("%%" + name, filename, first + 1, 1, lines[first])
+        _cell_body_offset = first + 1
+        body = "".join(lines[first + 1:])
+        return "\n" * first + _magic_call("run_cell_magic", name, parts[1] if len(parts) > 1 else "", body) + "\n"
+    output = []
+    depth = 0
+    quote = None
+    continued = False
+    changed = False
+    for row, line in enumerate(lines, 1):
+        if quote is None and depth == 0 and not continued:
+            replacement = _transform_line(line, row, filename, check)
+            if replacement is not None:
+                output.append(replacement)
+                changed = True
+                continue
+        depth, quote, continued = _scan_line(line, depth, quote)
+        output.append(line)
+    return "".join(output) if changed else None
+
+
+def _enter_notebook_directory(notebook, default):
+    target = _notebook_directories.get(notebook) or (default if isinstance(default, str) else None)
+    if not target or target == execution_directory():
+        return
+    try:
+        os.chdir(target)
+    except OSError:
+        _notebook_directories.pop(notebook, None)
+
+
 def run_code(msg):
-    global _current_id, _exec_count, _stream_budget, _interruptible
+    global _current_id, _exec_count, _stream_budget, _interruptible, _current_filename, _cell_body_offset
     _current_id = msg.get("id")
     _stream_budget = MAX_STREAM_BYTES
     code = msg.get("code", "")
@@ -1063,12 +2389,18 @@ def run_code(msg):
             sys.path.insert(0, directory)
 
     linecache.cache[filename] = (len(code), None, code.splitlines(True), filename)
+    _current_filename = filename
+    _cell_body_offset = 0
+    notebook = msg.get("notebook") if isinstance(msg.get("notebook"), str) else None
+    if notebook:
+        _enter_notebook_directory(notebook, msg.get("directory"))
     compiling = True
     try:
-        tree = _parse_notebook_code(code, filename)
+        _autoreload()
+        tree, prepared = _parse_notebook_code(code, filename)
         result_name = None
         last_expr = None
-        if tree.body and isinstance(tree.body[-1], ast.Expr) and not _suppresses_result(code):
+        if tree.body and isinstance(tree.body[-1], ast.Expr) and not _suppresses_result(prepared):
             expr_node = tree.body.pop()
             if isinstance(expr_node.value, ast.Name):
                 result_name = expr_node.value.id
@@ -1137,6 +2469,10 @@ def run_code(msg):
             emit_figures()
         except Exception:
             pass
+        if _autoreload_mode:
+            _record_module_times()
+        if notebook:
+            _notebook_directories[notebook] = execution_directory()
         emit({"id": _current_id, "type": "done", "status": status,
               "execution_count": _exec_count, "cwd": execution_directory()})
         _current_id = None
@@ -1396,6 +2732,45 @@ def _resolve_static(base):
             obj = obj.__func__
     return obj
 
+_KEY_CONTEXT = re.compile(r"([A-Za-z_][\w.]*)\[\s*(['\"])([^'\"\\\n]*)$")
+
+
+def _subscript_keys(value):
+    import collections.abc
+    pd = sys.modules.get("pandas")
+    np = sys.modules.get("numpy")
+    if pd is not None and isinstance(value, pd.DataFrame):
+        return list(value.columns)
+    if pd is not None and isinstance(value, pd.Series):
+        return list(value.index[:1000])
+    if np is not None and isinstance(value, np.ndarray) and value.dtype.names:
+        return list(value.dtype.names)
+    completer = getattr(value, "_ipython_key_completions_", None)
+    if callable(completer) and not isinstance(value, type):
+        return list(completer())
+    if isinstance(value, collections.abc.Mapping):
+        keys = []
+        for key in value:
+            keys.append(key)
+            if len(keys) >= 5000:
+                break
+        return keys
+    return []
+
+
+def _key_completions(text):
+    match = _KEY_CONTEXT.search(text)
+    if match is None:
+        return None
+    base, quote, partial = match.groups()
+    try:
+        keys = _subscript_keys(_resolve_static(base))
+    except Exception:
+        return None
+    names = sorted({key for key in keys if isinstance(key, str) and key.startswith(partial) and quote not in key})
+    return names[:200], len(text) - len(partial)
+
+
 def handle_complete(msg):
     import builtins
     import keyword
@@ -1403,6 +2778,11 @@ def handle_complete(msg):
     mid = msg.get("id")
     code = msg.get("code") or ""
     cursor = _utf16_to_index(code, int(msg.get("cursor") or 0))
+    keyed = _key_completions(code[:cursor])
+    if keyed is not None:
+        emit({"id": mid, "type": "completions", "matches": keyed[0], "context": "key",
+              "start": _index_to_utf16(code, keyed[1]), "end": _index_to_utf16(code, cursor)})
+        return
     base, segment, start, ok = _completion_context(code, cursor)
     matches = []
     if ok:
@@ -1463,7 +2843,7 @@ def handle_latex(msg):
 
 def _features():
     import importlib.util as u
-    result = {"top_level_await": True, "display": True, "clear_output": True}
+    result = {"top_level_await": True, "display": True, "clear_output": True, "input": True, "magics": True}
     for mod in ("pandas", "numpy", "matplotlib"):
         try:
             result[mod] = u.find_spec(mod) is not None
@@ -1529,18 +2909,9 @@ def main():
     stream_flusher = threading.Thread(target=_flush_streams_periodically, daemon=True)
     stream_flusher.start()
     while True:
-        line = _protocol_in.readline()
-        if not line:
+        msg = _next_protocol_message()
+        if msg is None:
             break
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(msg, dict):
-            continue
         op = msg.get("op")
         try:
             if op == "execute":
@@ -1567,6 +2938,8 @@ def main():
                     globals()["_adapt_plot_theme"] = msg["adapt_plot_theme"]
                 if isinstance(msg.get("enhanced_data_outputs"), bool):
                     globals()["_enhanced_data_outputs"] = msg["enhanced_data_outputs"]
+                if isinstance(msg.get("input_requests"), bool):
+                    globals()["_input_requests"] = msg["input_requests"]
             elif op == "shutdown":
                 break
         except Exception:

@@ -102,12 +102,20 @@ final class PythonToolingTests: XCTestCase {
     }
 
     func testUnsupportedMagicsHaveAnExplicitLimitationAndKeepOtherCellsChecked() async throws {
-        let first = PythonSourceInput(id: UUID(), source: "%%bash\necho hello\n")
+        let first = PythonSourceInput(id: UUID(), source: "%%javascript\nconsole.log(1)\n")
         let second = PythonSourceInput(id: UUID(), source: "if True\n    pass\n")
         let result = try await analyze([first, second], helper: helper("namespace['main']()"))
         XCTAssertTrue(result.diagnostics.contains { $0.sourceID == first.id && $0.code == "IPYTHON" })
         XCTAssertTrue(result.diagnostics.contains { $0.sourceID == second.id && $0.code == "SyntaxError" })
-        XCTAssertTrue(result.notice?.contains("cell-magic bodies are not checked") == true)
+        XCTAssertTrue(result.notice?.contains("Unsupported IPython commands are skipped") == true)
+    }
+
+    func testSupportedMagicsAreQuietAndTimedCellBodiesAreChecked() async throws {
+        let shell = PythonSourceInput(id: UUID(), source: "%time x = 1\n!ls\nfiles = !ls\nx?\n")
+        let timed = PythonSourceInput(id: UUID(), source: "%%time\nif True\n    pass\n")
+        let result = try await analyze([shell, timed], helper: helper("namespace['main']()"))
+        XCTAssertFalse(result.diagnostics.contains { $0.sourceID == shell.id })
+        XCTAssertTrue(result.diagnostics.contains { $0.sourceID == timed.id && $0.code == "SyntaxError" && $0.line == 2 })
     }
 
     func testAnalysisIgnoresWorkspaceModulesThatShadowTheStandardLibrary() async throws {

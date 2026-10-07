@@ -119,6 +119,33 @@ class InspectionTests(unittest.TestCase):
         self.assertEqual(results["wrong"]["type"], "dfsummary_error")
 
 
+class KeyCompletionTests(unittest.TestCase):
+    def test_subscript_keys_complete_inside_quotes(self):
+        messages = exchange([
+            {"id": "setup", "op": "execute", "code": "import os\nsettings = {'alpha': 1, 'beta': 2, 3: 4}\nclass Store:\n    def _ipython_key_completions_(self):\n        return ['north', 'south']\nstore = Store()"},
+            {"id": "dict", "op": "complete", "code": "settings['a", "cursor": 11},
+            {"id": "custom", "op": "complete", "code": "store[\"", "cursor": 7},
+            {"id": "plain", "op": "complete", "code": "sett", "cursor": 4},
+        ])
+        replies = {m["id"]: m for m in messages if m.get("type") == "completions"}
+        self.assertEqual((replies["dict"]["matches"], replies["dict"]["start"], replies["dict"]["context"]), (["alpha"], 10, "key"))
+        self.assertEqual(replies["custom"]["matches"], ["north", "south"])
+        self.assertNotIn("context", replies["plain"])
+        self.assertIn("settings", replies["plain"]["matches"])
+
+    def test_dataframe_columns_complete_inside_quotes(self):
+        try:
+            import pandas
+        except ImportError:
+            self.skipTest("pandas is not installed in this interpreter")
+        messages = exchange([
+            {"id": "setup", "op": "execute", "code": "import pandas as pd\ndf = pd.DataFrame({'price': [1], 'qty': [2]})"},
+            {"id": "columns", "op": "complete", "code": "df[\"p", "cursor": 5},
+        ])
+        reply = next(m for m in messages if m.get("type") == "completions")
+        self.assertEqual((reply["matches"], reply["start"], reply["end"]), (["price"], 4, 5))
+
+
 class RichOutputTests(unittest.TestCase):
     def test_plain_output_preference_switches_collections_without_losing_variables(self):
         messages = exchange([
@@ -351,10 +378,8 @@ class NotebookCompatTests(unittest.TestCase):
         self.assertFalse(any(m.get("type") == "error" for m in messages))
 
     def test_unsupported_commands_fail_before_any_cell_code_runs(self):
-        commands = ["%matplotlib notebook", "%matplotlib widget", "%config InlineBackend.figure_format = 'svg'",
-                    "%precision 3", "%pylab inline", "%gui qt", "%automagic", "%timeit 1 + 1",
-                    "%pip install pandas", "%conda install pandas", "!echo hello", "%%bash\necho hello",
-                    "files = !ls", "duration = %time 1 + 1"]
+        commands = ["%matplotlib notebook", "%matplotlib widget", "%pylab inline", "%gui qt",
+                    "%automagic", "%nonexistent 1", "result = %nonexistent"]
         for command in commands:
             with self.subTest(command=command):
                 messages = exchange([
@@ -419,7 +444,7 @@ class NotebookCompatTests(unittest.TestCase):
 
     def test_unknown_magic_still_fails(self):
         messages = exchange([
-            {"id": "time", "op": "execute", "code": "%time x = 1\n"},
+            {"id": "time", "op": "execute", "code": "%nonexistent x = 1\n"},
         ])
         errors = [m for m in messages if m.get("type") == "error"]
         self.assertEqual(errors[0]["ename"], "UnsupportedNotebookCommand")
