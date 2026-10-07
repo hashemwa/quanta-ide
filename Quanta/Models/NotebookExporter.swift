@@ -63,6 +63,8 @@ enum NotebookExporter {
         .md code { background: #f5f5f7; padding: 1px 5px; border-radius: 4px;
                    font: 12px ui-monospace, monospace; }
         h1, h2, h3 { margin: 18px 0 6px; }
+        blockquote { margin: 8px 0; padding: 0 12px; border-left: 3px solid #d2d2d7; color: #6e6e73; }
+        hr { border: none; border-top: 1px solid #d2d2d7; margin: 16px 0; }
         @media (prefers-color-scheme: dark) {
           body { background: #1e1e1e; color: #e8e8e8; }
           .code, .md code { background: #2a2a2c; }
@@ -189,15 +191,18 @@ enum NotebookExporter {
                                attachments: [String: Data] = [:],
                                baseDirectory: URL? = nil) -> String {
         var html = ""
-        var inList = false
+        var openLists: [String] = []
         func content(_ text: String) -> String {
             inline(text, attachments: attachments, baseDirectory: baseDirectory)
         }
+        func closeLists(keeping depth: Int) {
+            while openLists.count > depth { html += "</li></\(openLists.removeLast())>\n" }
+        }
         for block in MarkdownView.parse(source) {
-            if case .bullet = block {} else if inList { html += "</ul>\n"; inList = false }
+            if case .listItem = block {} else { closeLists(keeping: 0) }
             switch block {
             case .heading(let level, let text): html += "<h\(level)>\(content(text))</h\(level)>\n"
-            case .paragraph(let text): html += "<p>\(content(text))</p>\n"
+            case .paragraph(let text): html += "<p>\(content(text).replacingOccurrences(of: "\n", with: "<br>\n"))</p>\n"
             case .code(let code): html += "<pre><code>\(escape(code))</code></pre>\n"
             case .fencedCode(let language, let code):
                 if ["python", "py", "python3"].contains(language) {
@@ -205,9 +210,37 @@ enum NotebookExporter {
                 } else {
                     html += "<pre><code>\(escape(code))</code></pre>\n"
                 }
-            case .bullet(let text):
-                if !inList { html += "<ul>\n"; inList = true }
-                html += "<li>\(content(text))</li>\n"
+            case .listItem(let marker, let depth, let text):
+                let tag: String
+                var start = ""
+                var checkbox = ""
+                switch marker {
+                case .bullet:
+                    tag = "ul"
+                case .number(let number):
+                    tag = "ol"
+                    if number != 1 { start = " start=\"\(number)\"" }
+                case .task(let checked):
+                    tag = "ul"
+                    checkbox = checked ? "☑ " : "☐ "
+                }
+                closeLists(keeping: depth + 1)
+                if openLists.count == depth + 1 {
+                    if openLists.last == tag {
+                        html += "</li>\n"
+                    } else {
+                        closeLists(keeping: depth)
+                    }
+                }
+                while openLists.count < depth + 1 {
+                    html += "<\(tag)\(openLists.count == depth ? start : "")>\n"
+                    openLists.append(tag)
+                }
+                html += "<li>\(checkbox)\(content(text).replacingOccurrences(of: "\n", with: "<br>\n"))"
+            case .quote(let inner):
+                html += "<blockquote>\n\(markdownToHTML(inner, attachments: attachments, baseDirectory: baseDirectory))</blockquote>\n"
+            case .rule:
+                html += "<hr>\n"
             case .math(let tex): html += "<div class=\"math\">\(NotebookMath.html(tex, display: true))</div>\n"
             case .image(let alt, let url):
                 html += imageTag(alt: alt, url: url, attachments: attachments, baseDirectory: baseDirectory) + "\n"
@@ -229,7 +262,7 @@ enum NotebookExporter {
                 html += "<\(tag) style=\"text-align:\(css)\">\(content(text))</\(tag)>\n"
             }
         }
-        if inList { html += "</ul>\n" }
+        closeLists(keeping: 0)
         return html
     }
 

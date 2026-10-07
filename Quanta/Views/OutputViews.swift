@@ -276,12 +276,20 @@ enum MarkdownBlock: Equatable {
     case heading(Int, String)
     case code(String)
     case fencedCode(language: String, source: String)
-    case bullet(String)
+    case listItem(marker: MarkdownListMarker, depth: Int, text: String)
+    case quote(String)
+    case rule
     case paragraph(String)
     case math(String)
     case image(alt: String, url: String)
     case table([[String]])
     case html(level: Int?, alignment: MarkdownTextAlignment, text: String)
+}
+
+enum MarkdownListMarker: Equatable {
+    case bullet
+    case number(Int)
+    case task(Bool)
 }
 
 enum MarkdownTextAlignment: Equatable {
@@ -375,12 +383,29 @@ struct MarkdownView: View {
         var codeLines: [String] = []
         var mathLines: [String] = []
         var paragraph: [String] = []
+        var quoteLines: [String]?
+        var listIndents: [Int] = []
 
         func flushParagraph() {
-            if !paragraph.isEmpty {
-                result.append(.paragraph(paragraph.joined(separator: " ")))
-                paragraph = []
+            guard !paragraph.isEmpty else { return }
+            var text = ""
+            for piece in paragraph {
+                if !text.isEmpty, !text.hasSuffix("\n") { text += " " }
+                text += piece
             }
+            while text.hasSuffix("\n") { text.removeLast() }
+            result.append(.paragraph(text))
+            paragraph = []
+        }
+        func flushQuote() {
+            guard let lines = quoteLines else { return }
+            result.append(.quote(lines.joined(separator: "\n")))
+            quoteLines = nil
+        }
+        func listDepth(for indent: Int) -> Int {
+            while let last = listIndents.last, last > indent { listIndents.removeLast() }
+            if listIndents.last != indent { listIndents.append(indent) }
+            return listIndents.count - 1
         }
         func flushMath() {
             let tex = mathLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -400,6 +425,7 @@ struct MarkdownView: View {
         var inTable = false
         for (lineIndex, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let previousBlank = lineIndex == 0 || lines[lineIndex - 1].trimmingCharacters(in: .whitespaces).isEmpty
             if let fence = codeFence {
                 let run = trimmed.prefix(while: { $0 == fence.marker }).count
                 if run >= fence.length, trimmed.dropFirst(run).trimmingCharacters(in: .whitespaces).isEmpty {
@@ -418,6 +444,23 @@ struct MarkdownView: View {
                     mathLines.append(trimmed)
                 }
                 continue
+            }
+            if trimmed.hasPrefix(">") {
+                flushParagraph()
+                inTable = false
+                listIndents = []
+                var content = trimmed.dropFirst()
+                if content.hasPrefix(" ") { content = content.dropFirst() }
+                quoteLines = (quoteLines ?? []) + [String(content)]
+                continue
+            }
+            if quoteLines != nil {
+                if !trimmed.isEmpty, !previousBlank, paragraphContinues(quoteLines?.last),
+                   continuesQuoteLazily(line, trimmed: trimmed) {
+                    quoteLines?.append(trimmed)
+                    continue
+                }
+                flushQuote()
             }
             if let marker = trimmed.first, marker == "`" || marker == "~",
                trimmed.prefix(while: { $0 == marker }).count >= 3 {
@@ -491,9 +534,27 @@ struct MarkdownView: View {
                 flushParagraph()
                 continue
             }
+            if !paragraph.isEmpty, let level = setextLevel(trimmed) {
+                let text = paragraph.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+                paragraph = []
+                result.append(.heading(level, text))
+                continue
+            }
+            if isThematicBreak(trimmed) {
+                flushParagraph()
+                listIndents = []
+                result.append(.rule)
+                continue
+            }
+            if let item = listItem(line), paragraph.isEmpty || item.canInterruptParagraph {
+                flushParagraph()
+                result.append(.listItem(marker: item.marker, depth: listDepth(for: item.indent), text: item.text))
+                continue
+            }
             let level = trimmed.prefix(while: { $0 == "#" }).count
             if (1...6).contains(level), trimmed.dropFirst(level).hasPrefix(" ") {
                 flushParagraph()
+                listIndents = []
                 let text = trimmed.dropFirst(level + 1).trimmingCharacters(in: .whitespaces)
                 if let html = htmlBlock(String(text)) {
                     result.append(.html(level: level, alignment: html.alignment, text: html.text))
@@ -502,17 +563,84 @@ struct MarkdownView: View {
                 }
                 continue
             }
-            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
-                flushParagraph()
-                result.append(.bullet(String(trimmed.dropFirst(2))))
+            if case .listItem(let marker, let depth, let text)? = result.last, paragraph.isEmpty,
+               !previousBlank || line.prefix(while: { $0 == " " || $0 == "\t" }).count >= 2 {
+                let separator = previousBlank ? "\n" : " "
+                result[result.count - 1] = .listItem(marker: marker, depth: depth, text: text + separator + trimmed)
                 continue
             }
-            paragraph.append(trimmed)
+            listIndents = []
+            if line.hasSuffix("  ") {
+                paragraph.append(trimmed + "\n")
+            } else if trimmed.hasSuffix("\\"), !trimmed.hasSuffix("\\\\") {
+                paragraph.append(String(trimmed.dropLast()) + "\n")
+            } else {
+                paragraph.append(trimmed)
+            }
         }
         if codeFence != nil { flushCode() }
         if mathEnd != nil { flushMath() }
+        flushQuote()
         flushParagraph()
         return result
+    }
+
+    struct MarkdownListLine {
+        let indent: Int
+        let marker: MarkdownListMarker
+        let text: String
+        let canInterruptParagraph: Bool
+    }
+
+    static func listItem(_ line: String) -> MarkdownListLine? {
+        var indent = 0
+        var rest = Substring(line)
+        while let first = rest.first, first == " " || first == "\t" {
+            indent += first == "\t" ? 4 : 1
+            rest = rest.dropFirst()
+        }
+        if let first = rest.first, "-*+".contains(first), rest.dropFirst().first == " " {
+            let text = rest.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty else { return nil }
+            for (prefix, checked) in [("[ ] ", false), ("[x] ", true), ("[X] ", true)] where text.hasPrefix(prefix) {
+                return MarkdownListLine(indent: indent, marker: .task(checked),
+                                        text: String(text.dropFirst(prefix.count)), canInterruptParagraph: true)
+            }
+            return MarkdownListLine(indent: indent, marker: .bullet, text: text, canInterruptParagraph: true)
+        }
+        let digits = rest.prefix(while: { $0.isASCII && $0.isWholeNumber })
+        guard (1...9).contains(digits.count), let number = Int(digits) else { return nil }
+        let after = rest.dropFirst(digits.count)
+        guard let delimiter = after.first, delimiter == "." || delimiter == ")", after.dropFirst().first == " " else { return nil }
+        let text = after.dropFirst(2).trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return nil }
+        return MarkdownListLine(indent: indent, marker: .number(number), text: text, canInterruptParagraph: number == 1)
+    }
+
+    static func isThematicBreak(_ line: String) -> Bool {
+        guard let first = line.first, "-*_".contains(first) else { return false }
+        let characters = line.filter { $0 != " " && $0 != "\t" }
+        return characters.count >= 3 && characters.allSatisfy { $0 == first }
+    }
+
+    private static func setextLevel(_ line: String) -> Int? {
+        guard !line.isEmpty else { return nil }
+        if line.allSatisfy({ $0 == "=" }) { return 1 }
+        if line.allSatisfy({ $0 == "-" }) { return 2 }
+        return nil
+    }
+
+    private static func continuesQuoteLazily(_ line: String, trimmed: String) -> Bool {
+        paragraphContinues(trimmed) && !trimmed.hasPrefix("#") && !trimmed.hasPrefix(#"\["#)
+            && !trimmed.contains("|") && listItem(line) == nil && !isThematicBreak(trimmed)
+            && htmlBlock(trimmed) == nil && imageMarkup(in: trimmed, wholeLine: true) == nil
+            && displayEnvironment(in: trimmed) == nil
+    }
+
+    private static func paragraphContinues(_ line: String?) -> Bool {
+        guard let line else { return false }
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return !trimmed.isEmpty && !trimmed.hasPrefix("```") && !trimmed.hasPrefix("~~~") && !trimmed.hasPrefix("$$")
     }
 
     private static func displayEnvironment(in line: String) -> String? {
@@ -916,12 +1044,26 @@ struct MarkdownView: View {
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(.quaternary))
-        case .bullet(let text):
-            HStack(alignment: .top, spacing: 6) {
-                Text("•")
+        case .listItem(let marker, let depth, let text):
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
+                listMarker(marker, depth: depth)
                 InlineMathText(source: text, attachments: attachments, baseDirectory: baseDirectory)
             }
+            .padding(.leading, CGFloat(depth) * DS.Layout.markdownListIndent)
             .frame(maxWidth: .infinity, alignment: .leading)
+        case .quote(let source):
+            MarkdownView(source: source, selectable: selectable, attachments: attachments,
+                         baseDirectory: baseDirectory)
+                .foregroundStyle(.secondary)
+                .padding(.leading, DS.Space.m + DS.Layout.markdownQuoteBar)
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: DS.Radius.small)
+                        .fill(.quaternary)
+                        .frame(width: DS.Layout.markdownQuoteBar)
+                }
+        case .rule:
+            Divider()
+                .padding(.vertical, DS.Space.xs)
         case .paragraph(let text):
             InlineMathText(source: text, attachments: attachments, baseDirectory: baseDirectory)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -959,6 +1101,23 @@ struct MarkdownView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: frameAlignment(alignment))
+        }
+    }
+
+    @ViewBuilder
+    private func listMarker(_ marker: MarkdownListMarker, depth: Int) -> some View {
+        switch marker {
+        case .bullet:
+            Text(["•", "◦", "▪"][depth % 3])
+                .foregroundStyle(.secondary)
+        case .number(let number):
+            Text("\(number).")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        case .task(let checked):
+            Image(systemName: checked ? "checkmark.square" : "square")
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(checked ? "Completed" : "Not completed")
         }
     }
 

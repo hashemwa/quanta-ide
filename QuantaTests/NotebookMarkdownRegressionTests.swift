@@ -92,6 +92,36 @@ final class NotebookMarkdownRegressionTests: XCTestCase {
         XCTAssertTrue(html.contains("<td>a|b</td>"))
     }
 
+    func testListsQuotesRulesSetextHeadingsAndHardBreaks() {
+        let source = "Title\n=====\n1. one\n2. two\n   - nested\n   continued\n3. three\n\n- [x] done\n\n> quoted\n> text\n\n---\nafter  \nbreak"
+        XCTAssertEqual(MarkdownView.parse(source), [
+            .heading(1, "Title"),
+            .listItem(marker: .number(1), depth: 0, text: "one"),
+            .listItem(marker: .number(2), depth: 0, text: "two"),
+            .listItem(marker: .bullet, depth: 1, text: "nested continued"),
+            .listItem(marker: .number(3), depth: 0, text: "three"),
+            .listItem(marker: .task(true), depth: 0, text: "done"),
+            .quote("quoted\ntext"),
+            .rule,
+            .paragraph("after\nbreak"),
+        ])
+        XCTAssertEqual(MarkdownView.parse("**bold** text\n* * *\n2024. was a year"),
+                       [.paragraph("**bold** text"), .rule, .listItem(marker: .number(2024), depth: 0, text: "was a year")])
+        XCTAssertEqual(MarkdownView.parse("Intro\n2. not a list"), [.paragraph("Intro 2. not a list")])
+        XCTAssertEqual(MarkdownView.parse("> note\n```python\nx = 1\n```\nAfter"),
+                       [.quote("note"), .fencedCode(language: "python", source: "x = 1"), .paragraph("After")])
+        XCTAssertEqual(MarkdownView.parse("> quoted\nlazy line\n# Heading"),
+                       [.quote("quoted\nlazy line"), .heading(1, "Heading")])
+    }
+
+    func testNestedListsQuotesAndRulesExportToHTML() {
+        let html = NotebookExporter.markdownToHTML("1. one\n   - nested\n2. two\n\n> quote\n\n---")
+        XCTAssertTrue(html.contains("<ol>\n<li>one<ul>\n<li>nested</li></ul>\n</li>\n<li>two</li></ol>"))
+        XCTAssertTrue(html.contains("<blockquote>\n<p>quote</p>\n</blockquote>"))
+        XCTAssertTrue(html.contains("<hr>"))
+        XCTAssertTrue(NotebookExporter.markdownToHTML("3. three").contains("<ol start=\"3\">"))
+    }
+
     func testBlockAfterTableEndsItsRows() {
         let source = "| A | B |\n| --- | --- |\n$$x$$\nleft | right"
         XCTAssertEqual(MarkdownView.parse(source), [.table([["A", "B"]]), .math("x"), .paragraph("left | right")])
