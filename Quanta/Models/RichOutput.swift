@@ -112,21 +112,42 @@ enum RichOutput {
         return "<pre>\(escape(fallback))</pre>"
     }
 
-    static func latexExpression(_ value: Any?) -> String {
+    static func latexMath(_ value: Any?) -> String? {
         let source = text(value).trimmingCharacters(in: .whitespacesAndNewlines)
         for (opening, closing) in [("$$", "$$"), (#"\["#, #"\]"#), (#"\("#, #"\)"#), ("$", "$")] {
             if source.hasPrefix(opening), source.hasSuffix(closing), source.count >= opening.count + closing.count {
-                return String(source.dropFirst(opening.count).dropLast(closing.count))
+                let inner = String(source.dropFirst(opening.count).dropLast(closing.count))
+                return containsDollar(inner) ? nil : inner
             }
         }
-        return source
+        return containsDollar(source) ? nil : source
+    }
+
+    private static func containsDollar(_ text: String) -> Bool {
+        var escaped = false
+        for character in text {
+            if escaped {
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "$" {
+                return true
+            }
+        }
+        return false
     }
 
     static func renderedTextHTML(_ bundle: [String: Any], baseDirectory: URL? = nil) -> String? {
         switch renderedTextMIME(bundle) {
-        case "text/latex": NotebookMath.html(latexExpression(bundle["text/latex"]), display: true)
-        case "text/markdown": NotebookExporter.markdownToHTML(text(bundle["text/markdown"]), baseDirectory: baseDirectory)
-        default: nil
+        case "text/latex":
+            guard let math = latexMath(bundle["text/latex"]) else {
+                return NotebookExporter.markdownToHTML(text(bundle["text/latex"]), baseDirectory: baseDirectory)
+            }
+            return NotebookMath.html(math, display: true)
+        case "text/markdown":
+            return NotebookExporter.markdownToHTML(text(bundle["text/markdown"]), baseDirectory: baseDirectory)
+        default:
+            return nil
         }
     }
 

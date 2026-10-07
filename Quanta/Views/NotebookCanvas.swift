@@ -645,8 +645,13 @@ final class NotebookCanvas: DocumentCanvas {
                 height += CGFloat(figureHeight) + DS.Bar.strip
             case .error(_, _, let traceback, _):
                 height += CGFloat(traceback.reduce(into: 2) { if $1 == "\n" { $0 += 1 } }) * monoLine + DS.Space.m * 2
-            case .rich:
-                height += DS.Layout.richOutputHeight
+            case .rich(let bundle):
+                if let mime = RichOutput.renderedTextMIME(bundle) {
+                    let lines = RichOutput.text(bundle[mime]).reduce(into: 1) { if $1 == "\n" { $0 += 1 } }
+                    height += CGFloat(lines) * DS.Layout.renderedTextLineHeight + DS.Space.m * 2
+                } else {
+                    height += DS.Layout.richOutputHeight
+                }
             case .dataFrame:
                 height += 240
             default:

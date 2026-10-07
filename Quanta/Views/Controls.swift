@@ -54,6 +54,9 @@ enum DS {
         static let outputMaxWidth: CGFloat = 760
         static let outputMaxHeight: CGFloat = 620
         static let richOutputHeight: CGFloat = 300
+        static let renderedTextLineHeight: CGFloat = 22
+        static let markdownListIndent: CGFloat = 18
+        static let markdownQuoteBar: CGFloat = 3
         static let plotListWidth: CGFloat = 190
         static let plotThumbnailHeight: CGFloat = 64
         static let plotsDefaultHeight: CGFloat = 360

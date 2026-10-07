@@ -164,9 +164,7 @@ struct NavigatorOutline: NSViewRepresentable {
         }
 
         func refreshVisibleCells(_ outline: NSOutlineView) {
-            let visible = outline.rows(in: outline.visibleRect)
-            guard visible.location != NSNotFound, visible.location < outline.numberOfRows else { return }
-            for row in visible.location..<min(visible.location + visible.length, outline.numberOfRows) {
+            for row in 0..<outline.numberOfRows {
                 guard let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? NavigatorCellView,
                       let item = outline.item(atRow: row) as? Item else { continue }
                 configure(cell, for: item)
@@ -183,6 +181,7 @@ struct NavigatorOutline: NSViewRepresentable {
 
         @objc func openClickedFile(_ outline: NSOutlineView) {
             guard !updating, outline.selectedRowIndexes.count == 1,
+                  outline.selectedRowIndexes.contains(outline.clickedRow),
                   let item = outline.item(atRow: outline.clickedRow) as? Item,
                   !item.node.isDirectory else { return }
             openFile(item.node.url)

@@ -89,6 +89,13 @@ enum ANSIRenderer {
     }
 
     static func html(_ text: String) -> String {
+        guard let light = NSAppearance(named: .aqua) else { return markup(text) }
+        var html = ""
+        light.performAsCurrentDrawingAppearance { html = markup(text) }
+        return html
+    }
+
+    private static func markup(_ text: String) -> String {
         segments(text).map { segment in
             var styles: [String] = []
             if let color = segment.color, let rgb = NSColor(color).usingColorSpace(.sRGB) {

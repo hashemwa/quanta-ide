@@ -83,7 +83,11 @@ struct OutputItemView: View {
         case .rich(let bundle):
             if RichOutput.renderedTextMIME(bundle) != nil {
                 if let latex = bundle["text/latex"] {
-                    DisplayMathView(tex: RichOutput.latexExpression(latex))
+                    if let math = RichOutput.latexMath(latex) {
+                        DisplayMathView(tex: math)
+                    } else {
+                        MarkdownView(source: RichOutput.text(latex), baseDirectory: baseDirectory)
+                    }
                 } else {
                     MarkdownView(source: RichOutput.text(bundle["text/markdown"]), baseDirectory: baseDirectory)
                 }
