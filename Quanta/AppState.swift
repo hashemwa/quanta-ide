@@ -2409,28 +2409,28 @@ final class AppState: ObservableObject {
 
     func recomputeFind(in document: Document, resetIndex: Bool) {
         let find = document.find
-        guard let notebook = document.notebook, !find.query.isEmpty else {
+        guard let notebook = document.notebook, !find.query.isEmpty,
+              let expression = try? find.options.expression(for: find.query) else {
             find.matches = []
             find.currentIndex = 0
             return
         }
         var matches: [(cellID: UUID, range: NSRange)] = []
         for cell in notebook.cells {
-            let ns = cell.source as NSString
-            var search = NSRange(location: 0, length: ns.length)
-            while true {
-                let found = ns.range(of: find.query, options: .caseInsensitive, range: search)
-                guard found.location != NSNotFound else { break }
-                matches.append((cell.id, found))
-                let next = found.location + max(found.length, 1)
-                guard next < ns.length else { break }
-                search = NSRange(location: next, length: ns.length - next)
+            let length = (cell.source as NSString).length
+            for result in expression.matches(in: cell.source, range: NSRange(location: 0, length: length))
+            where result.range.length > 0 {
+                matches.append((cell.id, result.range))
             }
         }
         find.matches = matches
         find.currentIndex = resetIndex ? 0
             : (matches.isEmpty ? 0 : min(find.currentIndex, matches.count - 1))
         find.hasNavigated = resetIndex ? false : find.hasNavigated
+    }
+
+    private func findReplacementTemplate(_ find: FindState) -> String {
+        find.options.regularExpression ? find.replacement : NSRegularExpression.escapedTemplate(for: find.replacement)
     }
 
     func findQueryChanged(in document: Document) {
@@ -2485,11 +2485,15 @@ final class AppState: ObservableObject {
         guard let cell = notebook.cells.first(where: { $0.id == match.cellID }) else { return }
         let ns = cell.source as NSString
         guard EditorTextRange.isValid(match.range, length: ns.length),
-              ns.substring(with: match.range).caseInsensitiveCompare(find.query) == .orderedSame else {
+              let expression = try? find.options.expression(for: find.query),
+              let result = expression.firstMatch(in: cell.source, options: .anchored, range: match.range),
+              result.range == match.range else {
             recomputeFind(in: document, resetIndex: false)
             return
         }
-        cell.source = ns.replacingCharacters(in: match.range, with: find.replacement)
+        let replacement = expression.replacementString(for: result, in: cell.source, offset: 0,
+                                                       template: findReplacementTemplate(find))
+        cell.source = ns.replacingCharacters(in: match.range, with: replacement)
         document.isDirty = true
         recomputeFind(in: document, resetIndex: false)
         if !find.matches.isEmpty {
@@ -2500,10 +2504,12 @@ final class AppState: ObservableObject {
 
     func replaceAllMatches(in document: Document) {
         let find = document.find
-        guard let notebook = document.notebook, !find.query.isEmpty else { return }
+        guard let notebook = document.notebook, !find.query.isEmpty,
+              let expression = try? find.options.expression(for: find.query) else { return }
+        let template = findReplacementTemplate(find)
         let pending = notebook.cells.compactMap { cell -> (NotebookCell, String)? in
-            let replaced = cell.source.replacingOccurrences(
-                of: find.query, with: find.replacement, options: .caseInsensitive)
+            let range = NSRange(location: 0, length: (cell.source as NSString).length)
+            let replaced = expression.stringByReplacingMatches(in: cell.source, range: range, withTemplate: template)
             return replaced == cell.source ? nil : (cell, replaced)
         }
         guard !pending.isEmpty else { return }

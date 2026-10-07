@@ -28,6 +28,28 @@ final class AppStateResilienceTests: XCTestCase {
         XCTAssertEqual(QuantaDefaults.finiteCGFloat(forKey: "size", fallback: 13, range: 11...28, defaults: defaults), 13)
     }
 
+    func testNotebookFindOptionsMatchCaseWholeWordsAndRegexReplacement() {
+        let app = AppState()
+        let cell = NotebookCell(type: .code, source: "Value = value + values")
+        let document = Document(notebook: Notebook(cells: [cell], metadata: [:]), url: nil)
+        let find = document.find
+        find.query = "value"
+        app.recomputeFind(in: document, resetIndex: true)
+        XCTAssertEqual(find.matches.count, 3)
+        find.options.caseSensitive = true
+        app.recomputeFind(in: document, resetIndex: true)
+        XCTAssertEqual(find.matches.map { $0.range.location }, [8, 16])
+        find.options.wholeWord = true
+        app.recomputeFind(in: document, resetIndex: true)
+        XCTAssertEqual(find.matches.map { $0.range.location }, [8])
+        find.options = WorkspaceSearchOptions(regularExpression: true)
+        find.query = #"(\w+) = (\w+)"#
+        find.replacement = "$2 = $1"
+        app.recomputeFind(in: document, resetIndex: true)
+        app.replaceCurrentMatch(in: document)
+        XCTAssertEqual(cell.source, "value = Value + values")
+    }
+
     func testNotebookFindRejectsStaleIndicesAndOverflowingRanges() {
         let app = AppState()
         let cell = NotebookCell(type: .code, source: "value = 1")
