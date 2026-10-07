@@ -1078,6 +1078,7 @@ private class NotebookCellHostingView: NSHostingView<NotebookHostedContent> {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.sizeChangePending = false
+            guard abs(self.intrinsicContentSize.height - self.bounds.height) > 0.5 else { return }
             self.onSizeChange?()
         }
     }

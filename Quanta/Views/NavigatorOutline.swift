@@ -44,6 +44,10 @@ struct NavigatorOutline: NSViewRepresentable {
         return scroll
     }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        proposal.fillingSize
+    }
+
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let outline = scroll.documentView as? NSOutlineView else { return }
         let coordinator = context.coordinator
@@ -65,6 +69,7 @@ struct NavigatorOutline: NSViewRepresentable {
             coordinator.tree = tree
             coordinator.filtering = filtering
             coordinator.items = [:]
+            coordinator.resolvedSelection = [:]
             coordinator.root = coordinator.makeItem(tree, parent: nil)
             outline.reloadData()
             if firstLoad {
@@ -78,9 +83,7 @@ struct NavigatorOutline: NSViewRepresentable {
             coordinator.refreshVisibleCells(outline)
         }
         let indexes = IndexSet(selection.compactMap { url in
-            guard let item = coordinator.items[url] ?? coordinator.items.values.first(where: {
-                $0.node.url.resolvingSymlinksInPath() == url.resolvingSymlinksInPath()
-            }) else { return nil }
+            guard let item = coordinator.item(for: url) else { return nil }
             let row = outline.row(forItem: item)
             return row >= 0 ? row : nil
         })
@@ -104,6 +107,7 @@ struct NavigatorOutline: NSViewRepresentable {
         var tree: FileNode?
         var root: Item?
         var items: [URL: Item] = [:]
+        var resolvedSelection: [URL: URL] = [:]
         var expanded: Set<URL> = []
         var filtering = false
         var updating = false
@@ -114,6 +118,15 @@ struct NavigatorOutline: NSViewRepresentable {
         var openFile: (URL) -> Void = { AppState.shared.openFile($0) }
 
         init(_ parent: NavigatorOutline) { self.parent = parent }
+
+        func item(for url: URL) -> Item? {
+            if let item = items[url] { return item }
+            if let resolved = resolvedSelection[url] { return items[resolved] }
+            let target = url.resolvingSymlinksInPath()
+            let match = items.values.first { $0.node.url.resolvingSymlinksInPath() == target }
+            resolvedSelection[url] = match?.node.url ?? url
+            return match
+        }
 
         func makeItem(_ node: FileNode, parent: Item?) -> Item {
             let item = Item(node, parent: parent)

@@ -11,10 +11,16 @@ final class NotebookCanvas: DocumentCanvas {
     static let prefetchedViewports: CGFloat = 2
     static let retainedViewports: CGFloat = 3
     static let prefetchBatch = 2
+    static let resizeSettleDelay: TimeInterval = 0.2
 
     private struct CellHeight {
         let height: CGFloat
         let revision: UInt64
+    }
+
+    private struct AddCellHeightKey: Equatable {
+        let width: CGFloat
+        let fontSize: CGFloat
     }
 
     private var document: Document
@@ -50,6 +56,9 @@ final class NotebookCanvas: DocumentCanvas {
     private var boundsObserver: NSObjectProtocol?
     private var outputPresentationCancellable: AnyCancellable?
     private var toolbarPositionPending = false
+    private var lastWidthChange: TimeInterval = 0
+    private var addCellHeightCache: (key: AddCellHeightKey, height: CGFloat)?
+    private var resizeSettle: DispatchWorkItem?
 
     var realizedCellCount: Int { views.count }
 
@@ -101,9 +110,16 @@ final class NotebookCanvas: DocumentCanvas {
 
         let contentView = NotebookDocumentView()
         contentView.frame = NSRect(x: 0, y: 0, width: 640, height: 1)
+        contentView.autoresizingMask = [.width]
         scrollView.documentView = contentView
-        scrollView.onViewportChange = { [weak self] _ in
-            self?.scheduleViewportUpdate()
+        scrollView.onViewportChange = { [weak self] size in
+            guard let self else { return }
+            if self.measuredWidth > 0, !self.isLayingOut, !self.needsReset, !self.needsSync,
+               abs(size.width - self.measuredViewportWidth) > 0.5 {
+                self.updateViewport(size)
+            } else {
+                self.scheduleViewportUpdate()
+            }
         }
         self.scrollView = scrollView
         self.contentView = contentView
@@ -220,6 +236,7 @@ final class NotebookCanvas: DocumentCanvas {
         if needsReset { reset(width: width) }
         if needsSync { syncCells() }
         if abs(width - measuredWidth) > 0.5 {
+            if measuredWidth > 0 { noteWidthChange() }
             measuredWidth = width
             measuredViewportWidth = size.width
             heights = heights.filter { views[$0.key] != nil }
@@ -232,6 +249,31 @@ final class NotebookCanvas: DocumentCanvas {
             contentView.setFrameSize(NSSize(width: size.width, height: size.height))
         }
         scrollToPendingCell()
+    }
+
+    private var isResizing: Bool {
+        scrollView?.inLiveResize == true
+            || ProcessInfo.processInfo.systemUptime - lastWidthChange < Self.resizeSettleDelay
+    }
+
+    private func noteWidthChange() {
+        lastWidthChange = ProcessInfo.processInfo.systemUptime
+        guard resizeSettle == nil else { return }
+        scheduleResizeSettle()
+    }
+
+    private func scheduleResizeSettle() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if self.isResizing {
+                self.scheduleResizeSettle()
+                return
+            }
+            self.resizeSettle = nil
+            self.scheduleLayout()
+        }
+        resizeSettle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.resizeSettleDelay, execute: work)
     }
 
     private func scheduleViewportUpdate() {
@@ -262,7 +304,9 @@ final class NotebookCanvas: DocumentCanvas {
                 .environment(\.monoFontSize, monoFontSize)
         ))
         addView.sizingOptions = [.intrinsicContentSize]
+        addView.autoresizingMask = [.minXMargin, .maxXMargin]
         addView.translatesAutoresizingMaskIntoConstraints = false
+        addCellHeightCache = nil
         addView.frame = NSRect(x: 0, y: 0, width: width, height: 40)
         contentView.addSubview(addView, positioned: .below, relativeTo: toolbar)
         self.addView = addView
@@ -341,6 +385,7 @@ final class NotebookCanvas: DocumentCanvas {
         let cell = cells[index]
         let cellView = NotebookCellAppKitView(frame: NSRect(x: columnX, y: offsets[index],
                                                           width: measuredWidth, height: height(at: index)))
+        cellView.autoresizingMask = [.minXMargin, .maxXMargin]
         cellView.translatesAutoresizingMaskIntoConstraints = false
         let editorState = editorStates[cell.id] ?? NotebookCellEditorState()
         editorStates[cell.id] = editorState
@@ -393,11 +438,13 @@ final class NotebookCanvas: DocumentCanvas {
         let viewport = clipView.bounds.size
         let oldTop = clipView.bounds.minY
         let anchor = index(atY: oldTop).map { (id: offsetCellIDs[$0], delta: oldTop - offsets[$0]) }
+        let resizing = isResizing
+        var deferred = resizing ? dirtyCellIDs.subtracting(visibleCellIDs(top: oldTop, height: viewport.height)) : []
         var changed = false
-        for id in dirtyCellIDs {
+        for id in dirtyCellIDs where !deferred.contains(id) {
             if let cellView = views[id], measure(id, cellView) { changed = true }
         }
-        dirtyCellIDs.removeAll()
+        dirtyCellIDs = deferred
 
         func anchoredTop() -> CGFloat {
             guard let anchor, let index = cellIDs.firstIndex(of: anchor.id) else { return oldTop }
@@ -407,11 +454,18 @@ final class NotebookCanvas: DocumentCanvas {
         for _ in 0..<4 {
             recomputeOffsets()
             let top = anchoredTop()
-            let margin = visibleOnly ? 0 : viewport.height * Self.realizedViewports
+            let margin = visibleOnly || resizing ? 0 : viewport.height * Self.realizedViewports
             guard let range = indices(from: top - margin, to: top + viewport.height + margin) else { break }
             var realized = false
-            for index in range where views[cellIDs[index]] == nil {
-                if realize(at: index) { changed = true }
+            for index in range {
+                let id = cellIDs[index]
+                if let cellView = views[id] {
+                    guard deferred.remove(id) != nil else { continue }
+                    dirtyCellIDs.remove(id)
+                    if measure(id, cellView) { changed = true }
+                } else if realize(at: index) {
+                    changed = true
+                }
                 realized = true
             }
             if !realized { break }
@@ -421,13 +475,18 @@ final class NotebookCanvas: DocumentCanvas {
         let x = columnX
         for (index, id) in cellIDs.enumerated() {
             guard let cellView = views[id] else { continue }
+            if deferred.contains(id) {
+                let origin = NSPoint(x: max(0, (viewport.width - cellView.frame.width) / 2), y: offsets[index])
+                if cellView.frame.origin != origin { cellView.setFrameOrigin(origin) }
+                continue
+            }
             let frame = NSRect(x: x, y: offsets[index], width: measuredWidth, height: height(at: index))
             if cellView.frame != frame { cellView.frame = frame }
         }
         var y = cellsBottom
         if let addView {
             if !cells.isEmpty { y += DS.Layout.notebookCellSpacing }
-            let height = measuredHeight(of: addView, width: measuredWidth)
+            let height = addCellHeight(of: addView)
             addView.frame = NSRect(x: x, y: y, width: measuredWidth, height: height)
             y += height + DS.Layout.notebookCellSpacing
         }
@@ -447,11 +506,26 @@ final class NotebookCanvas: DocumentCanvas {
         releaseDistantCells()
         if changed { views.values.forEach { $0.refreshHover() } }
         positionToolbar()
-        if visibleOnly, !cells.isEmpty {
+        if resizing {
+            return
+        } else if visibleOnly, !cells.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.layoutCells() }
         } else {
             schedulePrefetch()
         }
+    }
+
+    private func visibleCellIDs(top: CGFloat, height: CGFloat) -> Set<UUID> {
+        guard let range = indices(from: top, to: top + height) else { return [] }
+        return Set(range.compactMap { $0 < offsetCellIDs.count ? offsetCellIDs[$0] : nil })
+    }
+
+    private func addCellHeight(of addView: NSView) -> CGFloat {
+        let key = AddCellHeightKey(width: measuredWidth, fontSize: monoFontSize)
+        if let cached = addCellHeightCache, cached.key == key { return cached.height }
+        let height = measuredHeight(of: addView, width: measuredWidth)
+        addCellHeightCache = (key, height)
+        return height
     }
 
     private func schedulePrefetch() {
@@ -465,7 +539,8 @@ final class NotebookCanvas: DocumentCanvas {
     }
 
     private func prefetchNearbyCells() {
-        guard !isLayingOut, !viewportUpdatePending, !ScrollActivityMonitor.shared.isLiveScrolling, measuredWidth > 0,
+        guard !isLayingOut, !viewportUpdatePending, !isResizing, !ScrollActivityMonitor.shared.isLiveScrolling,
+              measuredWidth > 0,
               let scrollView, !scrollView.isHiddenOrHasHiddenAncestor else { return }
         let visible = scrollView.contentView.bounds
         let margin = visible.height * Self.prefetchedViewports

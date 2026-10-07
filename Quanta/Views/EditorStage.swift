@@ -67,6 +67,10 @@ struct EditorStage: NSViewRepresentable {
         stage.show(canvas())
     }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: EditorStageView, context: Context) -> CGSize? {
+        proposal.fillingSize
+    }
+
     static func dismantleNSView(_ stage: EditorStageView, coordinator: ()) {
         stage.releaseCanvases()
     }

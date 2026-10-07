@@ -1230,3 +1230,10 @@ enum FloatingPanelSurface {
         return glass
     }
 }
+
+extension ProposedViewSize {
+    var fillingSize: CGSize? {
+        guard let width, let height, width.isFinite, height.isFinite else { return nil }
+        return CGSize(width: width, height: height)
+    }
+}

@@ -88,10 +88,17 @@ private struct CellToolbarActions: View {
 final class CellToolbarHostingView: NSHostingView<CellToolbar> {
     var passesClicksThrough = true
     var onSizeChange: (() -> Void)?
+    private var sizeChangePending = false
 
     override func invalidateIntrinsicContentSize() {
         super.invalidateIntrinsicContentSize()
-        DispatchQueue.main.async { [weak self] in self?.onSizeChange?() }
+        guard !sizeChangePending else { return }
+        sizeChangePending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.sizeChangePending = false
+            self.onSizeChange?()
+        }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
