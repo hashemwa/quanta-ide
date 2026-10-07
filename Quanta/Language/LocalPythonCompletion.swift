@@ -6,6 +6,16 @@ enum LocalPythonCompletion {
     private static var order: [String] = []
     private static var cacheSize = 0
 
+    private static let subscriptKey = try! NSRegularExpression(pattern: #"[\p{L}\p{N}_)\]]\[\s*["'][^"'\\\n]*$"#)
+
+    static func isSubscriptKey(source: String, cursor: Int) -> Bool {
+        let text = source as NSString
+        guard cursor > 0, cursor <= text.length, text.character(at: cursor - 1) != 10 else { return false }
+        let line = text.lineRange(for: NSRange(location: cursor - 1, length: 0))
+        let range = NSRange(location: line.location, length: cursor - line.location)
+        return subscriptKey.firstMatch(in: source, range: range) != nil
+    }
+
     static func suggestions(source: String, cursor: Int, context: [String]) -> [CodeCompletion] {
         let length = source.utf16.count
         guard length <= 1_000_000, cursor >= 0, cursor <= length,

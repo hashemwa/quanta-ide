@@ -22,6 +22,14 @@ final class EditorIntelligenceTests: XCTestCase {
         }
     }
 
+    func testSubscriptKeyContextRequiresAnIndexedValueAndAnOpenQuote() {
+        XCTAssertTrue(LocalPythonCompletion.isSubscriptKey(source: "df[\"pr", cursor: 6))
+        XCTAssertTrue(LocalPythonCompletion.isSubscriptKey(source: "x = d['", cursor: 7))
+        XCTAssertFalse(LocalPythonCompletion.isSubscriptKey(source: "[\"x", cursor: 3))
+        XCTAssertFalse(LocalPythonCompletion.isSubscriptKey(source: "df[\"a\"]", cursor: 7))
+        XCTAssertFalse(LocalPythonCompletion.isSubscriptKey(source: "df[\"a\n", cursor: 6))
+    }
+
     func testImportInsertionAtCompletionStart() throws {
         var completion = CodeCompletion(label: "Path", range: NSRange(location: 0, length: 4))
         completion.additionalEdits = [CompletionEdit(range: NSRange(location: 0, length: 0), text: "from pathlib import Path\n")]

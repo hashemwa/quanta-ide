@@ -210,11 +210,19 @@ final class QuantaTextView: NSTextView {
                 || EditorTextRange.isValid(replacementRange, length: textStorage?.length ?? string.utf16.count) else { return }
         super.insertText(value, replacementRange: replacementRange)
         completionWork?.cancel()
-        guard sourceLanguage == .python, let text = value as? String, text.count == 1, !hasMarkedText(),
-              PythonHighlighter.allowsCompletion(in: string, at: selectedRange().location,
+        guard sourceLanguage == .python, let text = value as? String, text.count == 1, !hasMarkedText() else { return }
+        if LocalPythonCompletion.isSubscriptKey(source: string, cursor: selectedRange().location) {
+            scheduleCompletionRequest()
+            return
+        }
+        guard PythonHighlighter.allowsCompletion(in: string, at: selectedRange().location,
                                                 tokens: pythonSyntaxTokens()) else { return }
         if text == "(" || text == "," { requestDocumentation(); return }
         guard let last = text.last, last.isLetter || last.isNumber || last == "_" || (last == "." && dotIsAttributeAccess()) else { return }
+        scheduleCompletionRequest()
+    }
+
+    private func scheduleCompletionRequest() {
         let work = DispatchWorkItem { [weak self] in self?.requestCompletions() }
         completionWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
